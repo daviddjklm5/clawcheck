@@ -389,3 +389,120 @@ class PostgresActiveRosterStore(_PostgresStoreBase):
         if isinstance(value, str):
             return date.fromisoformat(value[:10])
         raise ValueError(f"Unsupported date value: {value!r}")
+
+
+class PostgresOrganizationListStore(_PostgresStoreBase):
+    table_name = '"组织列表"'
+    schema_sql = Path(__file__).resolve().parents[1] / "sql" / "003_organization_list.sql"
+
+    def ensure_table(self) -> None:
+        ddl = self.schema_sql.read_text(encoding="utf-8")
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(ddl)
+
+    def write_rows(
+        self,
+        rows: Iterable[dict[str, Any]],
+        source_file_name: str,
+        import_batch_no: str,
+        source_root_org: str,
+        include_all_children: bool,
+    ) -> int:
+        normalized_rows = list(rows)
+        if not normalized_rows:
+            return 0
+
+        self.ensure_table()
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(f"TRUNCATE TABLE {self.table_name}")
+                cursor.executemany(
+                    f"""
+                    INSERT INTO {self.table_name} (
+                        org_code,
+                        row_no,
+                        org_name,
+                        org_type,
+                        parent_org_name,
+                        parent_org_code,
+                        company_name,
+                        org_level,
+                        city_name,
+                        physical_level,
+                        dept_subcategory_code,
+                        dept_subcategory_name,
+                        dept_category_code,
+                        dept_category_name,
+                        org_full_name,
+                        org_manager_name,
+                        hr_owner_employee_no,
+                        hr_owner_name,
+                        hr_owner_include_children_flag,
+                        hr_owner_exposed_flag,
+                        source_root_org,
+                        include_all_children,
+                        source_file_name,
+                        import_batch_no,
+                        created_at,
+                        updated_at
+                    ) VALUES (
+                        %(org_code)s,
+                        %(row_no)s,
+                        %(org_name)s,
+                        %(org_type)s,
+                        %(parent_org_name)s,
+                        %(parent_org_code)s,
+                        %(company_name)s,
+                        %(org_level)s,
+                        %(city_name)s,
+                        %(physical_level)s,
+                        %(dept_subcategory_code)s,
+                        %(dept_subcategory_name)s,
+                        %(dept_category_code)s,
+                        %(dept_category_name)s,
+                        %(org_full_name)s,
+                        %(org_manager_name)s,
+                        %(hr_owner_employee_no)s,
+                        %(hr_owner_name)s,
+                        %(hr_owner_include_children_flag)s,
+                        %(hr_owner_exposed_flag)s,
+                        %(source_root_org)s,
+                        %(include_all_children)s,
+                        %(source_file_name)s,
+                        %(import_batch_no)s,
+                        NOW(),
+                        NOW()
+                    )
+                    """,
+                    [
+                        {
+                            "org_code": row.get("org_code", ""),
+                            "row_no": self._to_int_or_none(row.get("row_no")),
+                            "org_name": self._null_if_blank(row.get("org_name")),
+                            "org_type": self._null_if_blank(row.get("org_type")),
+                            "parent_org_name": self._null_if_blank(row.get("parent_org_name")),
+                            "parent_org_code": self._null_if_blank(row.get("parent_org_code")),
+                            "company_name": self._null_if_blank(row.get("company_name")),
+                            "org_level": self._null_if_blank(row.get("org_level")),
+                            "city_name": self._null_if_blank(row.get("city_name")),
+                            "physical_level": self._null_if_blank(row.get("physical_level")),
+                            "dept_subcategory_code": self._null_if_blank(row.get("dept_subcategory_code")),
+                            "dept_subcategory_name": self._null_if_blank(row.get("dept_subcategory_name")),
+                            "dept_category_code": self._null_if_blank(row.get("dept_category_code")),
+                            "dept_category_name": self._null_if_blank(row.get("dept_category_name")),
+                            "org_full_name": self._null_if_blank(row.get("org_full_name")),
+                            "org_manager_name": self._null_if_blank(row.get("org_manager_name")),
+                            "hr_owner_employee_no": self._null_if_blank(row.get("hr_owner_employee_no")),
+                            "hr_owner_name": self._null_if_blank(row.get("hr_owner_name")),
+                            "hr_owner_include_children_flag": self._null_if_blank(row.get("hr_owner_include_children_flag")),
+                            "hr_owner_exposed_flag": self._null_if_blank(row.get("hr_owner_exposed_flag")),
+                            "source_root_org": source_root_org,
+                            "include_all_children": include_all_children,
+                            "source_file_name": source_file_name,
+                            "import_batch_no": import_batch_no,
+                        }
+                        for row in normalized_rows
+                    ],
+                )
+        return len(normalized_rows)

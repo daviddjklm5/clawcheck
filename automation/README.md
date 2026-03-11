@@ -60,6 +60,26 @@ Query only, without export/import:
 python automation/scripts/run.py roster --skip-export --skip-import --headed
 ```
 
+Organization list download + import:
+```bash
+python automation/scripts/run.py orglist --headed
+```
+
+Recommended explicit prod command:
+```bash
+python automation/scripts/run.py orglist   --config automation/config/settings.prod.yaml   --credentials automation/config/credentials.prod.local.yaml   --headed
+```
+
+Import an existing organization list file only:
+```bash
+python automation/scripts/run.py orglist   --config automation/config/settings.prod.yaml   --credentials automation/config/credentials.prod.local.yaml   --input-file automation/downloads/example_orglist.xlsx   --headless
+```
+
+Query only, without export/import:
+```bash
+python automation/scripts/run.py orglist --skip-export --skip-import --headed
+```
+
 ## 4. Output
 - logs: `automation/logs/`
 - screenshots: `automation/screenshots/`
@@ -67,6 +87,7 @@ python automation/scripts/run.py roster --skip-export --skip-import --headed
 - downloads: `automation/downloads/`
 - SQL: `automation/sql/001_permission_apply_collect.sql`
 - SQL: `automation/sql/002_active_roster.sql`
+- SQL: `automation/sql/003_organization_list.sql`
 
 ## 5. Notes
 - Prod roster flow targets `https://hr.onewo.com/ierp/?formId=home_page`.
@@ -74,3 +95,7 @@ python automation/scripts/run.py roster --skip-export --skip-import --headed
 - The actual export dialog button is `转后台执行`.
 - Report scheme and employment type are both selected through F7 dialogs.
 - The roster import writes into PostgreSQL table `在职花名册表`.
+
+- The orglist flow targets `组织快速维护 -> 万物云 -> 列表包含所有下级`.
+- The actual orglist export path is `更多 -> 引出数据（按列表）`.
+- The orglist import writes into PostgreSQL table `组织列表`.

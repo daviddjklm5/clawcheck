@@ -22,7 +22,7 @@ PROD_CREDENTIALS_PATH = "automation/config/credentials.prod.local.yaml"
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="iERP automation runner")
-    parser.add_argument("action", choices=["check", "login", "run", "collect", "roster"], help="Action to execute")
+    parser.add_argument("action", choices=["check", "login", "run", "collect", "roster", "orglist"], help="Action to execute")
     parser.add_argument("--config", default=DEFAULT_CONFIG_PATH, help="Settings YAML path")
     parser.add_argument(
         "--credentials",
@@ -45,21 +45,21 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--scheme", default="在职花名册基础版", help="Roster report scheme name")
     parser.add_argument("--employment-type", default="全职任职", help="Roster employment type value")
-    parser.add_argument("--input-file", default="", help="Import an existing roster file instead of downloading it")
-    parser.add_argument("--skip-export", action="store_true", help="Stop after query without exporting roster file")
-    parser.add_argument("--skip-import", action="store_true", help="Download roster file but skip PostgreSQL import")
-    parser.add_argument("--downloads-dir", default="", help="Optional override for roster downloads directory")
+    parser.add_argument("--input-file", default="", help="Import an existing roster/orglist file instead of downloading it")
+    parser.add_argument("--skip-export", action="store_true", help="Stop after query without exporting file")
+    parser.add_argument("--skip-import", action="store_true", help="Download file but skip PostgreSQL import")
+    parser.add_argument("--downloads-dir", default="", help="Optional override for downloads directory")
     parser.add_argument(
         "--download-timeout-minutes",
         type=int,
         default=15,
-        help="How long to wait for background roster download",
+        help="How long to wait for roster/orglist download",
     )
     parser.add_argument(
         "--query-timeout-seconds",
         type=int,
         default=60,
-        help="How long to wait for roster query to finish",
+        help="How long to wait for roster/orglist query to finish",
     )
     return parser.parse_args()
 
@@ -74,7 +74,7 @@ def resolve_path(path_str: str) -> Path:
 def resolve_runtime_paths(args: argparse.Namespace) -> tuple[Path, Path, Path]:
     config_path = resolve_path(args.config)
     credentials_path = resolve_path(args.credentials)
-    if args.action == "roster":
+    if args.action in {"roster", "orglist"}:
         if args.config == DEFAULT_CONFIG_PATH:
             prod_config = resolve_path(PROD_CONFIG_PATH)
             if prod_config.exists():
@@ -158,8 +158,9 @@ def main() -> int:
         )
         return 2
 
-    from automation.db.postgres import PostgresActiveRosterStore, PostgresPermissionStore
+    from automation.db.postgres import PostgresActiveRosterStore, PostgresOrganizationListStore, PostgresPermissionStore
     from automation.flows.active_roster_flow import ActiveRosterFlow
+    from automation.flows.organization_quick_maintain_flow import OrganizationQuickMaintainFlow
     from automation.flows.ierp_flow import IerpFlow
     from automation.flows.permission_collect_flow import PermissionCollectFlow
     from automation.pages.home_page import HomePage
@@ -168,6 +169,7 @@ def main() -> int:
     from automation.utils.logger import setup_logger
     from automation.utils.playwright_helpers import save_screenshot, timestamp_slug
     from automation.utils.retry import retry_call
+    from automation.utils.organization_list_excel import parse_organization_list_workbook
     from automation.utils.roster_excel import parse_roster_workbook
 
     settings_path, credentials_path, selectors_path = resolve_runtime_paths(args)
@@ -216,6 +218,39 @@ def main() -> int:
 
     result_code = 0
 
+    def import_orglist_file(file_path: Path, source_root_org: str, include_all_children: bool) -> dict[str, object]:
+        parsed = parse_organization_list_workbook(file_path)
+        payload = {
+            "file_path": str(file_path),
+            "file_name": parsed["file_name"],
+            "row_count": parsed["row_count"],
+            "headers": parsed["headers"],
+            "source_root_org": source_root_org,
+            "include_all_children": include_all_children,
+        }
+        dump_path = resolve_path(args.dump_json) if args.dump_json else logs_dir / f"orglist_{timestamp_slug()}.json"
+        dump_path.parent.mkdir(parents=True, exist_ok=True)
+        dump_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        logger.info("Organization list parsed. JSON dump: %s", dump_path)
+
+        if args.skip_import:
+            logger.info("Skip-import enabled; PostgreSQL write is skipped")
+            return payload
+
+        store = PostgresOrganizationListStore(settings.db)
+        import_batch_no = f"orglist_{timestamp_slug()}"
+        inserted_count = store.write_rows(
+            rows=parsed["records"],
+            source_file_name=parsed["file_name"],
+            import_batch_no=import_batch_no,
+            source_root_org=source_root_org,
+            include_all_children=include_all_children,
+        )
+        payload["import_batch_no"] = import_batch_no
+        payload["inserted_count"] = inserted_count
+        logger.info("Persisted %s organization rows into PostgreSQL table 组织列表", inserted_count)
+        return payload
+
     def import_roster_file(file_path: Path, fallback_query_date: str | None) -> dict[str, object]:
         parsed = parse_roster_workbook(file_path)
         query_date_text = parsed.get("query_date")
@@ -262,6 +297,16 @@ def main() -> int:
             logger.info("Roster import-only mode. input_file=%s", args.input_file)
             import_roster_file(resolve_path(args.input_file.strip()), fallback_query_date=None)
             logger.info("Roster import-only flow completed successfully")
+            return 0
+
+        if args.action == "orglist" and args.input_file.strip():
+            logger.info("Organization list import-only mode. input_file=%s", args.input_file)
+            import_orglist_file(
+                resolve_path(args.input_file.strip()),
+                source_root_org="万物云",
+                include_all_children=True,
+            )
+            logger.info("Organization list import-only flow completed successfully")
             return 0
 
         with sync_playwright() as p:
@@ -457,6 +502,59 @@ def main() -> int:
 
                     result_shot = save_screenshot(page, shots_dir, "roster_result")
                     logger.info("Roster completed. Screenshot: %s", result_shot)
+
+                elif args.action == "orglist":
+                    if args.skip_export and not args.skip_import:
+                        raise ValueError("--skip-export can only be used together with --skip-import or --input-file")
+
+                    home_page.open()
+                    if not login_page.is_logged_in():
+                        logger.info("Stored session is not valid, relogin required")
+                        ensure_login(
+                            login_page,
+                            settings,
+                            settings.runtime.retries,
+                            settings.runtime.retry_wait_sec,
+                            retry_call,
+                        )
+                        context.storage_state(path=str(state_file))
+                        logger.info("Auth state refreshed: %s", state_file)
+
+                    orglist_flow = OrganizationQuickMaintainFlow(
+                        page=page,
+                        logger=logger,
+                        timeout_ms=settings.browser.timeout_ms,
+                        home_url=settings.app.home_url,
+                    )
+
+                    def _do_orglist() -> dict[str, object]:
+                        return orglist_flow.run(
+                            downloads_dir=downloads_dir,
+                            query_timeout_sec=max(args.query_timeout_seconds, 30),
+                            download_timeout_sec=max(args.download_timeout_minutes, 1) * 60,
+                            skip_export=args.skip_export,
+                            root_org_name="万物云",
+                        )
+
+                    orglist_result = retry_call(
+                        _do_orglist,
+                        retries=settings.runtime.retries,
+                        wait_sec=settings.runtime.retry_wait_sec,
+                    )
+                    logger.info("Organization list flow result: %s", orglist_result)
+
+                    downloaded_file = orglist_result.get("downloaded_file")
+                    if downloaded_file:
+                        import_orglist_file(
+                            file_path=Path(str(downloaded_file)),
+                            source_root_org=str(orglist_result.get("root_org_name") or "万物云"),
+                            include_all_children=bool(orglist_result.get("include_all_children", True)),
+                        )
+                    else:
+                        logger.info("Organization list flow finished without export file (skip-export mode)")
+
+                    result_shot = save_screenshot(page, shots_dir, "orglist_result")
+                    logger.info("Organization list completed. Screenshot: %s", result_shot)
 
             except Exception as exc:  # noqa: BLE001
                 result_code = 1
