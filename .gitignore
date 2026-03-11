@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual envs
+.venv/
+venv/
+
+# Playwright/session artifacts
+automation/logs/*
+automation/screenshots/*
+automation/state/*
+automation/config/credentials.local.yaml
+
+# Keep folder structure
+automation/logs/.gitkeep
+automation/screenshots/.gitkeep
+automation/state/.gitkeep

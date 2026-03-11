@@ -1,0 +1,31 @@
+app:
+  base_url: "https://thr.onewo.com:8443"
+  home_path: "/ierp/?formId=home_page"
+
+auth:
+  username: "your_username"
+  password: "your_password"
+  require_manual_captcha: true
+
+browser:
+  headed: true
+  slow_mo_ms: 0
+  timeout_ms: 15000
+  navigation_timeout_ms: 45000
+  ignore_https_errors: true
+
+runtime:
+  state_file: "automation/state/auth.json"
+  logs_dir: "automation/logs"
+  screenshots_dir: "automation/screenshots"
+  retries: 2
+  retry_wait_sec: 1.0
+
+db:
+  host: "127.0.0.1"
+  port: 5440
+  dbname: "clawcheck"
+  user: "clawcheck"
+  password: "clawcheck123"
+  schema: "public"
+  sslmode: "prefer"

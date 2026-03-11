@@ -1,0 +1,56 @@
+login:
+  username:
+    - "input[placeholder='用户名/手机号/邮箱']"
+    - "input[placeholder*='用户名']"
+    - "input[name='username']"
+    - "input[placeholder*='账号']"
+  password:
+    - "input[type='password']"
+    - "input[placeholder='密码']"
+    - "input[name='password']"
+    - "input[placeholder*='密码']"
+  submit:
+    - "button:has-text('登录')"
+    - "button:has-text('登 录')"
+  captcha_hint:
+    - "text=图形验证码"
+    - "text=手机验证码"
+    - "text=验证码"
+  post_login_marker:
+    - "text=首页"
+    - "text=工作台"
+    - "text=待办"
+
+home:
+  main_ready:
+    - "text=首页"
+    - "text=工作台"
+    - "text=待办"
+
+workflow:
+  app_entry:
+    - "text=权限申请（HR专用）"
+    - "[id^='appflex#wwy6_permission_apply']"
+  page_ready:
+    - "text=权限申请列表"
+    - "text=权限申请明细"
+  menu_entry:
+    - "text=待办"
+    - "text=待办任务"
+  form_create:
+    - "text=新增"
+    - "#bar_new"
+  reason_input:
+    - "textarea.kd-input-textarea"
+    - "textarea"
+  save:
+    - "#bar_save"
+    - "text=保存"
+  save_success_toast:
+    - "text=保存成功"
+  submit:
+    - "#bar_submit"
+    - "button:has-text('提交')"
+    - "text=提交"
+  submit_success_toast:
+    - "text=提交成功"
