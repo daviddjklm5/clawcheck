@@ -6,22 +6,30 @@ import getpass
 import json
 import os
 import sys
+from datetime import date
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+DEFAULT_CONFIG_PATH = "automation/config/settings.yaml"
+DEFAULT_CREDENTIALS_PATH = "automation/config/credentials.local.yaml"
+DEFAULT_SELECTORS_PATH = "automation/config/selectors.yaml"
+PROD_CONFIG_PATH = "automation/config/settings.prod.yaml"
+PROD_CREDENTIALS_PATH = "automation/config/credentials.prod.local.yaml"
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="iERP automation runner")
-    parser.add_argument("action", choices=["check", "login", "run", "collect"], help="Action to execute")
-    parser.add_argument("--config", default="automation/config/settings.yaml", help="Settings YAML path")
+    parser.add_argument("action", choices=["check", "login", "run", "collect", "roster"], help="Action to execute")
+    parser.add_argument("--config", default=DEFAULT_CONFIG_PATH, help="Settings YAML path")
     parser.add_argument(
         "--credentials",
-        default="automation/config/credentials.local.yaml",
+        default=DEFAULT_CREDENTIALS_PATH,
         help="Local credentials YAML path",
     )
-    parser.add_argument("--selectors", default="automation/config/selectors.yaml", help="Selectors YAML path")
+    parser.add_argument("--selectors", default=DEFAULT_SELECTORS_PATH, help="Selectors YAML path")
     parser.add_argument("--headed", action="store_true", help="Run browser in headed mode")
     parser.add_argument("--headless", action="store_true", help="Run browser in headless mode")
     parser.add_argument("--create", action="store_true", help="Enable create/save action in workflow run")
@@ -35,6 +43,24 @@ def parse_args() -> argparse.Namespace:
         default="",
         help="Reason text for workflow form (used when workflow.reason_input is configured)",
     )
+    parser.add_argument("--scheme", default="在职花名册基础版", help="Roster report scheme name")
+    parser.add_argument("--employment-type", default="全职任职", help="Roster employment type value")
+    parser.add_argument("--input-file", default="", help="Import an existing roster file instead of downloading it")
+    parser.add_argument("--skip-export", action="store_true", help="Stop after query without exporting roster file")
+    parser.add_argument("--skip-import", action="store_true", help="Download roster file but skip PostgreSQL import")
+    parser.add_argument("--downloads-dir", default="", help="Optional override for roster downloads directory")
+    parser.add_argument(
+        "--download-timeout-minutes",
+        type=int,
+        default=15,
+        help="How long to wait for background roster download",
+    )
+    parser.add_argument(
+        "--query-timeout-seconds",
+        type=int,
+        default=60,
+        help="How long to wait for roster query to finish",
+    )
     return parser.parse_args()
 
 
@@ -43,6 +69,22 @@ def resolve_path(path_str: str) -> Path:
     if path.is_absolute():
         return path
     return REPO_ROOT / path
+
+
+def resolve_runtime_paths(args: argparse.Namespace) -> tuple[Path, Path, Path]:
+    config_path = resolve_path(args.config)
+    credentials_path = resolve_path(args.credentials)
+    if args.action == "roster":
+        if args.config == DEFAULT_CONFIG_PATH:
+            prod_config = resolve_path(PROD_CONFIG_PATH)
+            if prod_config.exists():
+                config_path = prod_config
+        if args.credentials == DEFAULT_CREDENTIALS_PATH:
+            prod_credentials = resolve_path(PROD_CREDENTIALS_PATH)
+            if prod_credentials.exists():
+                credentials_path = prod_credentials
+    selectors_path = resolve_path(args.selectors)
+    return config_path, credentials_path, selectors_path
 
 
 def build_context(playwright, settings, state_file: Path, use_state: bool):
@@ -54,6 +96,7 @@ def build_context(playwright, settings, state_file: Path, use_state: bool):
     context_kwargs = {
         "ignore_https_errors": settings.browser.ignore_https_errors,
         "viewport": {"width": 1440, "height": 900},
+        "accept_downloads": True,
     }
 
     if use_state and state_file.exists():
@@ -115,6 +158,8 @@ def main() -> int:
         )
         return 2
 
+    from automation.db.postgres import PostgresActiveRosterStore, PostgresPermissionStore
+    from automation.flows.active_roster_flow import ActiveRosterFlow
     from automation.flows.ierp_flow import IerpFlow
     from automation.flows.permission_collect_flow import PermissionCollectFlow
     from automation.pages.home_page import HomePage
@@ -123,11 +168,9 @@ def main() -> int:
     from automation.utils.logger import setup_logger
     from automation.utils.playwright_helpers import save_screenshot, timestamp_slug
     from automation.utils.retry import retry_call
-    from automation.db.postgres import PostgresPermissionStore
+    from automation.utils.roster_excel import parse_roster_workbook
 
-    settings_path = resolve_path(args.config)
-    credentials_path = resolve_path(args.credentials)
-    selectors_path = resolve_path(args.selectors)
+    settings_path, credentials_path, selectors_path = resolve_runtime_paths(args)
 
     settings = load_settings(settings_path)
     selectors = load_selectors(selectors_path)
@@ -158,9 +201,11 @@ def main() -> int:
     logs_dir = resolve_path(settings.runtime.logs_dir)
     shots_dir = resolve_path(settings.runtime.screenshots_dir)
     state_file = resolve_path(settings.runtime.state_file)
+    downloads_dir = resolve_path(args.downloads_dir) if args.downloads_dir else resolve_path(settings.runtime.downloads_dir)
 
     state_file.parent.mkdir(parents=True, exist_ok=True)
     shots_dir.mkdir(parents=True, exist_ok=True)
+    downloads_dir.mkdir(parents=True, exist_ok=True)
 
     logger = setup_logger(logs_dir)
     logger.info("Action: %s", args.action)
@@ -171,62 +216,96 @@ def main() -> int:
 
     result_code = 0
 
-    with sync_playwright() as p:
-        use_state = args.action != "login"
-        browser, context, page = build_context(p, settings, state_file, use_state=use_state)
+    def import_roster_file(file_path: Path, fallback_query_date: str | None) -> dict[str, object]:
+        parsed = parse_roster_workbook(file_path)
+        query_date_text = parsed.get("query_date")
+        if query_date_text is None:
+            if not fallback_query_date:
+                raise ValueError("Roster workbook did not contain query_date and no fallback query date was provided")
+            query_date_value = date.fromisoformat(fallback_query_date)
+        elif isinstance(query_date_text, date):
+            query_date_value = query_date_text
+        else:
+            query_date_value = date.fromisoformat(str(query_date_text))
 
-        home_page = HomePage(
-            home_url=settings.app.home_url,
-            page=page,
-            selectors=selectors,
-            logger=logger,
-            timeout_ms=settings.browser.timeout_ms,
+        payload = {
+            "file_path": str(file_path),
+            "file_name": parsed["file_name"],
+            "query_date": query_date_value.isoformat(),
+            "row_count": parsed["row_count"],
+            "headers": parsed["headers"],
+        }
+        dump_path = resolve_path(args.dump_json) if args.dump_json else logs_dir / f"roster_{timestamp_slug()}.json"
+        dump_path.parent.mkdir(parents=True, exist_ok=True)
+        dump_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        logger.info("Roster parsed. JSON dump: %s", dump_path)
+
+        if args.skip_import:
+            logger.info("Skip-import enabled; PostgreSQL write is skipped")
+            return payload
+
+        store = PostgresActiveRosterStore(settings.db)
+        import_batch_no = f"roster_{timestamp_slug()}"
+        inserted_count = store.write_rows(
+            rows=parsed["records"],
+            query_date=query_date_value,
+            source_file_name=parsed["file_name"],
+            import_batch_no=import_batch_no,
         )
-        login_page = LoginPage(
-            home_url=settings.app.home_url,
-            page=page,
-            selectors=selectors,
-            logger=logger,
-            timeout_ms=settings.browser.timeout_ms,
-        )
+        payload["import_batch_no"] = import_batch_no
+        payload["inserted_count"] = inserted_count
+        logger.info("Persisted %s active roster rows into PostgreSQL table 在职花名册表", inserted_count)
+        return payload
 
-        try:
-            if args.action == "check":
-                home_page.open()
-                check_passed = False
-                try:
-                    home_page.wait_ready()
-                    logger.info("Home ready marker matched")
-                    check_passed = True
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("Home marker not matched during check: %s", exc)
+    try:
+        if args.action == "roster" and args.input_file.strip():
+            logger.info("Roster import-only mode. input_file=%s", args.input_file)
+            import_roster_file(resolve_path(args.input_file.strip()), fallback_query_date=None)
+            logger.info("Roster import-only flow completed successfully")
+            return 0
 
-                if not check_passed:
-                    if login_page.is_present("login", "username") or login_page.is_present("login", "password"):
-                        logger.info("Login page markers matched; connectivity is OK")
+        with sync_playwright() as p:
+            use_state = args.action != "login"
+            browser, context, page = build_context(p, settings, state_file, use_state=use_state)
+
+            home_page = HomePage(
+                home_url=settings.app.home_url,
+                page=page,
+                selectors=selectors,
+                logger=logger,
+                timeout_ms=settings.browser.timeout_ms,
+            )
+            login_page = LoginPage(
+                home_url=settings.app.home_url,
+                page=page,
+                selectors=selectors,
+                logger=logger,
+                timeout_ms=settings.browser.timeout_ms,
+            )
+
+            try:
+                if args.action == "check":
+                    home_page.open()
+                    check_passed = False
+                    try:
+                        home_page.wait_ready()
+                        logger.info("Home ready marker matched")
                         check_passed = True
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("Home marker not matched during check: %s", exc)
 
-                if not check_passed:
-                    raise RuntimeError("Neither home markers nor login markers were detected")
+                    if not check_passed:
+                        if login_page.is_present("login", "username") or login_page.is_present("login", "password"):
+                            logger.info("Login page markers matched; connectivity is OK")
+                            check_passed = True
 
-                check_shot = save_screenshot(page, shots_dir, "check_ready")
-                logger.info("Check passed. Screenshot: %s", check_shot)
+                    if not check_passed:
+                        raise RuntimeError("Neither home markers nor login markers were detected")
 
-            elif args.action == "login":
-                ensure_login(
-                    login_page,
-                    settings,
-                    settings.runtime.retries,
-                    settings.runtime.retry_wait_sec,
-                    retry_call,
-                )
-                context.storage_state(path=str(state_file))
-                logger.info("Auth state saved: %s", state_file)
+                    check_shot = save_screenshot(page, shots_dir, "check_ready")
+                    logger.info("Check passed. Screenshot: %s", check_shot)
 
-            elif args.action == "run":
-                home_page.open()
-                if not login_page.is_logged_in():
-                    logger.info("Stored session is not valid, relogin required")
+                elif args.action == "login":
                     ensure_login(
                         login_page,
                         settings,
@@ -235,91 +314,162 @@ def main() -> int:
                         retry_call,
                     )
                     context.storage_state(path=str(state_file))
-                    logger.info("Auth state refreshed: %s", state_file)
+                    logger.info("Auth state saved: %s", state_file)
 
-                flow = IerpFlow(
-                    page=page,
-                    selectors=selectors,
-                    logger=logger,
-                    timeout_ms=settings.browser.timeout_ms,
-                    auto_reason=(args.reason.strip() or None),
-                    enable_create=args.create,
-                    enable_submit=args.submit,
-                )
-
-                def _do_run_flow() -> None:
+                elif args.action == "run":
                     home_page.open()
-                    home_page.wait_ready()
-                    flow.run_example()
+                    if not login_page.is_logged_in():
+                        logger.info("Stored session is not valid, relogin required")
+                        ensure_login(
+                            login_page,
+                            settings,
+                            settings.runtime.retries,
+                            settings.runtime.retry_wait_sec,
+                            retry_call,
+                        )
+                        context.storage_state(path=str(state_file))
+                        logger.info("Auth state refreshed: %s", state_file)
 
-                retry_call(
-                    _do_run_flow,
-                    retries=settings.runtime.retries,
-                    wait_sec=settings.runtime.retry_wait_sec,
-                )
-                result_shot = save_screenshot(page, shots_dir, "run_result")
-                logger.info("Run completed. Screenshot: %s", result_shot)
-
-            elif args.action == "collect":
-                home_page.open()
-                if not login_page.is_logged_in():
-                    logger.info("Stored session is not valid, relogin required")
-                    ensure_login(
-                        login_page,
-                        settings,
-                        settings.runtime.retries,
-                        settings.runtime.retry_wait_sec,
-                        retry_call,
-                    )
-                    context.storage_state(path=str(state_file))
-                    logger.info("Auth state refreshed: %s", state_file)
-
-                collector = PermissionCollectFlow(
-                    page=page,
-                    logger=logger,
-                    timeout_ms=settings.browser.timeout_ms,
-                    home_url=settings.app.home_url,
-                )
-
-                def _do_collect() -> list[dict[str, object]]:
-                    home_page.open()
-                    home_page.wait_ready()
-                    return collector.collect(
-                        document_no=(args.document_no.strip() or None),
-                        limit=max(args.limit, 0),
+                    flow = IerpFlow(
+                        page=page,
+                        selectors=selectors,
+                        logger=logger,
+                        timeout_ms=settings.browser.timeout_ms,
+                        auto_reason=(args.reason.strip() or None),
+                        enable_create=args.create,
+                        enable_submit=args.submit,
                     )
 
-                documents = retry_call(
-                    _do_collect,
-                    retries=settings.runtime.retries,
-                    wait_sec=settings.runtime.retry_wait_sec,
-                )
-                if not documents:
-                    raise RuntimeError("No permission application documents matched the collect criteria")
+                    def _do_run_flow() -> None:
+                        home_page.open()
+                        home_page.wait_ready()
+                        flow.run_example()
 
-                dump_path = resolve_path(args.dump_json) if args.dump_json else logs_dir / f"collect_{timestamp_slug()}.json"
-                dump_path.parent.mkdir(parents=True, exist_ok=True)
-                dump_path.write_text(json.dumps(documents, ensure_ascii=False, indent=2), encoding="utf-8")
-                logger.info("Collected %s document(s). JSON dump: %s", len(documents), dump_path)
+                    retry_call(
+                        _do_run_flow,
+                        retries=settings.runtime.retries,
+                        wait_sec=settings.runtime.retry_wait_sec,
+                    )
+                    result_shot = save_screenshot(page, shots_dir, "run_result")
+                    logger.info("Run completed. Screenshot: %s", result_shot)
 
-                if args.dry_run:
-                    logger.info("Dry-run enabled; skipping PostgreSQL write")
-                else:
-                    store = PostgresPermissionStore(settings.db)
-                    store.write_documents(documents)
-                    logger.info("Persisted %s document(s) to PostgreSQL", len(documents))
+                elif args.action == "collect":
+                    home_page.open()
+                    if not login_page.is_logged_in():
+                        logger.info("Stored session is not valid, relogin required")
+                        ensure_login(
+                            login_page,
+                            settings,
+                            settings.runtime.retries,
+                            settings.runtime.retry_wait_sec,
+                            retry_call,
+                        )
+                        context.storage_state(path=str(state_file))
+                        logger.info("Auth state refreshed: %s", state_file)
 
-                result_shot = save_screenshot(page, shots_dir, "collect_result")
-                logger.info("Collect completed. Screenshot: %s", result_shot)
+                    collector = PermissionCollectFlow(
+                        page=page,
+                        logger=logger,
+                        timeout_ms=settings.browser.timeout_ms,
+                        home_url=settings.app.home_url,
+                    )
 
-        except Exception as exc:  # noqa: BLE001
-            result_code = 1
-            logger.exception("Automation failed: %s", exc)
-            shot = save_screenshot(page, shots_dir, "error")
-            logger.error("Error screenshot: %s", shot)
-        finally:
-            context.close()
-            browser.close()
+                    def _do_collect() -> list[dict[str, object]]:
+                        home_page.open()
+                        home_page.wait_ready()
+                        return collector.collect(
+                            document_no=(args.document_no.strip() or None),
+                            limit=max(args.limit, 0),
+                        )
+
+                    documents = retry_call(
+                        _do_collect,
+                        retries=settings.runtime.retries,
+                        wait_sec=settings.runtime.retry_wait_sec,
+                    )
+                    if not documents:
+                        raise RuntimeError("No permission application documents matched the collect criteria")
+
+                    dump_path = resolve_path(args.dump_json) if args.dump_json else logs_dir / f"collect_{timestamp_slug()}.json"
+                    dump_path.parent.mkdir(parents=True, exist_ok=True)
+                    dump_path.write_text(json.dumps(documents, ensure_ascii=False, indent=2), encoding="utf-8")
+                    logger.info("Collected %s document(s). JSON dump: %s", len(documents), dump_path)
+
+                    if args.dry_run:
+                        logger.info("Dry-run enabled; skipping PostgreSQL write")
+                    else:
+                        store = PostgresPermissionStore(settings.db)
+                        store.write_documents(documents)
+                        logger.info("Persisted %s document(s) to PostgreSQL", len(documents))
+
+                    result_shot = save_screenshot(page, shots_dir, "collect_result")
+                    logger.info("Collect completed. Screenshot: %s", result_shot)
+
+                elif args.action == "roster":
+                    if args.skip_export and not args.skip_import:
+                        raise ValueError("--skip-export can only be used together with --skip-import or --input-file")
+
+                    home_page.open()
+                    if not login_page.is_logged_in():
+                        logger.info("Stored session is not valid, relogin required")
+                        ensure_login(
+                            login_page,
+                            settings,
+                            settings.runtime.retries,
+                            settings.runtime.retry_wait_sec,
+                            retry_call,
+                        )
+                        context.storage_state(path=str(state_file))
+                        logger.info("Auth state refreshed: %s", state_file)
+
+                    roster_flow = ActiveRosterFlow(
+                        page=page,
+                        logger=logger,
+                        timeout_ms=settings.browser.timeout_ms,
+                        home_url=settings.app.home_url,
+                    )
+
+                    def _do_roster() -> dict[str, object]:
+                        return roster_flow.run(
+                            downloads_dir=downloads_dir,
+                            report_scheme=args.scheme.strip() or "在职花名册基础版",
+                            employment_type=args.employment_type.strip() or "全职任职",
+                            query_timeout_sec=max(args.query_timeout_seconds, 30),
+                            download_timeout_sec=max(args.download_timeout_minutes, 1) * 60,
+                            skip_export=args.skip_export,
+                        )
+
+                    roster_result = retry_call(
+                        _do_roster,
+                        retries=settings.runtime.retries,
+                        wait_sec=settings.runtime.retry_wait_sec,
+                    )
+                    logger.info("Roster flow result: %s", roster_result)
+
+                    downloaded_file = roster_result.get("downloaded_file")
+                    if downloaded_file:
+                        import_roster_file(
+                            file_path=Path(str(downloaded_file)),
+                            fallback_query_date=roster_result.get("query_summary", {}).get("query_date"),
+                        )
+                    else:
+                        logger.info("Roster flow finished without export file (skip-export mode)")
+
+                    result_shot = save_screenshot(page, shots_dir, "roster_result")
+                    logger.info("Roster completed. Screenshot: %s", result_shot)
+
+            except Exception as exc:  # noqa: BLE001
+                result_code = 1
+                logger.exception("Automation failed: %s", exc)
+                shot = save_screenshot(page, shots_dir, "error")
+                logger.error("Error screenshot: %s", shot)
+            finally:
+                context.close()
+                browser.close()
+
+    except Exception as exc:  # noqa: BLE001
+        result_code = 1
+        logger.exception("Automation failed before browser startup: %s", exc)
 
     if result_code == 0:
         logger.info("Automation finished successfully")

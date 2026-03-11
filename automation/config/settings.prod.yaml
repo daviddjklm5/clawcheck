@@ -1,5 +1,5 @@
 app:
-  base_url: "https://thr.onewo.com:8443"
+  base_url: "https://hr.onewo.com"
   home_path: "/ierp/?formId=home_page"
 
 auth:
@@ -10,12 +10,12 @@ auth:
 browser:
   headed: true
   slow_mo_ms: 0
-  timeout_ms: 15000
-  navigation_timeout_ms: 45000
+  timeout_ms: 20000
+  navigation_timeout_ms: 60000
   ignore_https_errors: true
 
 runtime:
-  state_file: "automation/state/auth.json"
+  state_file: "automation/state/auth_prod.json"
   logs_dir: "automation/logs"
   screenshots_dir: "automation/screenshots"
   downloads_dir: "automation/downloads"
@@ -24,9 +24,9 @@ runtime:
 
 db:
   host: "127.0.0.1"
-  port: 5432
-  dbname: "ierp"
-  user: "postgres"
-  password: "your_password"
+  port: 5440
+  dbname: "clawcheck"
+  user: "clawcheck"
+  password: "clawcheck123"
   schema: "public"
   sslmode: "prefer"

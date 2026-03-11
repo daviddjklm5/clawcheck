@@ -38,6 +38,7 @@ class RuntimeSettings:
     state_file: str
     logs_dir: str
     screenshots_dir: str
+    downloads_dir: str
     retries: int
     retry_wait_sec: float
 
@@ -102,6 +103,7 @@ def load_settings(path: Path) -> Settings:
             state_file=str(runtime.get("state_file", "automation/state/auth.json")),
             logs_dir=str(runtime.get("logs_dir", "automation/logs")),
             screenshots_dir=str(runtime.get("screenshots_dir", "automation/screenshots")),
+            downloads_dir=str(runtime.get("downloads_dir", "automation/downloads")),
             retries=int(runtime.get("retries", 2)),
             retry_wait_sec=float(runtime.get("retry_wait_sec", 1.0)),
         ),

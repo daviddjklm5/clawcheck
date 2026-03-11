@@ -1,10 +1,6 @@
-# iERP Automation (Plan 001)
+# iERP Automation
 
-Python + Playwright automation skeleton for:
-- `https://thr.onewo.com:8443/ierp/?formId=home_page`
-
-## 1. Setup
-
+## 1. Install
 ```bash
 cd automation
 python3 -m venv .venv
@@ -13,90 +9,68 @@ pip install -r requirements.txt
 playwright install chromium
 ```
 
-## 2. Configure
-
-```bash
-cp config/settings.example.yaml config/settings.yaml
-cp config/selectors.example.yaml config/selectors.yaml
-```
-
-Edit:
-- `config/settings.yaml`: account, runtime path, browser options
-- `config/settings.yaml -> db`: PostgreSQL connection used by `collect`
-- `config/selectors.yaml`: real selectors from your iERP page
-- `config/credentials.local.yaml`: local account/password file (git ignored)
-- Optional secure override: export `IERP_USERNAME` and `IERP_PASSWORD` (highest priority)
-- Optional DB override: export `IERP_PG_HOST`, `IERP_PG_PORT`, `IERP_PG_DBNAME`, `IERP_PG_USER`, `IERP_PG_PASSWORD`, `IERP_PG_SCHEMA`, `IERP_PG_SSLMODE`
+## 2. Config
+- UAT config: `automation/config/settings.yaml`
+- Prod config: `automation/config/settings.prod.yaml`
+- UAT credentials: `automation/config/credentials.local.yaml`
+- Prod credentials: `automation/config/credentials.prod.local.yaml`
+- Selectors: `automation/config/selectors.yaml`
 
 ## 3. Commands
-
+Health check:
 ```bash
-# connectivity + page readiness check
-python scripts/run.py check
-
-# login once and save auth state
-python scripts/run.py login
-
-# run example business flow
-python scripts/run.py run
-
-# collect permission applications and dump JSON only
-python scripts/run.py collect --dry-run --document-no QX-260311-00000223 --headless
-
-# collect permission applications and write PostgreSQL
-python scripts/run.py collect --document-no QX-260311-00000223 --headless
-
-# enable create/save flow
-python scripts/run.py run --create --reason "自动化测试申请"
-
-# explicitly enable submit (high-risk operation)
-python scripts/run.py run --create --submit
+python automation/scripts/run.py check --headed
 ```
 
-Use local credentials file:
-
+Login and save auth state:
 ```bash
-# edit this file first
-vim config/credentials.local.yaml
-python scripts/run.py login
+python automation/scripts/run.py login --headed
+python automation/scripts/run.py login --config automation/config/settings.prod.yaml --credentials automation/config/credentials.prod.local.yaml --headed
 ```
 
-Use env credentials (override local file):
-
+Permission collection:
 ```bash
-export IERP_USERNAME='your_real_user'
-export IERP_PASSWORD='your_real_password'
-python scripts/run.py login
+python automation/scripts/run.py collect --limit 3 --dry-run --headed
 ```
 
-If credentials are still placeholders, `login` will prompt for username/password interactively.
-
-Optional args:
-
+Active roster download + import:
 ```bash
-python scripts/run.py run --headed
-python scripts/run.py collect --limit 3 --dry-run --headless
-python scripts/run.py run --config config/settings.yaml --selectors config/selectors.yaml
-python scripts/run.py run --credentials config/credentials.local.yaml
+python automation/scripts/run.py roster --headed
 ```
 
-Record selectors:
-
+Recommended explicit prod command:
 ```bash
-bash scripts/codegen.sh
-python scripts/probe.py --headless
+python automation/scripts/run.py roster \
+  --config automation/config/settings.prod.yaml \
+  --credentials automation/config/credentials.prod.local.yaml \
+  --headed
+```
+
+Import an existing roster file only:
+```bash
+python automation/scripts/run.py roster \
+  --config automation/config/settings.prod.yaml \
+  --credentials automation/config/credentials.prod.local.yaml \
+  --input-file automation/downloads/example.xlsx \
+  --headless
+```
+
+Query only, without export/import:
+```bash
+python automation/scripts/run.py roster --skip-export --skip-import --headed
 ```
 
 ## 4. Output
 - logs: `automation/logs/`
 - screenshots: `automation/screenshots/`
-- state: `automation/state/auth.json`
-- PostgreSQL schema SQL: `automation/sql/001_permission_apply_collect.sql`
+- state: `automation/state/`
+- downloads: `automation/downloads/`
+- SQL: `automation/sql/001_permission_apply_collect.sql`
+- SQL: `automation/sql/002_active_roster.sql`
 
 ## 5. Notes
-- For self-signed HTTPS certs, `ignore_https_errors: true` is enabled by default.
-- CAPTCHA is not auto-solved. Keep `require_manual_captcha: true` and complete it manually when prompted.
-- Replace placeholder selectors before using `run` for real submission.
-- `run` is navigation-only by default (no create/save).
-- `--create` enables create/save; `--submit` must be explicitly added for submission.
-- `collect` reads permission-application todo records, dumps JSON locally, and writes PG unless `--dry-run` is set.
+- Prod roster flow targets `https://hr.onewo.com/ierp/?formId=home_page`.
+- The actual recent-menu entry is `在职人员花名册`.
+- The actual export dialog button is `转后台执行`.
+- Report scheme and employment type are both selected through F7 dialogs.
+- The roster import writes into PostgreSQL table `在职花名册表`.

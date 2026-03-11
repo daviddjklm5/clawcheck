@@ -17,15 +17,19 @@ login:
     - "text=手机验证码"
     - "text=验证码"
   post_login_marker:
+    - "text=员工自助服务中心"
     - "text=首页"
     - "text=工作台"
     - "text=待办"
+    - "text=常用应用"
 
 home:
   main_ready:
+    - "text=员工自助服务中心"
     - "text=首页"
     - "text=工作台"
     - "text=待办"
+    - "text=常用应用"
 
 workflow:
   app_entry:
