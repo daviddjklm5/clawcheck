@@ -148,6 +148,7 @@ CREATE TABLE IF NOT EXISTS "组织属性查询" (
     pending_disable_date TEXT,
     department_type TEXT,
     process_level_name TEXT,
+    process_level_name_resolved TEXT,
     dept_subcategory_code TEXT,
     dept_subcategory_name TEXT,
     dept_category_code TEXT,
@@ -201,6 +202,7 @@ BEGIN
             pending_disable_date TEXT,
             department_type TEXT,
             process_level_name TEXT,
+            process_level_name_resolved TEXT,
             dept_subcategory_code TEXT,
             dept_subcategory_name TEXT,
             dept_category_code TEXT,
@@ -235,6 +237,7 @@ BEGIN
             pending_disable_date,
             department_type,
             process_level_name,
+            process_level_name_resolved,
             dept_subcategory_code,
             dept_subcategory_name,
             dept_category_code,
@@ -248,6 +251,37 @@ BEGIN
             refreshed_at,
             created_at,
             updated_at
+        )
+        WITH RECURSIVE process_level_chain AS (
+            SELECT
+                o.org_code AS root_org_code,
+                o.parent_org_code AS next_parent_org_code,
+                NULLIF(BTRIM(o.process_level_name), '') AS candidate_process_level_name,
+                0 AS depth,
+                ARRAY[o.org_code] AS visited_org_codes
+            FROM "组织列表" o
+
+            UNION ALL
+
+            SELECT
+                plc.root_org_code,
+                p.parent_org_code AS next_parent_org_code,
+                NULLIF(BTRIM(p.process_level_name), '') AS candidate_process_level_name,
+                plc.depth + 1 AS depth,
+                plc.visited_org_codes || p.org_code AS visited_org_codes
+            FROM process_level_chain plc
+            JOIN "组织列表" p
+              ON plc.next_parent_org_code = p.org_code
+            WHERE plc.candidate_process_level_name IS NULL
+              AND NOT (p.org_code = ANY(plc.visited_org_codes))
+        ),
+        resolved_process_level AS (
+            SELECT DISTINCT ON (root_org_code)
+                root_org_code AS org_code,
+                candidate_process_level_name AS process_level_name_resolved
+            FROM process_level_chain
+            WHERE candidate_process_level_name IS NOT NULL
+            ORDER BY root_org_code, depth
         )
         SELECT
             o.org_code,
@@ -267,6 +301,7 @@ BEGIN
             o.pending_disable_date,
             o.department_type,
             o.process_level_name,
+            rpl.process_level_name_resolved,
             o.dept_subcategory_code,
             o.dept_subcategory_name,
             o.dept_category_code,
@@ -281,6 +316,8 @@ BEGIN
             NOW(),
             NOW()
         FROM "组织列表" o
+        LEFT JOIN resolved_process_level rpl
+            ON o.org_code = rpl.org_code
         LEFT JOIN "城市所属战区" z
             ON o.city_name = z.city_name
     $INSERT$;
