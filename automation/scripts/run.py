@@ -6,7 +6,7 @@ import getpass
 import json
 import os
 import sys
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -225,6 +225,7 @@ def main() -> int:
             "file_name": parsed["file_name"],
             "row_count": parsed["row_count"],
             "headers": parsed["headers"],
+            "unmapped_headers": parsed.get("unmapped_headers", []),
             "source_root_org": source_root_org,
             "include_all_children": include_all_children,
         }
@@ -269,6 +270,7 @@ def main() -> int:
             "query_date": query_date_value.isoformat(),
             "row_count": parsed["row_count"],
             "headers": parsed["headers"],
+            "unmapped_headers": parsed.get("unmapped_headers", []),
         }
         dump_path = resolve_path(args.dump_json) if args.dump_json else logs_dir / f"roster_{timestamp_slug()}.json"
         dump_path.parent.mkdir(parents=True, exist_ok=True)
@@ -281,11 +283,13 @@ def main() -> int:
 
         store = PostgresActiveRosterStore(settings.db)
         import_batch_no = f"roster_{timestamp_slug()}"
+        downloaded_at = datetime.fromtimestamp(file_path.stat().st_mtime)
         inserted_count = store.write_rows(
             rows=parsed["records"],
             query_date=query_date_value,
             source_file_name=parsed["file_name"],
             import_batch_no=import_batch_no,
+            downloaded_at=downloaded_at,
         )
         payload["import_batch_no"] = import_batch_no
         payload["inserted_count"] = inserted_count

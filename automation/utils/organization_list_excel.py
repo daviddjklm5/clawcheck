@@ -5,29 +5,30 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
-HEADER_MAP = {
-    "序号": "row_no",
-    "行政组织编码": "org_code",
-    "行政组织名称": "org_name",
-    "行政组织类型": "org_type",
-    "上级行政组织": "parent_org_name",
-    "上级行政组织编码": "parent_org_code",
-    "所属公司": "company_name",
-    "行政组织层级": "org_level",
-    "所在城市": "city_name",
-    "物理层级": "physical_level",
-    "部门子分类.编码": "dept_subcategory_code",
-    "部门子分类.名称": "dept_subcategory_name",
-    "部门分类.编码": "dept_category_code",
-    "部门分类.名称": "dept_category_name",
-    "组织长名称": "org_full_name",
-    "组织负责人": "org_manager_name",
-    "责任HR工号": "hr_owner_employee_no",
-    "责任HR姓名": "hr_owner_name",
-    "责任HR含下级组织": "hr_owner_include_children_flag",
-    "责任HR是否透出": "hr_owner_exposed_flag",
-}
+ORGLIST_FIELD_SPECS = [
+    ("序号", "row_no"),
+    ("行政组织编码", "org_code"),
+    ("行政组织名称", "org_name"),
+    ("行政组织类型", "org_type"),
+    ("上级行政组织", "parent_org_name"),
+    ("上级行政组织编码", "parent_org_code"),
+    ("所属公司", "company_name"),
+    ("行政组织层级", "org_level"),
+    ("所在城市", "city_name"),
+    ("物理层级", "physical_level"),
+    ("部门子分类.编码", "dept_subcategory_code"),
+    ("部门子分类.名称", "dept_subcategory_name"),
+    ("部门分类.编码", "dept_category_code"),
+    ("部门分类.名称", "dept_category_name"),
+    ("组织长名称", "org_full_name"),
+    ("组织负责人", "org_manager_name"),
+    ("责任HR工号", "hr_owner_employee_no"),
+    ("责任HR姓名", "hr_owner_name"),
+    ("责任HR含下级组织", "hr_owner_include_children_flag"),
+    ("责任HR是否透出", "hr_owner_exposed_flag"),
+]
 
+HEADER_MAP = {header: field_name for header, field_name in ORGLIST_FIELD_SPECS}
 HEADER_CANDIDATES = [
     "序号",
     "行政组织编码",
@@ -37,6 +38,7 @@ HEADER_CANDIDATES = [
     "所属公司",
     "组织长名称",
 ]
+ORGLIST_FIELD_NAMES = [field_name for _, field_name in ORGLIST_FIELD_SPECS]
 
 
 def normalize_text(value: Any) -> str:
@@ -156,6 +158,33 @@ def _normalize_headers(row: list[str]) -> list[str]:
     return headers
 
 
+def _find_unmapped_headers(headers: list[str]) -> list[str]:
+    unmapped: list[str] = []
+    for header in headers:
+        normalized = normalize_text(header)
+        if not normalized or normalized.startswith("未命名列"):
+            continue
+        if normalized in HEADER_MAP:
+            continue
+        unmapped.append(normalized)
+    return unmapped
+
+
+def _extract_extra_columns(record: dict[str, str]) -> dict[str, str]:
+    extra_columns: dict[str, str] = {}
+    for header, value in record.items():
+        normalized = normalize_text(header)
+        if not normalized or normalized.startswith("未命名列"):
+            continue
+        if normalized in HEADER_MAP:
+            continue
+        cell_value = normalize_text(value)
+        if not cell_value:
+            continue
+        extra_columns[normalized] = cell_value
+    return extra_columns
+
+
 def _is_empty_row(row: list[str]) -> bool:
     return all(not normalize_text(cell) for cell in row)
 
@@ -175,7 +204,9 @@ def _is_noise_row(row: list[str], headers: list[str]) -> bool:
 def _parse_row(headers: list[str], row: list[str]) -> dict[str, Any] | None:
     normalized_row = [normalize_text(cell) for cell in row]
     record = {headers[idx]: normalized_row[idx] if idx < len(normalized_row) else "" for idx in range(len(headers))}
-    standard: dict[str, Any] = {}
+    standard: dict[str, Any] = {"extra_columns": _extract_extra_columns(record)}
+    for field_name in ORGLIST_FIELD_NAMES:
+        standard[field_name] = ""
     for header, field_name in HEADER_MAP.items():
         standard[field_name] = record.get(header, "")
     if not standard.get("org_code"):
@@ -191,6 +222,7 @@ def parse_organization_list_workbook(path: str | Path) -> dict[str, Any]:
 
     header_row_index = _find_header_row(rows)
     headers = _normalize_headers(rows[header_row_index])
+    unmapped_headers = _find_unmapped_headers(headers)
 
     records: list[dict[str, Any]] = []
     for row in rows[header_row_index + 1 :]:
@@ -208,6 +240,7 @@ def parse_organization_list_workbook(path: str | Path) -> dict[str, Any]:
         "file_path": str(workbook_path),
         "file_name": workbook_path.name,
         "headers": headers,
+        "unmapped_headers": unmapped_headers,
         "records": records,
         "row_count": len(records),
     }

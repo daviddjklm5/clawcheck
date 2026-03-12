@@ -23,9 +23,12 @@ CREATE TABLE IF NOT EXISTS "组织列表" (
     include_all_children BOOLEAN NOT NULL DEFAULT TRUE,
     source_file_name TEXT,
     import_batch_no TEXT,
+    extra_columns_json JSONB NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE "组织列表" ADD COLUMN IF NOT EXISTS extra_columns_json JSONB NULL;
 
 CREATE INDEX IF NOT EXISTS idx_组织列表_parent_org_code ON "组织列表" (parent_org_code);
 CREATE INDEX IF NOT EXISTS idx_组织列表_import_batch_no ON "组织列表" (import_batch_no);

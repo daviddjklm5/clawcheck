@@ -88,6 +88,7 @@ python automation/scripts/run.py orglist --skip-export --skip-import --headed
 - SQL: `automation/sql/001_permission_apply_collect.sql`
 - SQL: `automation/sql/002_active_roster.sql`
 - SQL: `automation/sql/003_organization_list.sql`
+- SQL: `automation/sql/004_city_warzone.sql`
 
 ## 5. Notes
 - Prod roster flow targets `https://hr.onewo.com/ierp/?formId=home_page`.

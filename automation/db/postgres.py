@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from collections.abc import Iterable
 from contextlib import contextmanager
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -261,122 +261,66 @@ class PostgresActiveRosterStore(_PostgresStoreBase):
         query_date: date,
         source_file_name: str,
         import_batch_no: str,
+        downloaded_at: datetime | None = None,
     ) -> int:
+        from automation.utils.roster_excel import ROSTER_DATE_FIELDS, ROSTER_FIELD_SPECS
+
         normalized_rows = list(rows)
         if not normalized_rows:
             return 0
 
         self.ensure_table()
+        roster_columns = [field_name for _, field_name, _ in ROSTER_FIELD_SPECS]
+        metadata_columns = [
+            "query_date",
+            "source_file_name",
+            "import_batch_no",
+            "row_no",
+            "downloaded_at",
+            "imported_at",
+            "extra_columns_json",
+        ]
+        insert_columns = roster_columns + metadata_columns + ["created_at", "updated_at"]
+        value_placeholders = [f"%({column})s" for column in roster_columns + metadata_columns]
+        value_placeholders.extend(["NOW()", "NOW()"])
+        update_columns = [column for column in roster_columns + metadata_columns if column != "employee_no"]
+
+        insert_sql = f"""
+            INSERT INTO {self.table_name} (
+                {', '.join(insert_columns)}
+            ) VALUES (
+                {', '.join(value_placeholders)}
+            )
+            ON CONFLICT (employee_no) DO UPDATE SET
+                {', '.join(f'{column} = EXCLUDED.{column}' for column in update_columns)},
+                updated_at = NOW()
+        """
+
+        payloads: list[dict[str, Any]] = []
+        for row in normalized_rows:
+            payload: dict[str, Any] = {
+                "employee_no": row.get("employee_no", ""),
+                "query_date": query_date,
+                "source_file_name": source_file_name,
+                "import_batch_no": import_batch_no,
+                "row_no": self._to_int_or_none(row.get("row_no")),
+                "downloaded_at": downloaded_at,
+                "imported_at": datetime.now(),
+                "extra_columns_json": json.dumps(row.get("extra_columns", {}), ensure_ascii=False),
+            }
+            for column in roster_columns:
+                if column == "employee_no":
+                    continue
+                value = row.get(column)
+                if column in ROSTER_DATE_FIELDS:
+                    payload[column] = self._parse_date(value)
+                else:
+                    payload[column] = self._null_if_blank(value)
+            payloads.append(payload)
+
         with self.connect() as connection:
             with connection.cursor() as cursor:
-                cursor.executemany(
-                    f"""
-                    INSERT INTO {self.table_name} (
-                        query_date,
-                        employee_no,
-                        employee_name,
-                        company_name,
-                        company_id,
-                        department_name,
-                        department_long_text,
-                        department_id,
-                        department_city,
-                        entry_date,
-                        level1_function_name,
-                        position_code,
-                        position_name,
-                        specific_post_name,
-                        critical_post_flag,
-                        post_family,
-                        job_title,
-                        level2_function_name,
-                        standard_position_code,
-                        source_file_name,
-                        import_batch_no,
-                        row_no,
-                        raw_row_json,
-                        created_at,
-                        updated_at
-                    ) VALUES (
-                        %(query_date)s,
-                        %(employee_no)s,
-                        %(employee_name)s,
-                        %(company_name)s,
-                        %(company_id)s,
-                        %(department_name)s,
-                        %(department_long_text)s,
-                        %(department_id)s,
-                        %(department_city)s,
-                        %(entry_date)s,
-                        %(level1_function_name)s,
-                        %(position_code)s,
-                        %(position_name)s,
-                        %(specific_post_name)s,
-                        %(critical_post_flag)s,
-                        %(post_family)s,
-                        %(job_title)s,
-                        %(level2_function_name)s,
-                        %(standard_position_code)s,
-                        %(source_file_name)s,
-                        %(import_batch_no)s,
-                        %(row_no)s,
-                        %(raw_row_json)s,
-                        NOW(),
-                        NOW()
-                    )
-                    ON CONFLICT (query_date, employee_no) DO UPDATE SET
-                        employee_name = EXCLUDED.employee_name,
-                        company_name = EXCLUDED.company_name,
-                        company_id = EXCLUDED.company_id,
-                        department_name = EXCLUDED.department_name,
-                        department_long_text = EXCLUDED.department_long_text,
-                        department_id = EXCLUDED.department_id,
-                        department_city = EXCLUDED.department_city,
-                        entry_date = EXCLUDED.entry_date,
-                        level1_function_name = EXCLUDED.level1_function_name,
-                        position_code = EXCLUDED.position_code,
-                        position_name = EXCLUDED.position_name,
-                        specific_post_name = EXCLUDED.specific_post_name,
-                        critical_post_flag = EXCLUDED.critical_post_flag,
-                        post_family = EXCLUDED.post_family,
-                        job_title = EXCLUDED.job_title,
-                        level2_function_name = EXCLUDED.level2_function_name,
-                        standard_position_code = EXCLUDED.standard_position_code,
-                        source_file_name = EXCLUDED.source_file_name,
-                        import_batch_no = EXCLUDED.import_batch_no,
-                        row_no = EXCLUDED.row_no,
-                        raw_row_json = EXCLUDED.raw_row_json,
-                        updated_at = NOW()
-                    """,
-                    [
-                        {
-                            "query_date": query_date,
-                            "employee_no": row.get("employee_no", ""),
-                            "employee_name": self._null_if_blank(row.get("employee_name")),
-                            "company_name": self._null_if_blank(row.get("company_name")),
-                            "company_id": self._null_if_blank(row.get("company_id")),
-                            "department_name": self._null_if_blank(row.get("department_name")),
-                            "department_long_text": self._null_if_blank(row.get("department_long_text")),
-                            "department_id": self._null_if_blank(row.get("department_id")),
-                            "department_city": self._null_if_blank(row.get("department_city")),
-                            "entry_date": self._parse_date(row.get("entry_date")),
-                            "level1_function_name": self._null_if_blank(row.get("level1_function_name")),
-                            "position_code": self._null_if_blank(row.get("position_code")),
-                            "position_name": self._null_if_blank(row.get("position_name")),
-                            "specific_post_name": self._null_if_blank(row.get("specific_post_name")),
-                            "critical_post_flag": self._null_if_blank(row.get("critical_post_flag")),
-                            "post_family": self._null_if_blank(row.get("post_family")),
-                            "job_title": self._null_if_blank(row.get("job_title")),
-                            "level2_function_name": self._null_if_blank(row.get("level2_function_name")),
-                            "standard_position_code": self._null_if_blank(row.get("standard_position_code")),
-                            "source_file_name": source_file_name,
-                            "import_batch_no": import_batch_no,
-                            "row_no": self._to_int_or_none(row.get("row_no")),
-                            "raw_row_json": json.dumps(row.get("raw_row", row), ensure_ascii=False),
-                        }
-                        for row in normalized_rows
-                    ],
-                )
+                cursor.executemany(insert_sql, payloads)
         return len(normalized_rows)
 
     @classmethod
@@ -387,7 +331,13 @@ class PostgresActiveRosterStore(_PostgresStoreBase):
         if isinstance(value, date):
             return value
         if isinstance(value, str):
-            return date.fromisoformat(value[:10])
+            text = value.strip()
+            for candidate in (text[:10], text.replace('/', '-')[:10]):
+                try:
+                    return date.fromisoformat(candidate)
+                except ValueError:
+                    continue
+            return None
         raise ValueError(f"Unsupported date value: {value!r}")
 
 
@@ -444,6 +394,7 @@ class PostgresOrganizationListStore(_PostgresStoreBase):
                         include_all_children,
                         source_file_name,
                         import_batch_no,
+                        extra_columns_json,
                         created_at,
                         updated_at
                     ) VALUES (
@@ -471,6 +422,7 @@ class PostgresOrganizationListStore(_PostgresStoreBase):
                         %(include_all_children)s,
                         %(source_file_name)s,
                         %(import_batch_no)s,
+                        %(extra_columns_json)s,
                         NOW(),
                         NOW()
                     )
@@ -501,6 +453,7 @@ class PostgresOrganizationListStore(_PostgresStoreBase):
                             "include_all_children": include_all_children,
                             "source_file_name": source_file_name,
                             "import_batch_no": import_batch_no,
+                            "extra_columns_json": json.dumps(row.get("extra_columns", {}), ensure_ascii=False),
                         }
                         for row in normalized_rows
                     ],
