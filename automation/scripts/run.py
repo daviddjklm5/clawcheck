@@ -246,6 +246,7 @@ def main() -> int:
             import_batch_no=import_batch_no,
             source_root_org=source_root_org,
             include_all_children=include_all_children,
+            extra_headers=parsed.get("unmapped_headers", []),
         )
         payload["import_batch_no"] = import_batch_no
         payload["inserted_count"] = inserted_count

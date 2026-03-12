@@ -1,0 +1,2 @@
+ALTER TABLE IF EXISTS "组织列表"
+    ADD COLUMN IF NOT EXISTS process_level_name TEXT;

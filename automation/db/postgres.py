@@ -344,12 +344,59 @@ class PostgresActiveRosterStore(_PostgresStoreBase):
 class PostgresOrganizationListStore(_PostgresStoreBase):
     table_name = '"组织列表"'
     schema_sql = Path(__file__).resolve().parents[1] / "sql" / "003_organization_list.sql"
+    migration_sql_files = [
+        Path(__file__).resolve().parents[1] / "sql" / "005_organization_list_drop_extra_columns_json.sql",
+        Path(__file__).resolve().parents[1] / "sql" / "007_organization_list_add_process_level_name.sql",
+        Path(__file__).resolve().parents[1] / "sql" / "008_organization_list_standardize_latest_columns.sql",
+    ]
+    derived_schema_sql_files = [
+        Path(__file__).resolve().parents[1] / "sql" / "004_city_warzone.sql",
+        Path(__file__).resolve().parents[1] / "sql" / "006_organization_attribute_query.sql",
+    ]
+    base_columns = [
+        "org_code",
+        "row_no",
+        "org_name",
+        "org_type",
+        "parent_org_name",
+        "parent_org_code",
+        "established_date",
+        "company_name",
+        "business_status",
+        "org_level",
+        "org_function",
+        "city_name",
+        "work_location",
+        "physical_level",
+        "pending_disable_date",
+        "department_type",
+        "process_level_name",
+        "dept_subcategory_code",
+        "dept_subcategory_name",
+        "dept_category_code",
+        "dept_category_name",
+        "org_created_time",
+        "org_full_name",
+        "org_manager_name",
+        "hr_owner_employee_no",
+        "hr_owner_name",
+        "hr_owner_include_children_flag",
+        "hr_owner_exposed_flag",
+        "source_root_org",
+        "include_all_children",
+        "source_file_name",
+        "import_batch_no",
+    ]
 
     def ensure_table(self) -> None:
         ddl = self.schema_sql.read_text(encoding="utf-8")
         with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(ddl)
+                for migration_sql_file in self.migration_sql_files:
+                    cursor.execute(migration_sql_file.read_text(encoding="utf-8"))
+                for derived_schema_sql_file in self.derived_schema_sql_files:
+                    cursor.execute(derived_schema_sql_file.read_text(encoding="utf-8"))
 
     def write_rows(
         self,
@@ -358,104 +405,130 @@ class PostgresOrganizationListStore(_PostgresStoreBase):
         import_batch_no: str,
         source_root_org: str,
         include_all_children: bool,
+        extra_headers: Iterable[str] | None = None,
     ) -> int:
         normalized_rows = list(rows)
         if not normalized_rows:
             return 0
 
+        normalized_extra_headers = self._normalize_extra_headers(extra_headers, normalized_rows)
+
         self.ensure_table()
         with self.connect() as connection:
             with connection.cursor() as cursor:
+                self._ensure_extra_columns(cursor, normalized_extra_headers)
                 cursor.execute(f"TRUNCATE TABLE {self.table_name}")
+                insert_columns = self.base_columns + normalized_extra_headers + ["created_at", "updated_at"]
+                value_placeholders = [f"%({column})s" for column in self.base_columns]
+                extra_header_placeholders = {
+                    header: f"dynamic_column_{index}"
+                    for index, header in enumerate(normalized_extra_headers)
+                }
+                value_placeholders.extend(
+                    f"%({extra_header_placeholders[header]})s" for header in normalized_extra_headers
+                )
+                value_placeholders.extend(["NOW()", "NOW()"])
                 cursor.executemany(
                     f"""
                     INSERT INTO {self.table_name} (
-                        org_code,
-                        row_no,
-                        org_name,
-                        org_type,
-                        parent_org_name,
-                        parent_org_code,
-                        company_name,
-                        org_level,
-                        city_name,
-                        physical_level,
-                        dept_subcategory_code,
-                        dept_subcategory_name,
-                        dept_category_code,
-                        dept_category_name,
-                        org_full_name,
-                        org_manager_name,
-                        hr_owner_employee_no,
-                        hr_owner_name,
-                        hr_owner_include_children_flag,
-                        hr_owner_exposed_flag,
-                        source_root_org,
-                        include_all_children,
-                        source_file_name,
-                        import_batch_no,
-                        extra_columns_json,
-                        created_at,
-                        updated_at
+                        {', '.join(self._quote_identifier(column) for column in insert_columns)}
                     ) VALUES (
-                        %(org_code)s,
-                        %(row_no)s,
-                        %(org_name)s,
-                        %(org_type)s,
-                        %(parent_org_name)s,
-                        %(parent_org_code)s,
-                        %(company_name)s,
-                        %(org_level)s,
-                        %(city_name)s,
-                        %(physical_level)s,
-                        %(dept_subcategory_code)s,
-                        %(dept_subcategory_name)s,
-                        %(dept_category_code)s,
-                        %(dept_category_name)s,
-                        %(org_full_name)s,
-                        %(org_manager_name)s,
-                        %(hr_owner_employee_no)s,
-                        %(hr_owner_name)s,
-                        %(hr_owner_include_children_flag)s,
-                        %(hr_owner_exposed_flag)s,
-                        %(source_root_org)s,
-                        %(include_all_children)s,
-                        %(source_file_name)s,
-                        %(import_batch_no)s,
-                        %(extra_columns_json)s,
-                        NOW(),
-                        NOW()
+                        {', '.join(value_placeholders)}
                     )
                     """,
                     [
-                        {
-                            "org_code": row.get("org_code", ""),
-                            "row_no": self._to_int_or_none(row.get("row_no")),
-                            "org_name": self._null_if_blank(row.get("org_name")),
-                            "org_type": self._null_if_blank(row.get("org_type")),
-                            "parent_org_name": self._null_if_blank(row.get("parent_org_name")),
-                            "parent_org_code": self._null_if_blank(row.get("parent_org_code")),
-                            "company_name": self._null_if_blank(row.get("company_name")),
-                            "org_level": self._null_if_blank(row.get("org_level")),
-                            "city_name": self._null_if_blank(row.get("city_name")),
-                            "physical_level": self._null_if_blank(row.get("physical_level")),
-                            "dept_subcategory_code": self._null_if_blank(row.get("dept_subcategory_code")),
-                            "dept_subcategory_name": self._null_if_blank(row.get("dept_subcategory_name")),
-                            "dept_category_code": self._null_if_blank(row.get("dept_category_code")),
-                            "dept_category_name": self._null_if_blank(row.get("dept_category_name")),
-                            "org_full_name": self._null_if_blank(row.get("org_full_name")),
-                            "org_manager_name": self._null_if_blank(row.get("org_manager_name")),
-                            "hr_owner_employee_no": self._null_if_blank(row.get("hr_owner_employee_no")),
-                            "hr_owner_name": self._null_if_blank(row.get("hr_owner_name")),
-                            "hr_owner_include_children_flag": self._null_if_blank(row.get("hr_owner_include_children_flag")),
-                            "hr_owner_exposed_flag": self._null_if_blank(row.get("hr_owner_exposed_flag")),
-                            "source_root_org": source_root_org,
-                            "include_all_children": include_all_children,
-                            "source_file_name": source_file_name,
-                            "import_batch_no": import_batch_no,
-                            "extra_columns_json": json.dumps(row.get("extra_columns", {}), ensure_ascii=False),
-                        }
+                        self._build_orglist_payload(
+                            row=row,
+                            source_file_name=source_file_name,
+                            import_batch_no=import_batch_no,
+                            source_root_org=source_root_org,
+                            include_all_children=include_all_children,
+                            extra_headers=normalized_extra_headers,
+                            extra_header_placeholders=extra_header_placeholders,
+                        )
                         for row in normalized_rows
                     ],
                 )
+                cursor.execute('SELECT refresh_组织属性查询()')
         return len(normalized_rows)
+
+    @classmethod
+    def _build_orglist_payload(
+        cls,
+        row: dict[str, Any],
+        source_file_name: str,
+        import_batch_no: str,
+        source_root_org: str,
+        include_all_children: bool,
+        extra_headers: list[str],
+        extra_header_placeholders: dict[str, str],
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "org_code": row.get("org_code", ""),
+            "row_no": cls._to_int_or_none(row.get("row_no")),
+            "org_name": cls._null_if_blank(row.get("org_name")),
+            "org_type": cls._null_if_blank(row.get("org_type")),
+            "parent_org_name": cls._null_if_blank(row.get("parent_org_name")),
+            "parent_org_code": cls._null_if_blank(row.get("parent_org_code")),
+            "established_date": cls._null_if_blank(row.get("established_date")),
+            "company_name": cls._null_if_blank(row.get("company_name")),
+            "business_status": cls._null_if_blank(row.get("business_status")),
+            "org_level": cls._null_if_blank(row.get("org_level")),
+            "org_function": cls._null_if_blank(row.get("org_function")),
+            "city_name": cls._null_if_blank(row.get("city_name")),
+            "work_location": cls._null_if_blank(row.get("work_location")),
+            "physical_level": cls._null_if_blank(row.get("physical_level")),
+            "pending_disable_date": cls._null_if_blank(row.get("pending_disable_date")),
+            "department_type": cls._null_if_blank(row.get("department_type")),
+            "process_level_name": cls._null_if_blank(row.get("process_level_name")),
+            "dept_subcategory_code": cls._null_if_blank(row.get("dept_subcategory_code")),
+            "dept_subcategory_name": cls._null_if_blank(row.get("dept_subcategory_name")),
+            "dept_category_code": cls._null_if_blank(row.get("dept_category_code")),
+            "dept_category_name": cls._null_if_blank(row.get("dept_category_name")),
+            "org_created_time": cls._null_if_blank(row.get("org_created_time")),
+            "org_full_name": cls._null_if_blank(row.get("org_full_name")),
+            "org_manager_name": cls._null_if_blank(row.get("org_manager_name")),
+            "hr_owner_employee_no": cls._null_if_blank(row.get("hr_owner_employee_no")),
+            "hr_owner_name": cls._null_if_blank(row.get("hr_owner_name")),
+            "hr_owner_include_children_flag": cls._null_if_blank(row.get("hr_owner_include_children_flag")),
+            "hr_owner_exposed_flag": cls._null_if_blank(row.get("hr_owner_exposed_flag")),
+            "source_root_org": source_root_org,
+            "include_all_children": include_all_children,
+            "source_file_name": source_file_name,
+            "import_batch_no": import_batch_no,
+        }
+        extra_columns = row.get("extra_columns", {})
+        for header in extra_headers:
+            payload[extra_header_placeholders[header]] = cls._null_if_blank(extra_columns.get(header))
+        return payload
+
+    def _ensure_extra_columns(self, cursor, extra_headers: Iterable[str]) -> None:
+        for header in extra_headers:
+            cursor.execute(
+                f"ALTER TABLE {self.table_name} ADD COLUMN IF NOT EXISTS {self._quote_identifier(header)} TEXT"
+            )
+
+    @classmethod
+    def _normalize_extra_headers(cls, extra_headers: Iterable[str] | None, rows: Iterable[dict[str, Any]]) -> list[str]:
+        ordered_headers: list[str] = []
+        seen: set[str] = set()
+
+        def append_header(header: Any) -> None:
+            if not isinstance(header, str):
+                return
+            normalized_header = header.strip()
+            if not normalized_header or normalized_header in seen:
+                return
+            seen.add(normalized_header)
+            ordered_headers.append(normalized_header)
+
+        for header in extra_headers or []:
+            append_header(header)
+        for row in rows:
+            for header in row.get("extra_columns", {}).keys():
+                append_header(header)
+        return ordered_headers
+
+    @staticmethod
+    def _quote_identifier(identifier: str) -> str:
+        return f'"{identifier.replace(chr(34), chr(34) * 2)}"'

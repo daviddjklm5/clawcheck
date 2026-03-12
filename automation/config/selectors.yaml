@@ -12,6 +12,8 @@ login:
   submit:
     - "button:has-text('登录')"
     - "button:has-text('登 录')"
+    - "text=登录"
+    - "text=登 录"
   captcha_hint:
     - "text=图形验证码"
     - "text=手机验证码"

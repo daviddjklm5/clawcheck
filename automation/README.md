@@ -89,6 +89,9 @@ python automation/scripts/run.py orglist --skip-export --skip-import --headed
 - SQL: `automation/sql/002_active_roster.sql`
 - SQL: `automation/sql/003_organization_list.sql`
 - SQL: `automation/sql/004_city_warzone.sql`
+- SQL: `automation/sql/005_organization_list_drop_extra_columns_json.sql`
+- SQL: `automation/sql/007_organization_list_add_process_level_name.sql`
+- SQL: `automation/sql/008_organization_list_standardize_latest_columns.sql`
 
 ## 5. Notes
 - Prod roster flow targets `https://hr.onewo.com/ierp/?formId=home_page`.
@@ -100,3 +103,4 @@ python automation/scripts/run.py orglist --skip-export --skip-import --headed
 - The orglist flow targets `组织快速维护 -> 万物云 -> 列表包含所有下级`.
 - The actual orglist export path is `更多 -> 引出数据（按列表）`.
 - The orglist import writes into PostgreSQL table `组织列表`.
+- New source headers in the orglist workbook are auto-added as PostgreSQL physical columns (`TEXT`) instead of being kept in JSON.
