@@ -198,10 +198,6 @@ STRICT
 PARALLEL SAFE
 AS $$
     SELECT CASE
-        WHEN NULLIF(split_part(p_org_full_name, '_', 2), '') = '蝶城发展中心'
-         AND NULLIF(split_part(p_org_full_name, '_', 3), '') = '人力资源与行政服务部'
-         AND COALESCE(NULLIF(split_part(p_org_full_name, '_', 4), ''), '__EMPTY__') <> '研选家人力资源组'
-        THEN '蝶发人行部'
         WHEN NULLIF(split_part(p_org_full_name, '_', 3), '') = '人力资源与行政服务中心'
          AND NULLIF(split_part(p_org_full_name, '_', 4), '') IS NOT NULL
         THEN NULLIF(split_part(p_org_full_name, '_', 4), '')
@@ -240,6 +236,10 @@ AS $$
         WHEN COALESCE(NULLIF(BTRIM(p_org_full_name), ''), '') LIKE '%BG人力资源行政服务中心%'
           OR COALESCE(NULLIF(BTRIM(p_org_full_name), ''), '') LIKE '%知之学社%'
         THEN 'BG人行中心与学社'
+        WHEN NULLIF(split_part(p_org_full_name, '_', 2), '') = '蝶城发展中心'
+         AND NULLIF(split_part(p_org_full_name, '_', 3), '') = '人力资源与行政服务部'
+         AND COALESCE(NULLIF(split_part(p_org_full_name, '_', 4), ''), '__EMPTY__') <> '研选家人力资源组'
+        THEN '业务单元本部'
         WHEN NULLIF(split_part(p_org_full_name, '_', 3), '') = '人力资源与行政服务中心'
          AND NULLIF(split_part(p_org_full_name, '_', 4), '') IS NOT NULL
          AND NULLIF(split_part(p_org_full_name, '_', 4), '') <> 'BG人力资源行政服务中心'
@@ -262,8 +262,7 @@ AS $$
             '修缮业务本部',
             '朴邻本部',
             '万御电梯本部',
-            '福讯信息',
-            '蝶发人行部'
+            '福讯信息'
         ) THEN '业务单元本部'
         ELSE '属地组织'
     END
