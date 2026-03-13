@@ -206,6 +206,100 @@ AS $$
 $$;
 
 
+CREATE OR REPLACE FUNCTION fn_map_org_auth_level(
+    p_org_code TEXT,
+    p_org_level TEXT,
+    p_physical_level TEXT,
+    p_org_full_name TEXT
+)
+RETURNS TEXT
+LANGUAGE plpgsql
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+DECLARE
+    normalized_org_code TEXT := NULLIF(BTRIM(p_org_code), '');
+    normalized_org_full_name TEXT := NULLIF(BTRIM(p_org_full_name), '');
+    physical_level_num NUMERIC := CASE
+        WHEN NULLIF(BTRIM(p_physical_level), '') ~ '^[0-9]+([.][0-9]+)?$' THEN NULLIF(BTRIM(p_physical_level), '')::NUMERIC
+        ELSE NULL
+    END;
+BEGIN
+    IF normalized_org_code IN (
+        '50907939',
+        '50802218',
+        '50802206',
+        '50915927',
+        '50802202',
+        '55002557',
+        '50802204',
+        '50907940',
+        '50916400',
+        '99999998'
+    ) THEN
+        RETURN '一级授权';
+    END IF;
+
+    IF COALESCE(normalized_org_full_name, '') LIKE '%BG人力资源行政服务中心%' THEN
+        RETURN '一级授权';
+    END IF;
+
+    IF physical_level_num = 2 THEN
+        RETURN '二级授权';
+    END IF;
+
+    RETURN NULL;
+END;
+$$;
+
+
+CREATE OR REPLACE FUNCTION fn_map_org_auth_level_rule(
+    p_org_code TEXT,
+    p_org_level TEXT,
+    p_physical_level TEXT,
+    p_org_full_name TEXT
+)
+RETURNS TEXT
+LANGUAGE plpgsql
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+DECLARE
+    normalized_org_code TEXT := NULLIF(BTRIM(p_org_code), '');
+    normalized_org_full_name TEXT := NULLIF(BTRIM(p_org_full_name), '');
+    physical_level_num NUMERIC := CASE
+        WHEN NULLIF(BTRIM(p_physical_level), '') ~ '^[0-9]+([.][0-9]+)?$' THEN NULLIF(BTRIM(p_physical_level), '')::NUMERIC
+        ELSE NULL
+    END;
+BEGIN
+    IF normalized_org_code IN (
+        '50907939',
+        '50802218',
+        '50802206',
+        '50915927',
+        '50802202',
+        '55002557',
+        '50802204',
+        '50907940',
+        '50916400',
+        '99999998'
+    ) THEN
+        RETURN 'org_code:l1_specified';
+    END IF;
+
+    IF COALESCE(normalized_org_full_name, '') LIKE '%BG人力资源行政服务中心%' THEN
+        RETURN 'org_full_name:contains_BG人力资源行政服务中心';
+    END IF;
+
+    IF physical_level_num = 2 THEN
+        RETURN 'physical_level:eq_2';
+    END IF;
+
+    RETURN 'unresolved';
+END;
+$$;
+
+
 CREATE TABLE IF NOT EXISTS "组织属性查询" (
     org_code TEXT PRIMARY KEY,
     row_no INTEGER,
@@ -234,6 +328,8 @@ CREATE TABLE IF NOT EXISTS "组织属性查询" (
     org_full_name TEXT,
     org_unit_name TEXT,
     org_unit_rule TEXT,
+    org_auth_level TEXT,
+    org_auth_level_rule TEXT,
     wanyu_city_sales_department TEXT,
     war_zone TEXT,
     source_import_batch_no TEXT,
@@ -249,6 +345,12 @@ ALTER TABLE "组织属性查询"
     ADD COLUMN IF NOT EXISTS process_level_category TEXT;
 
 ALTER TABLE "组织属性查询"
+    ADD COLUMN IF NOT EXISTS org_auth_level TEXT;
+
+ALTER TABLE "组织属性查询"
+    ADD COLUMN IF NOT EXISTS org_auth_level_rule TEXT;
+
+ALTER TABLE "组织属性查询"
     DROP COLUMN IF EXISTS hr_admin_center_name;
 
 CREATE INDEX IF NOT EXISTS idx_组织属性查询_org_name ON "组织属性查询" (org_name);
@@ -260,6 +362,7 @@ CREATE INDEX IF NOT EXISTS idx_组织属性查询_process_level_category ON "组
 CREATE INDEX IF NOT EXISTS idx_组织属性查询_dept_category_code ON "组织属性查询" (dept_category_code);
 CREATE INDEX IF NOT EXISTS idx_组织属性查询_dept_subcategory_code ON "组织属性查询" (dept_subcategory_code);
 CREATE INDEX IF NOT EXISTS idx_组织属性查询_org_unit_name ON "组织属性查询" (org_unit_name);
+CREATE INDEX IF NOT EXISTS idx_组织属性查询_org_auth_level ON "组织属性查询" (org_auth_level);
 CREATE INDEX IF NOT EXISTS idx_组织属性查询_wanyu_city_sales_department ON "组织属性查询" (wanyu_city_sales_department);
 CREATE INDEX IF NOT EXISTS idx_组织属性查询_war_zone ON "组织属性查询" (war_zone);
 CREATE INDEX IF NOT EXISTS idx_组织属性查询_war_zone_city_name ON "组织属性查询" (war_zone, city_name);
@@ -301,6 +404,8 @@ BEGIN
             org_full_name TEXT,
             org_unit_name TEXT,
             org_unit_rule TEXT,
+            org_auth_level TEXT,
+            org_auth_level_rule TEXT,
             wanyu_city_sales_department TEXT,
             war_zone TEXT,
             source_import_batch_no TEXT,
@@ -338,6 +443,8 @@ BEGIN
             org_full_name,
             org_unit_name,
             org_unit_rule,
+            org_auth_level,
+            org_auth_level_rule,
             wanyu_city_sales_department,
             war_zone,
             source_import_batch_no,
@@ -408,6 +515,8 @@ BEGIN
             o.org_full_name,
             fn_map_org_unit_name(o.org_full_name) AS org_unit_name,
             fn_map_org_unit_rule(o.org_full_name) AS org_unit_rule,
+            fn_map_org_auth_level(o.org_code, o.org_level, o.physical_level, o.org_full_name) AS org_auth_level,
+            fn_map_org_auth_level_rule(o.org_code, o.org_level, o.physical_level, o.org_full_name) AS org_auth_level_rule,
             fn_map_wanyu_city_sales_department(o.org_full_name) AS wanyu_city_sales_department,
             z.war_zone,
             o.import_batch_no,
@@ -439,6 +548,7 @@ BEGIN
     EXECUTE 'CREATE INDEX idx_组织属性查询_dept_category_code ON "组织属性查询" (dept_category_code)';
     EXECUTE 'CREATE INDEX idx_组织属性查询_dept_subcategory_code ON "组织属性查询" (dept_subcategory_code)';
     EXECUTE 'CREATE INDEX idx_组织属性查询_org_unit_name ON "组织属性查询" (org_unit_name)';
+    EXECUTE 'CREATE INDEX idx_组织属性查询_org_auth_level ON "组织属性查询" (org_auth_level)';
     EXECUTE 'CREATE INDEX idx_组织属性查询_wanyu_city_sales_department ON "组织属性查询" (wanyu_city_sales_department)';
     EXECUTE 'CREATE INDEX idx_组织属性查询_war_zone ON "组织属性查询" (war_zone)';
     EXECUTE 'CREATE INDEX idx_组织属性查询_war_zone_city_name ON "组织属性查询" (war_zone, city_name)';
