@@ -130,6 +130,82 @@ END;
 $$;
 
 
+CREATE OR REPLACE FUNCTION fn_map_process_level_name_override(p_org_full_name TEXT)
+RETURNS TEXT
+LANGUAGE sql
+IMMUTABLE
+STRICT
+PARALLEL SAFE
+AS $$
+    SELECT CASE
+        WHEN NULLIF(split_part(p_org_full_name, '_', 2), '') = '蝶城发展中心'
+         AND NULLIF(split_part(p_org_full_name, '_', 3), '') = '人力资源与行政服务部'
+         AND COALESCE(NULLIF(split_part(p_org_full_name, '_', 4), ''), '__EMPTY__') <> '研选家人力资源组'
+        THEN '蝶发人行部'
+        WHEN NULLIF(split_part(p_org_full_name, '_', 3), '') = '人力资源与行政服务中心'
+         AND NULLIF(split_part(p_org_full_name, '_', 4), '') IS NOT NULL
+        THEN NULLIF(split_part(p_org_full_name, '_', 4), '')
+        ELSE NULL
+    END
+$$;
+
+
+CREATE OR REPLACE FUNCTION fn_map_wanyu_city_sales_department(p_org_full_name TEXT)
+RETURNS TEXT
+LANGUAGE sql
+IMMUTABLE
+STRICT
+PARALLEL SAFE
+AS $$
+    SELECT CASE
+        WHEN RIGHT(NULLIF(split_part(p_org_full_name, '_', 4), ''), 5) = '城市营业部'
+        THEN NULLIF(split_part(p_org_full_name, '_', 4), '')
+        ELSE NULL
+    END
+$$;
+
+
+CREATE OR REPLACE FUNCTION fn_map_process_level_category(
+    p_process_level_name_resolved TEXT,
+    p_company_name TEXT,
+    p_org_full_name TEXT
+)
+RETURNS TEXT
+LANGUAGE sql
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+    SELECT CASE
+        WHEN NULLIF(BTRIM(p_company_name), '') = '人事远程交付中心' THEN '人事远程交付中心'
+        WHEN NULLIF(split_part(p_org_full_name, '_', 3), '') = '人力资源与行政服务中心'
+         AND NULLIF(split_part(p_org_full_name, '_', 4), '') IS NOT NULL
+         AND NULLIF(split_part(p_org_full_name, '_', 4), '') <> 'BG人力资源行政服务中心'
+         AND RIGHT(NULLIF(BTRIM(p_org_full_name), ''), 7) = '人事交付服务组'
+        THEN '属地服务站'
+        WHEN NULLIF(split_part(p_org_full_name, '_', 3), '') = '人力资源与行政服务中心'
+         AND NULLIF(split_part(p_org_full_name, '_', 4), '') IS NOT NULL
+         AND NULLIF(split_part(p_org_full_name, '_', 4), '') <> 'BG人力资源行政服务中心'
+        THEN '战区人行部门'
+        WHEN NULLIF(BTRIM(p_process_level_name_resolved), '') IS NULL THEN NULL
+        WHEN NULLIF(BTRIM(p_process_level_name_resolved), '') IN (
+            '万物云本部',
+            '本部部门',
+            '本部二级部门',
+            '本部三级部门',
+            '万科物业'
+        ) THEN '万物云本部'
+        WHEN NULLIF(BTRIM(p_process_level_name_resolved), '') IN (
+            '本部',
+            '修缮业务本部',
+            '朴邻本部',
+            '万御电梯本部',
+            '福讯信息'
+        ) THEN '业务单元本部'
+        ELSE '属地组织'
+    END
+$$;
+
+
 CREATE TABLE IF NOT EXISTS "组织属性查询" (
     org_code TEXT PRIMARY KEY,
     row_no INTEGER,
@@ -149,6 +225,7 @@ CREATE TABLE IF NOT EXISTS "组织属性查询" (
     department_type TEXT,
     process_level_name TEXT,
     process_level_name_resolved TEXT,
+    process_level_category TEXT,
     dept_subcategory_code TEXT,
     dept_subcategory_name TEXT,
     dept_category_code TEXT,
@@ -157,6 +234,7 @@ CREATE TABLE IF NOT EXISTS "组织属性查询" (
     org_full_name TEXT,
     org_unit_name TEXT,
     org_unit_rule TEXT,
+    wanyu_city_sales_department TEXT,
     war_zone TEXT,
     source_import_batch_no TEXT,
     refreshed_at TIMESTAMPTZ NOT NULL,
@@ -164,14 +242,25 @@ CREATE TABLE IF NOT EXISTS "组织属性查询" (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+ALTER TABLE "组织属性查询"
+    ADD COLUMN IF NOT EXISTS wanyu_city_sales_department TEXT;
+
+ALTER TABLE "组织属性查询"
+    ADD COLUMN IF NOT EXISTS process_level_category TEXT;
+
+ALTER TABLE "组织属性查询"
+    DROP COLUMN IF EXISTS hr_admin_center_name;
+
 CREATE INDEX IF NOT EXISTS idx_组织属性查询_org_name ON "组织属性查询" (org_name);
 CREATE INDEX IF NOT EXISTS idx_组织属性查询_parent_org_code ON "组织属性查询" (parent_org_code);
 CREATE INDEX IF NOT EXISTS idx_组织属性查询_company_name ON "组织属性查询" (company_name);
 CREATE INDEX IF NOT EXISTS idx_组织属性查询_org_level ON "组织属性查询" (org_level);
 CREATE INDEX IF NOT EXISTS idx_组织属性查询_city_name ON "组织属性查询" (city_name);
+CREATE INDEX IF NOT EXISTS idx_组织属性查询_process_level_category ON "组织属性查询" (process_level_category);
 CREATE INDEX IF NOT EXISTS idx_组织属性查询_dept_category_code ON "组织属性查询" (dept_category_code);
 CREATE INDEX IF NOT EXISTS idx_组织属性查询_dept_subcategory_code ON "组织属性查询" (dept_subcategory_code);
 CREATE INDEX IF NOT EXISTS idx_组织属性查询_org_unit_name ON "组织属性查询" (org_unit_name);
+CREATE INDEX IF NOT EXISTS idx_组织属性查询_wanyu_city_sales_department ON "组织属性查询" (wanyu_city_sales_department);
 CREATE INDEX IF NOT EXISTS idx_组织属性查询_war_zone ON "组织属性查询" (war_zone);
 CREATE INDEX IF NOT EXISTS idx_组织属性查询_war_zone_city_name ON "组织属性查询" (war_zone, city_name);
 CREATE INDEX IF NOT EXISTS idx_组织属性查询_org_unit_name_company_name ON "组织属性查询" (org_unit_name, company_name);
@@ -203,6 +292,7 @@ BEGIN
             department_type TEXT,
             process_level_name TEXT,
             process_level_name_resolved TEXT,
+            process_level_category TEXT,
             dept_subcategory_code TEXT,
             dept_subcategory_name TEXT,
             dept_category_code TEXT,
@@ -211,6 +301,7 @@ BEGIN
             org_full_name TEXT,
             org_unit_name TEXT,
             org_unit_rule TEXT,
+            wanyu_city_sales_department TEXT,
             war_zone TEXT,
             source_import_batch_no TEXT,
             refreshed_at TIMESTAMPTZ NOT NULL,
@@ -238,6 +329,7 @@ BEGIN
             department_type,
             process_level_name,
             process_level_name_resolved,
+            process_level_category,
             dept_subcategory_code,
             dept_subcategory_name,
             dept_category_code,
@@ -246,6 +338,7 @@ BEGIN
             org_full_name,
             org_unit_name,
             org_unit_rule,
+            wanyu_city_sales_department,
             war_zone,
             source_import_batch_no,
             refreshed_at,
@@ -301,7 +394,12 @@ BEGIN
             o.pending_disable_date,
             o.department_type,
             o.process_level_name,
-            rpl.process_level_name_resolved,
+            COALESCE(fn_map_process_level_name_override(o.org_full_name), rpl.process_level_name_resolved) AS process_level_name_resolved,
+            fn_map_process_level_category(
+                COALESCE(fn_map_process_level_name_override(o.org_full_name), rpl.process_level_name_resolved),
+                o.company_name,
+                o.org_full_name
+            ) AS process_level_category,
             o.dept_subcategory_code,
             o.dept_subcategory_name,
             o.dept_category_code,
@@ -310,6 +408,7 @@ BEGIN
             o.org_full_name,
             fn_map_org_unit_name(o.org_full_name) AS org_unit_name,
             fn_map_org_unit_rule(o.org_full_name) AS org_unit_rule,
+            fn_map_wanyu_city_sales_department(o.org_full_name) AS wanyu_city_sales_department,
             z.war_zone,
             o.import_batch_no,
             NOW(),
@@ -336,9 +435,11 @@ BEGIN
     EXECUTE 'CREATE INDEX idx_组织属性查询_company_name ON "组织属性查询" (company_name)';
     EXECUTE 'CREATE INDEX idx_组织属性查询_org_level ON "组织属性查询" (org_level)';
     EXECUTE 'CREATE INDEX idx_组织属性查询_city_name ON "组织属性查询" (city_name)';
+    EXECUTE 'CREATE INDEX idx_组织属性查询_process_level_category ON "组织属性查询" (process_level_category)';
     EXECUTE 'CREATE INDEX idx_组织属性查询_dept_category_code ON "组织属性查询" (dept_category_code)';
     EXECUTE 'CREATE INDEX idx_组织属性查询_dept_subcategory_code ON "组织属性查询" (dept_subcategory_code)';
     EXECUTE 'CREATE INDEX idx_组织属性查询_org_unit_name ON "组织属性查询" (org_unit_name)';
+    EXECUTE 'CREATE INDEX idx_组织属性查询_wanyu_city_sales_department ON "组织属性查询" (wanyu_city_sales_department)';
     EXECUTE 'CREATE INDEX idx_组织属性查询_war_zone ON "组织属性查询" (war_zone)';
     EXECUTE 'CREATE INDEX idx_组织属性查询_war_zone_city_name ON "组织属性查询" (war_zone, city_name)';
     EXECUTE 'CREATE INDEX idx_组织属性查询_org_unit_name_company_name ON "组织属性查询" (org_unit_name, company_name)';
