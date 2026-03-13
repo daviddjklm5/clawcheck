@@ -100,7 +100,12 @@ python automation/scripts/run.py orglist --skip-export --skip-import --headed
 - Report scheme and employment type are both selected through F7 dialogs.
 - The roster import writes into PostgreSQL table `在职花名册表`.
 
-- The orglist flow targets `组织快速维护 -> 万物云 -> 列表包含所有下级`.
+- The orglist flow targets `组织快速维护 -> 万物云 -> 业务状态(已启用/已停用) -> 列表包含所有下级`.
 - The actual orglist export path is `更多 -> 引出数据（按列表）`.
 - The orglist import writes into PostgreSQL table `组织列表`.
 - New source headers in the orglist workbook are auto-added as PostgreSQL physical columns (`TEXT`) instead of being kept in JSON.
+- Verified in headed run on `2026-03-13`: the stable recent-menu entry is `li[data-menu-id-info*="217WYC/L9U7E"]`.
+- Verified in headed run on `2026-03-13`: the `业务状态` compact filter uses `.kd-cq-querypanel-compact-item:has(.kd-cq-querypanel-compact-item-text[title="业务状态"])`.
+- Verified in headed run on `2026-03-13`: selecting `已启用` + `已停用` changes the query result from `37` rows to `92` rows before enabling `列表包含所有下级`.
+- Verified in headed run on `2026-03-13`: enabling `列表包含所有下级` after the dual-status filter expands the result to `96017` rows (`4801` pages).
+- Verified in headed run on `2026-03-13`: export completes successfully and downloads `automation/downloads/20260313_115140_引出列表_组织快速维护_0313115015.xlsx`.

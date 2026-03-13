@@ -15,6 +15,11 @@ class OrganizationQuickMaintainFlow:
         self.logger = logger
         self.timeout_ms = timeout_ms
         self.home_url = home_url
+        self.required_business_statuses = ["已启用", "已停用"]
+        self.org_quick_maintain_menu_selector = 'li[data-menu-id-info*="217WYC/L9U7E"]'
+        self.business_status_field_selector = (
+            '.kd-cq-querypanel-compact-item:has(.kd-cq-querypanel-compact-item-text[title="业务状态"])'
+        )
 
     def run(
         self,
@@ -26,11 +31,18 @@ class OrganizationQuickMaintainFlow:
     ) -> dict[str, Any]:
         self.open_org_quick_maintain_page()
         self.select_top_org_node(root_org_name)
+        business_status_summary = self.ensure_business_status_selected(
+            statuses=self.required_business_statuses,
+            timeout_sec=query_timeout_sec,
+        )
         query_summary = self.ensure_include_children_enabled(timeout_sec=query_timeout_sec)
+        query_summary["business_statuses"] = business_status_summary["selected_statuses"]
+        query_summary["business_status_display"] = business_status_summary["selected_display"]
 
         result: dict[str, Any] = {
             "root_org_name": root_org_name,
             "include_all_children": True,
+            "business_statuses": business_status_summary["selected_statuses"],
             "query_summary": query_summary,
         }
         if skip_export:
@@ -43,15 +55,20 @@ class OrganizationQuickMaintainFlow:
     def open_org_quick_maintain_page(self) -> None:
         self.page.goto(self.home_url, wait_until="domcontentloaded")
         self._wait_for_text("员工自助服务中心", timeout_ms=self.timeout_ms)
+        if self._is_org_quick_maintain_page_ready():
+            self.logger.info("Organization quick maintain page already opened")
+            return
+
         self._ensure_recent_menu_opened()
-        if not self._try_click_text("组织快速维护", exact=True, force=False, scope=None):
+        if self._is_visible(self.org_quick_maintain_menu_selector):
+            self.page.locator(self.org_quick_maintain_menu_selector).first.click(timeout=self.timeout_ms)
+        elif not self._try_click_text("组织快速维护", exact=True, force=False, scope=None):
             if not self._try_click_text("组织快速维护", exact=False, force=False, scope=None):
                 raise RuntimeError("Failed to click text: 组织快速维护")
 
         deadline = time.monotonic() + max(self.timeout_ms / 1000, 20)
         while time.monotonic() < deadline:
-            body = self.page.locator("body").inner_text()
-            if "组织快速维护列表" in body and "行政组织维护" in body and self._is_visible("#baritemap1"):
+            if self._is_org_quick_maintain_page_ready():
                 self.logger.info("Opened organization quick maintain page")
                 return
             self.page.wait_for_timeout(1000)
@@ -88,7 +105,38 @@ class OrganizationQuickMaintainFlow:
             before_count=before_count,
             before_page_count=before_page_count,
             require_count_change=not already_enabled,
+            require_include_children_enabled=True,
         )
+
+    def ensure_business_status_selected(self, statuses: list[str], timeout_sec: int) -> dict[str, Any]:
+        expected_statuses = [status.strip() for status in statuses if status.strip()]
+        if not expected_statuses:
+            raise ValueError("Business statuses must not be empty")
+
+        before_body = self.page.locator("body").inner_text()
+        before_count = self._extract_list_row_count(before_body)
+        before_page_count = self._extract_page_count(before_body)
+
+        if not self._set_business_status_values(expected_statuses):
+            raise RuntimeError("Failed to set business status dropdown to 已启用 + 已停用")
+
+        selected_display = self._wait_for_business_status_values(
+            expected_values=expected_statuses,
+            timeout_sec=min(max(timeout_sec, 10), 30),
+        )
+
+        self.wait_org_list_ready(
+            timeout_sec=timeout_sec,
+            before_count=before_count,
+            before_page_count=before_page_count,
+            require_count_change=False,
+            require_include_children_enabled=False,
+        )
+        self.logger.info("Selected business statuses: %s display=%s", expected_statuses, selected_display)
+        return {
+            "selected_statuses": expected_statuses,
+            "selected_display": selected_display,
+        }
 
     def wait_org_list_ready(
         self,
@@ -96,6 +144,7 @@ class OrganizationQuickMaintainFlow:
         before_count: int | None,
         before_page_count: int | None,
         require_count_change: bool,
+        require_include_children_enabled: bool,
     ) -> dict[str, Any]:
         deadline = time.monotonic() + timeout_sec
         last_count: int | None = None
@@ -119,8 +168,12 @@ class OrganizationQuickMaintainFlow:
             if require_count_change:
                 count_ready = count_ready and current_count != before_count
 
+            include_children_ready = True
+            if require_include_children_enabled:
+                include_children_ready = self._is_include_children_enabled()
+
             if (
-                self._is_include_children_enabled()
+                include_children_ready
                 and not loading
                 and count_ready
                 and stable_rounds >= 2
@@ -137,7 +190,7 @@ class OrganizationQuickMaintainFlow:
                     "page_count": current_page_count,
                     "before_row_count": before_count,
                     "before_page_count": before_page_count,
-                    "include_all_children": True,
+                    "include_all_children": self._is_include_children_enabled(),
                 }
 
             self.page.wait_for_timeout(1000)
@@ -234,6 +287,90 @@ class OrganizationQuickMaintainFlow:
 
     def _is_include_children_enabled(self) -> bool:
         return bool(self.page.locator('#chkincludechild input[type="checkbox"]').first.evaluate("(el) => el.checked"))
+
+    def _get_business_status_display_value(self) -> str:
+        locator = self.page.locator(f'{self.business_status_field_selector} .kd-cq-select').first
+        if locator.count() == 0:
+            return ""
+
+        for candidate in [
+            locator.get_attribute("title"),
+            locator.locator('.kd-cq-combo-selected').first.text_content() if locator.locator('.kd-cq-combo-selected').count() else None,
+            locator.text_content(),
+        ]:
+            value = re.sub(r"\s+", " ", str(candidate or "")).strip(" ；;")
+            if value:
+                return value
+        return ""
+
+    def _wait_for_business_status_values(self, expected_values: list[str], timeout_sec: int) -> str:
+        deadline = time.monotonic() + timeout_sec
+        last_display = ""
+        while time.monotonic() < deadline:
+            display = self._get_business_status_display_value()
+            if display:
+                last_display = display
+            if self._field_display_contains_values(display, expected_values):
+                return display
+            self.page.wait_for_timeout(500)
+        raise PlaywrightTimeoutError(
+            f"Business status field did not reflect expected values within {timeout_sec} seconds. last_display={last_display}"
+        )
+
+    def _field_display_contains_values(self, display_text: str, expected_values: list[str]) -> bool:
+        normalized = re.sub(r"\s+", "", display_text or "")
+        if not normalized:
+            return False
+        return all(re.sub(r"\s+", "", value) in normalized for value in expected_values)
+
+    def _set_business_status_values(self, expected_values: list[str]) -> bool:
+        for _ in range(3):
+            if not self._open_business_status_dropdown():
+                self.page.wait_for_timeout(500)
+                continue
+
+            all_matched = True
+            for expected_value in expected_values:
+                if not self._set_business_status_option(expected_value, selected=True):
+                    all_matched = False
+                    break
+
+            self._close_business_status_dropdown()
+            if all_matched:
+                return True
+        return False
+
+    def _open_business_status_dropdown(self) -> bool:
+        arrow = self.page.locator(f'{self.business_status_field_selector} .kdfont-xiala').first
+        if arrow.count() == 0:
+            return False
+        arrow.click(timeout=self.timeout_ms, force=True)
+        self.page.wait_for_timeout(300)
+        return self.page.locator('li.kd-cq-dropdown-menu-item:has(> span[title="已停用"])').first.count() > 0
+
+    def _set_business_status_option(self, option_text: str, selected: bool) -> bool:
+        option = self.page.locator(f'li.kd-cq-dropdown-menu-item:has(> span[title="{option_text}"])').first
+        if option.count() == 0:
+            return False
+
+        checkbox = option.locator('input[type="checkbox"]').first
+        checked = checkbox.is_checked() if checkbox.count() else False
+        if checked != selected:
+            option.click(timeout=self.timeout_ms, force=True)
+            self.page.wait_for_timeout(200)
+            checked = checkbox.is_checked() if checkbox.count() else checked
+        return checked == selected
+
+    def _close_business_status_dropdown(self) -> None:
+        self.page.keyboard.press("Escape")
+        self.page.wait_for_timeout(300)
+
+    def _is_org_quick_maintain_page_ready(self) -> bool:
+        try:
+            body = self.page.locator("body").inner_text()
+        except Exception:  # noqa: BLE001
+            return False
+        return "组织快速维护列表" in body and "行政组织维护" in body and self._is_visible("#baritemap1")
 
     def _save_download(self, downloads_dir: Path, download: Download) -> Path:
         target_path = downloads_dir / self._build_download_name(download)

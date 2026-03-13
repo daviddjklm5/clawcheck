@@ -1,3 +1,47 @@
+CREATE OR REPLACE FUNCTION fn_is_retired_org_unit_l2(p_l2 TEXT)
+RETURNS BOOLEAN
+LANGUAGE sql
+IMMUTABLE
+STRICT
+PARALLEL SAFE
+AS $$
+    SELECT p_l2 IN (
+        '福建伯恩物业集团有限公司', '杭州物业（中心城市）', '政企空间服务事业部', '业财法人组织', '公司服务中心',
+        '住宅项目运营中心', '物业发展', '北京战区', '广州物业（中心城市）', '东莞物业（中心城市）',
+        '誉鹰物业', '万物仓', '成都战区', '合肥城市代表处', '北京商企公司', '浙江耀江物业',
+        '设施管理运营中心', '幸福社区发展中心50901406', '北京物业', '昆明物业', '华东区域', '华北区域',
+        '华南区域', '中西区域', '吉黑战区代表处', 'F02广州中南', '万物社区业务部',
+        '资产经营中心50974450', 'F01广州西北', 'F03广州东清管理中心', '海南物业', '物业事业本部',
+        '珠海万物云', '惠州物业', 'F广州大区', '南京战区', '万物成长咨询服务公司', '上海战区', '佛山战区',
+        '厦门战区', '广州万盈物业50927570', '广州万盈物业50927609', '广州战区', '房产经纪运营管理中心',
+        '杭州战区', '武汉战区', '沈阳战区', '深圳战区', '福建伯恩物业集团有限公司50932028',
+        '福建伯恩物业集团有限公司50932030', '自营装修发展中心-作废', '苏州战区', '长春战区', '青岛战区'
+    )
+$$;
+
+
+CREATE OR REPLACE FUNCTION fn_map_retired_org_unit_l3(p_l2 TEXT, p_l3 TEXT)
+RETURNS TEXT
+LANGUAGE sql
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+    SELECT CASE
+        WHEN p_l2 = '万物云本部'
+         AND p_l3 IN (
+            '人力资源部B',
+            '住这儿商业化工作室A',
+            '规划发展部B',
+            '证券与公司治理部50974733',
+            '财务及运营管理部B',
+            '测试'
+         )
+        THEN '（作废）' || p_l3
+        ELSE NULL
+    END
+$$;
+
+
 CREATE OR REPLACE FUNCTION fn_map_org_unit_name(p_org_full_name TEXT)
 RETURNS TEXT
 LANGUAGE plpgsql
@@ -31,6 +75,14 @@ BEGIN
     END IF;
     IF l2 = '蝶城发展中心' AND (l3 = '万物为家朴邻发展业务部' OR (l3 = '万物为家' AND l4 LIKE '朴邻%')) THEN
         RETURN '为家-朴邻';
+    END IF;
+
+    IF fn_map_retired_org_unit_l3(l2, l3) IS NOT NULL THEN
+        RETURN fn_map_retired_org_unit_l3(l2, l3);
+    END IF;
+
+    IF fn_is_retired_org_unit_l2(l2) THEN
+        RETURN '（作废）' || l2;
     END IF;
 
     IF l2 IN (
@@ -97,6 +149,14 @@ BEGIN
     END IF;
     IF l2 = '蝶城发展中心' AND (l3 = '万物为家朴邻发展业务部' OR (l3 = '万物为家' AND l4 LIKE '朴邻%')) THEN
         RETURN '细粒度-朴邻';
+    END IF;
+
+    IF fn_map_retired_org_unit_l3(l2, l3) IS NOT NULL THEN
+        RETURN 'L3作废映射';
+    END IF;
+
+    IF fn_is_retired_org_unit_l2(l2) THEN
+        RETURN 'L2作废映射';
     END IF;
 
     IF l2 IN (
@@ -192,6 +252,7 @@ AS $$
             '本部部门',
             '本部二级部门',
             '本部三级部门',
+            'BG人力资源行政服务中心',
             '万科物业'
         ) THEN '万物云本部'
         WHEN NULLIF(BTRIM(p_process_level_name_resolved), '') IN (
@@ -199,7 +260,8 @@ AS $$
             '修缮业务本部',
             '朴邻本部',
             '万御电梯本部',
-            '福讯信息'
+            '福讯信息',
+            '蝶发人行部'
         ) THEN '业务单元本部'
         ELSE '属地组织'
     END
@@ -210,7 +272,8 @@ CREATE OR REPLACE FUNCTION fn_map_org_auth_level(
     p_org_code TEXT,
     p_org_level TEXT,
     p_physical_level TEXT,
-    p_org_full_name TEXT
+    p_org_full_name TEXT,
+    p_process_level_category TEXT
 )
 RETURNS TEXT
 LANGUAGE plpgsql
@@ -220,6 +283,7 @@ AS $$
 DECLARE
     normalized_org_code TEXT := NULLIF(BTRIM(p_org_code), '');
     normalized_org_full_name TEXT := NULLIF(BTRIM(p_org_full_name), '');
+    normalized_process_level_category TEXT := NULLIF(BTRIM(p_process_level_category), '');
     physical_level_num NUMERIC := CASE
         WHEN NULLIF(BTRIM(p_physical_level), '') ~ '^[0-9]+([.][0-9]+)?$' THEN NULLIF(BTRIM(p_physical_level), '')::NUMERIC
         ELSE NULL
@@ -235,7 +299,9 @@ BEGIN
         '50802204',
         '50907940',
         '50916400',
-        '99999998'
+        '99999998',
+        '50907621',
+        '50916021'
     ) THEN
         RETURN '一级授权';
     END IF;
@@ -244,8 +310,23 @@ BEGIN
         RETURN '一级授权';
     END IF;
 
+    IF normalized_org_code IN (
+        '50939479',
+        '50921744'
+    ) THEN
+        RETURN '二级授权';
+    END IF;
+
+    IF normalized_process_level_category = '业务单元本部' THEN
+        RETURN '二级授权';
+    END IF;
+
     IF physical_level_num = 2 THEN
         RETURN '二级授权';
+    END IF;
+
+    IF physical_level_num = 3 THEN
+        RETURN '三级授权';
     END IF;
 
     RETURN NULL;
@@ -257,7 +338,8 @@ CREATE OR REPLACE FUNCTION fn_map_org_auth_level_rule(
     p_org_code TEXT,
     p_org_level TEXT,
     p_physical_level TEXT,
-    p_org_full_name TEXT
+    p_org_full_name TEXT,
+    p_process_level_category TEXT
 )
 RETURNS TEXT
 LANGUAGE plpgsql
@@ -267,6 +349,7 @@ AS $$
 DECLARE
     normalized_org_code TEXT := NULLIF(BTRIM(p_org_code), '');
     normalized_org_full_name TEXT := NULLIF(BTRIM(p_org_full_name), '');
+    normalized_process_level_category TEXT := NULLIF(BTRIM(p_process_level_category), '');
     physical_level_num NUMERIC := CASE
         WHEN NULLIF(BTRIM(p_physical_level), '') ~ '^[0-9]+([.][0-9]+)?$' THEN NULLIF(BTRIM(p_physical_level), '')::NUMERIC
         ELSE NULL
@@ -282,7 +365,9 @@ BEGIN
         '50802204',
         '50907940',
         '50916400',
-        '99999998'
+        '99999998',
+        '50907621',
+        '50916021'
     ) THEN
         RETURN 'org_code:l1_specified';
     END IF;
@@ -291,8 +376,23 @@ BEGIN
         RETURN 'org_full_name:contains_BG人力资源行政服务中心';
     END IF;
 
+    IF normalized_org_code IN (
+        '50939479',
+        '50921744'
+    ) THEN
+        RETURN 'org_code:l2_specified';
+    END IF;
+
+    IF normalized_process_level_category = '业务单元本部' THEN
+        RETURN 'process_level_category:业务单元本部';
+    END IF;
+
     IF physical_level_num = 2 THEN
         RETURN 'physical_level:eq_2';
+    END IF;
+
+    IF physical_level_num = 3 THEN
+        RETURN 'physical_level:eq_3';
     END IF;
 
     RETURN 'unresolved';
@@ -515,8 +615,28 @@ BEGIN
             o.org_full_name,
             fn_map_org_unit_name(o.org_full_name) AS org_unit_name,
             fn_map_org_unit_rule(o.org_full_name) AS org_unit_rule,
-            fn_map_org_auth_level(o.org_code, o.org_level, o.physical_level, o.org_full_name) AS org_auth_level,
-            fn_map_org_auth_level_rule(o.org_code, o.org_level, o.physical_level, o.org_full_name) AS org_auth_level_rule,
+            fn_map_org_auth_level(
+                o.org_code,
+                o.org_level,
+                o.physical_level,
+                o.org_full_name,
+                fn_map_process_level_category(
+                    COALESCE(fn_map_process_level_name_override(o.org_full_name), rpl.process_level_name_resolved),
+                    o.company_name,
+                    o.org_full_name
+                )
+            ) AS org_auth_level,
+            fn_map_org_auth_level_rule(
+                o.org_code,
+                o.org_level,
+                o.physical_level,
+                o.org_full_name,
+                fn_map_process_level_category(
+                    COALESCE(fn_map_process_level_name_override(o.org_full_name), rpl.process_level_name_resolved),
+                    o.company_name,
+                    o.org_full_name
+                )
+            ) AS org_auth_level_rule,
             fn_map_wanyu_city_sales_department(o.org_full_name) AS wanyu_city_sales_department,
             z.war_zone,
             o.import_batch_no,
