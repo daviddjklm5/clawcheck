@@ -22,7 +22,11 @@ PROD_CREDENTIALS_PATH = "automation/config/credentials.prod.local.yaml"
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="iERP automation runner")
-    parser.add_argument("action", choices=["check", "login", "run", "collect", "roster", "orglist"], help="Action to execute")
+    parser.add_argument(
+        "action",
+        choices=["check", "login", "run", "collect", "roster", "orglist", "rolecatalog"],
+        help="Action to execute",
+    )
     parser.add_argument("--config", default=DEFAULT_CONFIG_PATH, help="Settings YAML path")
     parser.add_argument(
         "--credentials",
@@ -147,30 +151,8 @@ def ensure_login(login_page, settings, retries: int, wait_sec: float, retry_call
 
 def main() -> int:
     args = parse_args()
-
-    try:
-        from playwright.sync_api import sync_playwright
-    except ModuleNotFoundError:
-        print(
-            "Missing dependency: playwright. Run:\n"
-            "1) pip install -r automation/requirements.txt\n"
-            "2) playwright install chromium"
-        )
-        return 2
-
-    from automation.db.postgres import PostgresActiveRosterStore, PostgresOrganizationListStore, PostgresPermissionStore
-    from automation.flows.active_roster_flow import ActiveRosterFlow
-    from automation.flows.organization_quick_maintain_flow import OrganizationQuickMaintainFlow
-    from automation.flows.ierp_flow import IerpFlow
-    from automation.flows.permission_collect_flow import PermissionCollectFlow
-    from automation.pages.home_page import HomePage
-    from automation.pages.login_page import LoginPage
     from automation.utils.config_loader import load_local_auth, load_selectors, load_settings
     from automation.utils.logger import setup_logger
-    from automation.utils.playwright_helpers import save_screenshot, timestamp_slug
-    from automation.utils.retry import retry_call
-    from automation.utils.organization_list_excel import parse_organization_list_workbook
-    from automation.utils.roster_excel import parse_roster_workbook
 
     settings_path, credentials_path, selectors_path = resolve_runtime_paths(args)
 
@@ -215,6 +197,45 @@ def main() -> int:
     if credentials_path.exists():
         logger.info("Credentials: %s", credentials_path)
     logger.info("Selectors: %s", selectors_path)
+
+    if args.action == "rolecatalog":
+        from automation.db.postgres import PostgresPermissionCatalogStore
+
+        try:
+            store = PostgresPermissionCatalogStore(settings.db)
+            summary = store.seed_catalog()
+            dump_path = resolve_path(args.dump_json) if args.dump_json else logs_dir / f"rolecatalog_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+            dump_path.parent.mkdir(parents=True, exist_ok=True)
+            dump_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+            logger.info("Permission catalog initialized. Summary dump: %s", dump_path)
+            logger.info("Permission catalog summary: %s", summary)
+            logger.info("Automation finished successfully")
+            return 0
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Permission catalog initialization failed: %s", exc)
+            return 1
+
+    try:
+        from playwright.sync_api import sync_playwright
+    except ModuleNotFoundError:
+        print(
+            "Missing dependency: playwright. Run:\n"
+            "1) pip install -r automation/requirements.txt\n"
+            "2) playwright install chromium"
+        )
+        return 2
+
+    from automation.db.postgres import PostgresActiveRosterStore, PostgresOrganizationListStore, PostgresPermissionStore
+    from automation.flows.active_roster_flow import ActiveRosterFlow
+    from automation.flows.organization_quick_maintain_flow import OrganizationQuickMaintainFlow
+    from automation.flows.ierp_flow import IerpFlow
+    from automation.flows.permission_collect_flow import PermissionCollectFlow
+    from automation.pages.home_page import HomePage
+    from automation.pages.login_page import LoginPage
+    from automation.utils.playwright_helpers import save_screenshot, timestamp_slug
+    from automation.utils.retry import retry_call
+    from automation.utils.organization_list_excel import parse_organization_list_workbook
+    from automation.utils.roster_excel import parse_roster_workbook
 
     result_code = 0
 

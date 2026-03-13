@@ -80,6 +80,13 @@ Query only, without export/import:
 python automation/scripts/run.py orglist --skip-export --skip-import --headed
 ```
 
+Initialize permission catalog:
+```bash
+python automation/scripts/run.py rolecatalog \
+  --config automation/config/settings.prod.yaml \
+  --credentials automation/config/credentials.prod.local.yaml
+```
+
 ## 4. Output
 - logs: `automation/logs/`
 - screenshots: `automation/screenshots/`
@@ -92,6 +99,7 @@ python automation/scripts/run.py orglist --skip-export --skip-import --headed
 - SQL: `automation/sql/005_organization_list_drop_extra_columns_json.sql`
 - SQL: `automation/sql/007_organization_list_add_process_level_name.sql`
 - SQL: `automation/sql/008_organization_list_standardize_latest_columns.sql`
+- SQL: `automation/sql/009_permission_catalog.sql`
 
 ## 5. Notes
 - Prod roster flow targets `https://hr.onewo.com/ierp/?formId=home_page`.

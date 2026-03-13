@@ -245,6 +245,41 @@ class PostgresPermissionStore(_PostgresStoreBase):
             )
 
 
+class PostgresPermissionCatalogStore(_PostgresStoreBase):
+    table_name = '"权限列表"'
+    schema_sql = Path(__file__).resolve().parents[1] / "sql" / "009_permission_catalog.sql"
+
+    def ensure_table(self) -> None:
+        ddl = self.schema_sql.read_text(encoding="utf-8")
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(ddl)
+
+    def seed_catalog(self) -> dict[str, Any]:
+        self.ensure_table()
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(f"SELECT COUNT(*) FROM {self.table_name}")
+                total_rows = int(cursor.fetchone()[0])
+                cursor.execute(
+                    f"""
+                    SELECT permission_level, COUNT(*)
+                    FROM {self.table_name}
+                    GROUP BY permission_level
+                    ORDER BY permission_level
+                    """
+                )
+                counts_by_permission_level = [
+                    {"permission_level": row[0], "count": int(row[1])}
+                    for row in cursor.fetchall()
+                ]
+        return {
+            "table_name": self.table_name.strip('"'),
+            "total_rows": total_rows,
+            "counts_by_permission_level": counts_by_permission_level,
+        }
+
+
 class PostgresActiveRosterStore(_PostgresStoreBase):
     table_name = '"在职花名册表"'
     schema_sql = Path(__file__).resolve().parents[1] / "sql" / "002_active_roster.sql"

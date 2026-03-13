@@ -237,6 +237,9 @@ PARALLEL SAFE
 AS $$
     SELECT CASE
         WHEN NULLIF(BTRIM(p_company_name), '') = '人事远程交付中心' THEN '人事远程交付中心'
+        WHEN COALESCE(NULLIF(BTRIM(p_org_full_name), ''), '') LIKE '%BG人力资源行政服务中心%'
+          OR COALESCE(NULLIF(BTRIM(p_org_full_name), ''), '') LIKE '%知之学社%'
+        THEN 'BG人行中心与学社'
         WHEN NULLIF(split_part(p_org_full_name, '_', 3), '') = '人力资源与行政服务中心'
          AND NULLIF(split_part(p_org_full_name, '_', 4), '') IS NOT NULL
          AND NULLIF(split_part(p_org_full_name, '_', 4), '') <> 'BG人力资源行政服务中心'
@@ -252,7 +255,6 @@ AS $$
             '本部部门',
             '本部二级部门',
             '本部三级部门',
-            'BG人力资源行政服务中心',
             '万科物业'
         ) THEN '万物云本部'
         WHEN NULLIF(BTRIM(p_process_level_name_resolved), '') IN (
