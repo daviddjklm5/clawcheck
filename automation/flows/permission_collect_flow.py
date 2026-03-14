@@ -210,8 +210,8 @@ class PermissionCollectFlow:
         entry_grid_selector = grid_info["selector"]
         row_count = len(detail_rows)
         for row_idx in range(row_count):
-            self._wait_for_grid_row_ready(entry_grid_selector, row_idx)
             detail_row = detail_rows[row_idx]
+            self._wait_for_grid_row_ready(entry_grid_selector, row_idx, detail_row)
             role_code = (detail_row.get("role_code") or "").strip()
             if role_code and role_code in self.skip_org_scope_role_codes:
                 role_scopes.append(
@@ -228,8 +228,6 @@ class PermissionCollectFlow:
                     detail_row.get("line_no", row_idx + 1),
                 )
                 continue
-            self._scroll_grid_horizontal_to_end(entry_grid_selector)
-
             cell_link = self._wait_for_detail_link_ready(
                 document_no=document_no,
                 grid_selector=entry_grid_selector,
@@ -306,17 +304,21 @@ class PermissionCollectFlow:
             f"Permission detail grid not ready. document_no={document_no!r}, last_error={last_error}"
         )
 
-    def _wait_for_grid_row_ready(self, grid_selector: str, row_idx: int) -> None:
+    def _wait_for_grid_row_ready(
+        self,
+        grid_selector: str,
+        row_idx: int,
+        detail_row: dict[str, str],
+    ) -> None:
         deadline = time.monotonic() + (self.timeout_ms / 1000)
-        row_locator = self.page.locator(f"{grid_selector} tbody tr").nth(row_idx)
+        line_no = detail_row.get("line_no", row_idx + 1)
         while time.monotonic() < deadline:
-            try:
-                row_locator.wait_for(state="visible", timeout=1000)
+            matched = self._focus_detail_row(grid_selector, row_idx, line_no)
+            if matched:
                 return
-            except PlaywrightTimeoutError:
-                self.page.wait_for_timeout(200)
+            self.page.wait_for_timeout(200)
         raise PlaywrightTimeoutError(
-            f"Permission detail row not ready. grid_selector={grid_selector!r}, row_idx={row_idx}"
+            f"Permission detail row not ready. grid_selector={grid_selector!r}, row_idx={row_idx}, line_no={line_no!r}"
         )
 
     def _wait_for_detail_link_ready(
@@ -329,16 +331,22 @@ class PermissionCollectFlow:
         deadline = time.monotonic() + (self.timeout_ms / 1000)
         line_no = detail_row.get("line_no", row_idx + 1)
         while time.monotonic() < deadline:
-            self._scroll_grid_horizontal_to_end(grid_selector)
-            row_locator = self.page.locator(f"{grid_selector} tbody tr").nth(row_idx)
+            matched = self._focus_detail_row(grid_selector, row_idx, line_no)
+            if not matched:
+                self.page.wait_for_timeout(200)
+                continue
+            row_locator = self._get_target_detail_row_locator(grid_selector)
             try:
                 row_locator.wait_for(state="visible", timeout=1000)
             except PlaywrightTimeoutError:
                 self.page.wait_for_timeout(200)
                 continue
-            cell_link = self._get_detail_link_locator(row_locator)
-            if cell_link.count() > 0:
-                return cell_link
+            for ratio in self._detail_link_horizontal_ratios():
+                if ratio is not None:
+                    self._set_grid_horizontal_position(grid_selector, ratio)
+                cell_link = self._get_detail_link_locator(row_locator)
+                if cell_link.count() > 0:
+                    return cell_link
             self.page.wait_for_timeout(200)
 
         raise PlaywrightTimeoutError(
@@ -349,16 +357,87 @@ class PermissionCollectFlow:
     def _get_detail_link_locator(row_locator):
         return row_locator.locator("span.link-cell-content").filter(has_text="查看详情").first
 
-    def _scroll_grid_horizontal_to_end(self, grid_selector: str) -> None:
+    def _get_target_detail_row_locator(self, grid_selector: str):
+        return self.page.locator(f'{grid_selector} tbody tr[data-clawcheck-target-row="true"]').first
+
+    def _focus_detail_row(self, grid_selector: str, row_idx: int, line_no: str | int) -> bool:
+        focus_result = self.page.evaluate(
+            r"""(payload) => {
+                const { selector, rowIndex, lineNo } = payload;
+                const normalize = (value) => (value || '').replace(/\s+/g, ' ').trim();
+                const targetLineNo = normalize(String(lineNo || ''));
+                const fallbackLineNo = String(rowIndex + 1);
+                const grid = document.querySelector(selector);
+                if (!grid) return false;
+
+                const clearMarkers = () => {
+                    grid.querySelectorAll('tbody tr[data-clawcheck-target-row="true"]').forEach((row) => {
+                        row.removeAttribute('data-clawcheck-target-row');
+                    });
+                };
+                const getRenderedRows = () => [...grid.querySelectorAll('tbody tr')];
+                const matchesLineNo = (row) => {
+                    const cells = [...row.querySelectorAll('td')]
+                        .map((cell) => normalize(cell.innerText))
+                        .filter(Boolean);
+                    return cells.slice(0, 3).some((cellText) => cellText === targetLineNo || cellText === fallbackLineNo);
+                };
+                const markTargetRow = () => {
+                    const row = getRenderedRows().find(matchesLineNo);
+                    if (!row) return false;
+                    row.setAttribute('data-clawcheck-target-row', 'true');
+                    row.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+                    return true;
+                };
+
+                clearMarkers();
+                if (markTargetRow()) return true;
+
+                const body = grid.querySelector('.kd-table-body.kd-horizontal-scroll-container');
+                if (!body) return false;
+                const sampleRow = getRenderedRows().find((row) => row.getBoundingClientRect().height > 0);
+                const rowHeight = sampleRow ? Math.max(sampleRow.getBoundingClientRect().height, 1) : 40;
+                const maxTop = Math.max(body.scrollHeight - body.clientHeight, 0);
+                const estimatedTop = Math.min(Math.max((rowIndex * rowHeight) - rowHeight, 0), maxTop);
+                if (estimatedTop !== body.scrollTop) {
+                    body.scrollTop = estimatedTop;
+                }
+
+                clearMarkers();
+                return markTargetRow();
+            }""",
+            {
+                "selector": grid_selector,
+                "rowIndex": row_idx,
+                "lineNo": str(line_no or ""),
+            },
+        )
+        return bool(focus_result)
+
+    @staticmethod
+    def _detail_link_horizontal_ratios() -> tuple[float | None, ...]:
+        return (None, 0.5, 0.0, 0.75, 0.25, 1.0)
+
+    def _set_grid_horizontal_position(self, grid_selector: str, ratio: float) -> None:
         self.page.evaluate(
-            r"""(selector) => {
+            r"""(payload) => {
+                const { selector, ratio } = payload;
                 const grid = document.querySelector(selector);
                 if (!grid) return;
-                const body = grid.querySelector('.kd-table-body.kd-horizontal-scroll-container');
-                if (!body) return;
-                body.scrollLeft = body.scrollWidth;
+                const targets = [
+                    grid.querySelector('.kd-sticky-scroll'),
+                    grid.querySelector('.kd-virtual'),
+                    grid.querySelector('.kd-table-header'),
+                    grid.querySelector('.kd-table-footer.kd-horizontal-scroll-container'),
+                    grid.querySelector('.kd-table-body.kd-horizontal-scroll-container'),
+                ].filter(Boolean);
+                for (const target of targets) {
+                    const maxScrollLeft = Math.max(target.scrollWidth - target.clientWidth, 0);
+                    if (maxScrollLeft <= 0) continue;
+                    target.scrollLeft = Math.round(maxScrollLeft * ratio);
+                }
             }""",
-            grid_selector,
+            {"selector": grid_selector, "ratio": ratio},
         )
         self.page.wait_for_timeout(150)
 
