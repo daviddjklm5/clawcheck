@@ -134,12 +134,8 @@ BEGIN
         IF to_regclass(format('%I.%I', current_schema(), '申请表组织范围')) IS NULL THEN
             EXECUTE 'ALTER TABLE organization_code RENAME TO "申请表组织范围"';
         ELSE
-            EXECUTE '
-                INSERT INTO "申请表组织范围" ("单据编号", "组织编码", "记录创建时间")
-                SELECT document_no, org_code, created_at
-                FROM organization_code
-                ON CONFLICT ("单据编号", "组织编码") DO NOTHING
-            ';
+            -- 013 起，"申请表组织范围" 必须携带角色维度。
+            -- 旧 organization_code 仅有 document_no + org_code，无法无损迁移。
             EXECUTE 'DROP TABLE organization_code';
         END IF;
     END IF;

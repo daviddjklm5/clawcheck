@@ -65,6 +65,8 @@ APPROVAL_RECORD_COLUMNS = {
 APPLY_FORM_ORG_SCOPE_COLUMNS = {
     "id": "组织范围ID",
     "document_no": "单据编号",
+    "role_code": "角色编码",
+    "role_name": "角色名称",
     "org_code": "组织编码",
     "created_at": "记录创建时间",
 }
@@ -188,22 +190,72 @@ class _PostgresStoreBase:
 
 class PostgresPermissionStore(_PostgresStoreBase):
     schema_sql = Path(__file__).resolve().parents[1] / "sql" / "001_permission_apply_collect.sql"
-    migration_sql_files = [
+    bootstrap_migration_sql_files = [
         Path(__file__).resolve().parents[1] / "sql" / "010_permission_apply_collect_migrate_basic_info.sql",
         Path(__file__).resolve().parents[1] / "sql" / "011_permission_apply_collect_trim_columns.sql",
     ]
+    role_org_scope_migration_sql = (
+        Path(__file__).resolve().parents[1] / "sql" / "014_apply_form_org_scope_role_org_refactor.sql"
+    )
+
+    @classmethod
+    def _index_exists(cls, cursor, index_name: str) -> bool:
+        cursor.execute(
+            """
+            SELECT 1
+            FROM pg_indexes
+            WHERE schemaname = current_schema()
+              AND indexname = %s
+            LIMIT 1
+            """,
+            (index_name,),
+        )
+        return cursor.fetchone() is not None
+
+    @classmethod
+    def _column_is_nullable(cls, cursor, table_name: str, column_name: str) -> bool | None:
+        cursor.execute(
+            """
+            SELECT is_nullable = 'YES'
+            FROM information_schema.columns
+            WHERE table_schema = current_schema()
+              AND table_name = %s
+              AND column_name = %s
+            LIMIT 1
+            """,
+            (table_name, column_name),
+        )
+        row = cursor.fetchone()
+        return None if row is None else bool(row[0])
+
+    def _apply_form_org_scope_needs_role_refactor(self, cursor) -> bool:
+        required_columns = (
+            APPLY_FORM_ORG_SCOPE_COLUMNS["role_code"],
+            APPLY_FORM_ORG_SCOPE_COLUMNS["role_name"],
+        )
+        if any(not self._column_exists(cursor, "申请表组织范围", column_name) for column_name in required_columns):
+            return True
+        if self._column_is_nullable(cursor, "申请表组织范围", APPLY_FORM_ORG_SCOPE_COLUMNS["org_code"]) is False:
+            return True
+        if not self._index_exists(cursor, "uq_apply_form_org_scope_doc_role_org"):
+            return True
+        if not self._index_exists(cursor, "uq_apply_form_org_scope_doc_role_null_org"):
+            return True
+        return False
 
     def ensure_table(self) -> None:
         ddl = self.schema_sql.read_text(encoding="utf-8")
         with self.connect() as connection:
             with connection.cursor() as cursor:
-                if self._column_exists(cursor, "申请单基本信息", BASIC_INFO_COLUMNS["document_no"]):
-                    return
                 if self._column_exists(cursor, "申请单基本信息", "document_no"):
                     raise RuntimeError('Detected legacy English schema for "申请单基本信息". Run automation/sql/012_rename_columns_to_cn_fixed_schema.sql first.')
+                needs_bootstrap = not self._column_exists(cursor, "申请单基本信息", BASIC_INFO_COLUMNS["document_no"])
                 cursor.execute(ddl)
-                for migration_sql_file in self.migration_sql_files:
-                    cursor.execute(migration_sql_file.read_text(encoding="utf-8"))
+                if needs_bootstrap:
+                    for migration_sql_file in self.bootstrap_migration_sql_files:
+                        cursor.execute(migration_sql_file.read_text(encoding="utf-8"))
+                if self._apply_form_org_scope_needs_role_refactor(cursor):
+                    cursor.execute(self.role_org_scope_migration_sql.read_text(encoding="utf-8"))
 
     def write_documents(self, documents: Iterable[dict[str, Any]]) -> None:
         normalized_documents = list(documents)
@@ -367,23 +419,112 @@ class PostgresPermissionStore(_PostgresStoreBase):
                 ],
             )
 
-        org_codes = sorted({code for code in document.get("organization_codes", []) if code})
-        if org_codes:
+        org_scope_rows = self._build_apply_form_org_scope_rows(cursor, document_no, document)
+        if org_scope_rows:
             cursor.executemany(
                 f"""
                 INSERT INTO {APPLY_FORM_ORG_SCOPE_TABLE} (
                     {self._quote_identifier(APPLY_FORM_ORG_SCOPE_COLUMNS["document_no"])},
+                    {self._quote_identifier(APPLY_FORM_ORG_SCOPE_COLUMNS["role_code"])},
+                    {self._quote_identifier(APPLY_FORM_ORG_SCOPE_COLUMNS["role_name"])},
                     {self._quote_identifier(APPLY_FORM_ORG_SCOPE_COLUMNS["org_code"])},
                     {self._quote_identifier(APPLY_FORM_ORG_SCOPE_COLUMNS["created_at"])}
                 )
-                VALUES (%s, %s, NOW())
-                ON CONFLICT (
-                    {self._quote_identifier(APPLY_FORM_ORG_SCOPE_COLUMNS["document_no"])},
-                    {self._quote_identifier(APPLY_FORM_ORG_SCOPE_COLUMNS["org_code"])}
-                ) DO NOTHING
+                VALUES (%s, %s, %s, %s, NOW())
                 """,
-                [(document_no, code) for code in org_codes],
+                org_scope_rows,
             )
+
+    def _build_apply_form_org_scope_rows(
+        self,
+        cursor,
+        document_no: str,
+        document: dict[str, Any],
+    ) -> list[tuple[str, str, str, str | None]]:
+        detail_rows = document.get("permission_details", [])
+        role_codes = {
+            role_code.strip()
+            for row in detail_rows
+            if isinstance((role_code := row.get("role_code")), str) and role_code.strip()
+        }
+        role_catalog = self._fetch_permission_catalog_map(cursor, role_codes)
+
+        role_scope_map: dict[str, dict[str, Any]] = {}
+        for row in detail_rows:
+            role_code = self._null_if_blank(row.get("role_code"))
+            if role_code is None:
+                continue
+            role_entry = role_scope_map.setdefault(
+                role_code,
+                {
+                    "role_name": self._null_if_blank(row.get("role_name")),
+                    "organization_codes": set(),
+                },
+            )
+            if role_entry["role_name"] is None:
+                role_entry["role_name"] = self._null_if_blank(row.get("role_name"))
+
+        for scope in document.get("role_organization_scopes", []):
+            role_code = self._null_if_blank(scope.get("role_code"))
+            if role_code is None:
+                continue
+            role_entry = role_scope_map.setdefault(
+                role_code,
+                {
+                    "role_name": self._null_if_blank(scope.get("role_name")),
+                    "organization_codes": set(),
+                },
+            )
+            if role_entry["role_name"] is None:
+                role_entry["role_name"] = self._null_if_blank(scope.get("role_name"))
+            for org_code in scope.get("organization_codes", []):
+                normalized_org_code = self._null_if_blank(org_code)
+                if normalized_org_code is not None:
+                    role_entry["organization_codes"].add(normalized_org_code)
+
+        normalized_rows: set[tuple[str, str, str, str | None]] = set()
+        for role_code, role_entry in role_scope_map.items():
+            catalog_row = role_catalog.get(role_code, {})
+            role_name = (
+                role_entry.get("role_name")
+                or self._null_if_blank(catalog_row.get("role_name"))
+                or role_code
+            )
+            if bool(catalog_row.get("skip_org_scope_check")):
+                normalized_rows.add((document_no, role_code, role_name, None))
+                continue
+            organization_codes = sorted(role_entry["organization_codes"])
+            for org_code in organization_codes:
+                normalized_rows.add((document_no, role_code, role_name, org_code))
+        return sorted(normalized_rows, key=lambda row: (row[1], row[3] is not None, row[3] or ""))
+
+    def _fetch_permission_catalog_map(self, cursor, role_codes: Iterable[str]) -> dict[str, dict[str, Any]]:
+        normalized_codes = sorted({code.strip() for code in role_codes if isinstance(code, str) and code.strip()})
+        if not normalized_codes:
+            return {}
+        if not self._column_exists(cursor, "权限列表", PERMISSION_CATALOG_COLUMNS["role_code"]):
+            return {}
+
+        cursor.execute(
+            f"""
+            SELECT
+                {self._quote_identifier(PERMISSION_CATALOG_COLUMNS["role_code"])},
+                {self._quote_identifier(PERMISSION_CATALOG_COLUMNS["role_name"])},
+                {self._quote_identifier(PERMISSION_CATALOG_COLUMNS["skip_org_scope_check"])}
+            FROM "权限列表"
+            WHERE {self._quote_identifier(PERMISSION_CATALOG_COLUMNS["role_code"])} = ANY(%s)
+            """,
+            (normalized_codes,),
+        )
+        rows = cursor.fetchall()
+        return {
+            str(row[0]): {
+                "role_code": str(row[0]),
+                "role_name": str(row[1]),
+                "skip_org_scope_check": bool(row[2]),
+            }
+            for row in rows
+        }
 
 
 class PostgresPermissionCatalogStore(_PostgresStoreBase):
@@ -486,6 +627,24 @@ class PostgresPermissionCatalogStore(_PostgresStoreBase):
                 "skip_org_scope_check": bool(row[3]),
             }
             for row in rows
+        }
+
+    def fetch_skip_org_scope_role_codes(self) -> set[str]:
+        self.ensure_table()
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    f"""
+                    SELECT {self._quote_identifier(PERMISSION_CATALOG_COLUMNS["role_code"])}
+                    FROM {self.table_name}
+                    WHERE {self._quote_identifier(PERMISSION_CATALOG_COLUMNS["skip_org_scope_check"])} = TRUE
+                    """
+                )
+                rows = cursor.fetchall()
+        return {
+            str(row[0]).strip()
+            for row in rows
+            if row and isinstance(row[0], str) and row[0].strip()
         }
 
 

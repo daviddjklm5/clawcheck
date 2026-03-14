@@ -258,11 +258,16 @@ def main() -> int:
         )
         return 2
 
-    from automation.db.postgres import PostgresActiveRosterStore, PostgresOrganizationListStore, PostgresPermissionStore
+    from automation.db.postgres import (
+        PostgresActiveRosterStore,
+        PostgresOrganizationListStore,
+        PostgresPermissionCatalogStore,
+        PostgresPermissionStore,
+    )
     from automation.flows.active_roster_flow import ActiveRosterFlow
     from automation.flows.organization_quick_maintain_flow import OrganizationQuickMaintainFlow
     from automation.flows.ierp_flow import IerpFlow
-    from automation.flows.permission_collect_flow import PermissionCollectFlow
+    from automation.flows.permission_collect_flow import PermissionCollectFlow, TODO_HEADERS
     from automation.pages.home_page import HomePage
     from automation.pages.login_page import LoginPage
     from automation.utils.playwright_helpers import save_screenshot, timestamp_slug
@@ -473,33 +478,77 @@ def main() -> int:
                         context.storage_state(path=str(state_file))
                         logger.info("Auth state refreshed: %s", state_file)
 
+                    skip_org_scope_role_codes: set[str] = set()
+                    try:
+                        skip_org_scope_role_codes = PostgresPermissionCatalogStore(settings.db).fetch_skip_org_scope_role_codes()
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("Failed to preload skip-org-scope roles from PostgreSQL: %s", exc)
+
                     collector = PermissionCollectFlow(
                         page=page,
                         logger=logger,
                         timeout_ms=settings.browser.timeout_ms,
                         home_url=settings.app.home_url,
+                        skip_org_scope_role_codes=skip_org_scope_role_codes,
                     )
 
-                    def _do_collect() -> list[dict[str, object]]:
+                    def _collect_by_document_no(target_document_no: str) -> dict[str, object]:
                         home_page.open()
                         home_page.wait_ready()
-                        return collector.collect(
-                            document_no=(args.document_no.strip() or None),
-                            limit=max(args.limit, 0),
-                        )
+                        documents = collector.collect(document_no=target_document_no, limit=1)
+                        if not documents:
+                            raise RuntimeError(f"No permission application documents matched document_no={target_document_no}")
+                        return documents[0]
 
-                    documents = retry_call(
-                        _do_collect,
+                    def _list_target_document_nos() -> list[str]:
+                        home_page.open()
+                        home_page.wait_ready()
+                        collector.open_todo_list()
+                        todo_rows = collector.extract_grid_rows(TODO_HEADERS)
+                        permission_rows = [row for row in todo_rows if row.get("单据") == "权限申请"]
+                        target_document_nos = [row.get("单据编号", "").strip() for row in permission_rows if row.get("单据编号")]
+                        if args.document_no.strip():
+                            target_document_nos = [doc_no for doc_no in target_document_nos if doc_no == args.document_no.strip()]
+                        if args.limit > 0:
+                            target_document_nos = target_document_nos[: args.limit]
+                        return target_document_nos
+
+                    target_document_nos = retry_call(
+                        _list_target_document_nos,
                         retries=settings.runtime.retries,
                         wait_sec=settings.runtime.retry_wait_sec,
                     )
+                    documents: list[dict[str, object]] = []
+                    failed_documents: list[dict[str, str]] = []
+                    for target_document_no in target_document_nos:
+                        try:
+                            documents.append(
+                                retry_call(
+                                    lambda target_document_no=target_document_no: _collect_by_document_no(target_document_no),
+                                    retries=settings.runtime.retries,
+                                    wait_sec=settings.runtime.retry_wait_sec,
+                                )
+                            )
+                        except Exception as exc:  # noqa: BLE001
+                            logger.error("Collect failed for document %s: %s", target_document_no, exc)
+                            failed_documents.append(
+                                {
+                                    "document_no": target_document_no,
+                                    "error": f"{type(exc).__name__}: {exc}",
+                                }
+                            )
                     if not documents:
-                        raise RuntimeError("No permission application documents matched the collect criteria")
+                        raise RuntimeError("No permission application documents were collected successfully")
 
                     dump_path = resolve_path(args.dump_json) if args.dump_json else logs_dir / f"collect_{timestamp_slug()}.json"
                     dump_path.parent.mkdir(parents=True, exist_ok=True)
                     dump_path.write_text(json.dumps(documents, ensure_ascii=False, indent=2), encoding="utf-8")
-                    logger.info("Collected %s document(s). JSON dump: %s", len(documents), dump_path)
+                    logger.info(
+                        "Collected %s/%s document(s). JSON dump: %s",
+                        len(documents),
+                        len(target_document_nos),
+                        dump_path,
+                    )
 
                     if args.dry_run:
                         logger.info("Dry-run enabled; skipping PostgreSQL write")
@@ -507,6 +556,26 @@ def main() -> int:
                         store = PostgresPermissionStore(settings.db)
                         store.write_documents(documents)
                         logger.info("Persisted %s document(s) to PostgreSQL", len(documents))
+
+                    if failed_documents:
+                        logger.warning("Failed document count: %s", len(failed_documents))
+                        failed_dump_path = dump_path.with_name(f"{dump_path.stem}_failed{dump_path.suffix}")
+                        failed_dump_path.write_text(
+                            json.dumps(
+                                {
+                                    "failed_documents": failed_documents,
+                                    "summary": {
+                                        "requested_count": len(target_document_nos),
+                                        "success_count": len(documents),
+                                        "failed_count": len(failed_documents),
+                                    },
+                                },
+                                ensure_ascii=False,
+                                indent=2,
+                            ),
+                            encoding="utf-8",
+                        )
+                        logger.warning("Failed document dump: %s", failed_dump_path)
 
                     result_shot = save_screenshot(page, shots_dir, "collect_result")
                     logger.info("Collect completed. Screenshot: %s", result_shot)

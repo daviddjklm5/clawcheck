@@ -45,11 +45,19 @@ CREATE TABLE IF NOT EXISTS "申请单审批记录" (
 CREATE TABLE IF NOT EXISTS "申请表组织范围" (
     "组织范围ID" BIGSERIAL PRIMARY KEY,
     "单据编号" VARCHAR(64) NOT NULL REFERENCES "申请单基本信息"("单据编号") ON DELETE CASCADE,
-    "组织编码" VARCHAR(64) NOT NULL,
-    "记录创建时间" TIMESTAMP NOT NULL DEFAULT NOW(),
-    CONSTRAINT uq_apply_form_org_scope UNIQUE ("单据编号", "组织编码")
+    "角色编码" VARCHAR(128) NOT NULL,
+    "角色名称" VARCHAR(255) NOT NULL,
+    "组织编码" VARCHAR(64),
+    "记录创建时间" TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_apply_form_permission_list_document_no ON "申请单权限列表"("单据编号");
 CREATE INDEX IF NOT EXISTS idx_apply_form_approval_record_document_no ON "申请单审批记录"("单据编号");
 CREATE INDEX IF NOT EXISTS idx_apply_form_org_scope_document_no ON "申请表组织范围"("单据编号");
+CREATE INDEX IF NOT EXISTS idx_apply_form_org_scope_role_code ON "申请表组织范围"("角色编码");
+CREATE UNIQUE INDEX IF NOT EXISTS uq_apply_form_org_scope_doc_role_org
+ON "申请表组织范围"("单据编号", "角色编码", "组织编码")
+WHERE "组织编码" IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_apply_form_org_scope_doc_role_null_org
+ON "申请表组织范围"("单据编号", "角色编码")
+WHERE "组织编码" IS NULL;
