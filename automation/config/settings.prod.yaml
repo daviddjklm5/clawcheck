@@ -30,3 +30,24 @@ db:
   password: "clawcheck123"
   schema: "public"
   sslmode: "prefer"
+
+mail:
+  enabled: false
+  host: "smtp.exmail.qq.com"
+  port: 465
+  use_ssl: true
+  use_starttls: false
+  username: ""
+  password: ""
+  from_name: "clawcheck"
+  from_addr: ""
+  to_addrs:
+    - "receiver@example.com"
+  cc_addrs: []
+  send_on_success:
+    - "roster"
+    - "orglist"
+    - "collect"
+  send_on_failure: true
+  timeout_sec: 15
+  attach_error_screenshot: true

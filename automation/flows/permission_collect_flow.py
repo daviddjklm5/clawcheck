@@ -80,7 +80,6 @@ class PermissionCollectFlow:
                 "department_name": basic_info.get("部门", ""),
                 "position_name": basic_info.get("职位", ""),
                 "apply_time": basic_info.get("申请日期", ""),
-                "source_system": "iERP",
             },
             "permission_details": permission_details,
             "approval_records": approval_records,
@@ -133,6 +132,10 @@ class PermissionCollectFlow:
         for row in rows:
             row = self._normalize_row_cells(headers, row)
             mapped = {headers[idx]: row[idx] if idx < len(row) else "" for idx in range(len(headers))}
+            if tuple(required_headers) == tuple(TODO_HEADERS):
+                normalized_rows.append(mapped)
+                continue
+            org_scope_count = self._extract_detail_count(mapped.get("行政组织详情", ""))
             normalized_rows.append(
                 {
                     "line_no": mapped.get("#", ""),
@@ -140,16 +143,8 @@ class PermissionCollectFlow:
                     "role_name": mapped.get("角色名称", ""),
                     "role_desc": mapped.get("角色描述", ""),
                     "role_code": mapped.get("角色编码", ""),
-                    "same_role_multi_dimension_flag": mapped.get("是否同一角色多个数据维度", ""),
-                    "administrative_org_text": mapped.get("行政组织", ""),
-                    "administrative_org_detail_text": mapped.get("行政组织详情", ""),
-                    "position_text": mapped.get("职务", ""),
                     "social_security_unit": mapped.get("参保单位", ""),
-                    "social_security_unit_detail": mapped.get("参保单位详情", ""),
-                    "business_project": mapped.get("业务项目", ""),
-                    "tax_unit": mapped.get("纳税单位", ""),
-                    "salary_change_reason": mapped.get("调薪原因", ""),
-                    **mapped,
+                    "org_scope_count": org_scope_count,
                 }
             )
         return normalized_rows
@@ -166,12 +161,14 @@ class PermissionCollectFlow:
 
             grid_info = self._extract_best_grid(DETAIL_HEADERS)
             entry_grid_selector = grid_info["selector"]
-            detail_text = detail_rows[row_idx].get("行政组织详情", "")
-            expected_count = self._expected_detail_count(detail_text)
+            expected_count = detail_rows[row_idx].get("org_scope_count")
+            detail_text = self._detail_link_text(expected_count)
             row_locator = self.page.locator(f"{entry_grid_selector} tbody tr").nth(row_idx)
             cell_link = row_locator.locator("span.link-cell-content").filter(has_text=detail_text).first
             if cell_link.count() == 0 and detail_text:
                 cell_link = row_locator.locator(f"text={detail_text}").first
+            if cell_link.count() == 0:
+                cell_link = row_locator.locator("span.link-cell-content").filter(has_text="查看详情").first
             if cell_link.count() == 0:
                 continue
             cell_link.scroll_into_view_if_needed(timeout=self.timeout_ms)
@@ -428,8 +425,14 @@ class PermissionCollectFlow:
         return normalized
 
     @staticmethod
-    def _expected_detail_count(detail_text: str) -> int | None:
+    def _extract_detail_count(detail_text: str) -> int | None:
         match = DETAIL_COUNT_RE.search(detail_text or "")
         if not match:
             return None
         return int(match.group(1))
+
+    @staticmethod
+    def _detail_link_text(expected_count: Any) -> str:
+        if expected_count is None or expected_count == "":
+            return "查看详情"
+        return f"查看详情({int(expected_count)})"

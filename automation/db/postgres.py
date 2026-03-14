@@ -1,6 +1,4 @@
 from __future__ import annotations
-
-import json
 from collections.abc import Iterable
 from contextlib import contextmanager
 from datetime import date, datetime
@@ -18,7 +16,7 @@ except ModuleNotFoundError:  # pragma: no cover
 BASIC_INFO_TABLE = '"申请单基本信息"'
 PERMISSION_APPLY_DETAIL_TABLE = '"申请单权限列表"'
 APPROVAL_RECORD_TABLE = '"申请单审批记录"'
-ORGANIZATION_CODE_TABLE = "organization_code"
+APPLY_FORM_ORG_SCOPE_TABLE = '"申请表组织范围"'
 
 
 class _PostgresStoreBase:
@@ -80,6 +78,7 @@ class PostgresPermissionStore(_PostgresStoreBase):
     schema_sql = Path(__file__).resolve().parents[1] / "sql" / "001_permission_apply_collect.sql"
     migration_sql_files = [
         Path(__file__).resolve().parents[1] / "sql" / "010_permission_apply_collect_migrate_basic_info.sql",
+        Path(__file__).resolve().parents[1] / "sql" / "011_permission_apply_collect_trim_columns.sql",
     ]
 
     def ensure_table(self) -> None:
@@ -118,8 +117,6 @@ class PostgresPermissionStore(_PostgresStoreBase):
                 department_name,
                 position_name,
                 apply_time,
-                source_system,
-                raw_payload,
                 created_at,
                 updated_at
             ) VALUES (
@@ -133,8 +130,6 @@ class PostgresPermissionStore(_PostgresStoreBase):
                 %(department_name)s,
                 %(position_name)s,
                 %(apply_time)s,
-                %(source_system)s,
-                %(raw_payload)s,
                 NOW(),
                 NOW()
             )
@@ -148,20 +143,17 @@ class PostgresPermissionStore(_PostgresStoreBase):
                 department_name = EXCLUDED.department_name,
                 position_name = EXCLUDED.position_name,
                 apply_time = EXCLUDED.apply_time,
-                source_system = EXCLUDED.source_system,
-                raw_payload = EXCLUDED.raw_payload,
                 updated_at = NOW()
             """,
             {
                 **basic,
                 "apply_time": self._null_if_blank(basic.get("apply_time")),
-                "raw_payload": json.dumps(document, ensure_ascii=False),
             },
         )
 
         cursor.execute(f"DELETE FROM {PERMISSION_APPLY_DETAIL_TABLE} WHERE document_no = %s", (document_no,))
         cursor.execute(f"DELETE FROM {APPROVAL_RECORD_TABLE} WHERE document_no = %s", (document_no,))
-        cursor.execute(f"DELETE FROM {ORGANIZATION_CODE_TABLE} WHERE document_no = %s", (document_no,))
+        cursor.execute(f"DELETE FROM {APPLY_FORM_ORG_SCOPE_TABLE} WHERE document_no = %s", (document_no,))
 
         detail_rows = document.get("permission_details", [])
         if detail_rows:
@@ -174,16 +166,8 @@ class PostgresPermissionStore(_PostgresStoreBase):
                     role_name,
                     role_desc,
                     role_code,
-                    same_role_multi_dimension_flag,
-                    administrative_org_text,
-                    administrative_org_detail_text,
-                    position_text,
                     social_security_unit,
-                    social_security_unit_detail,
-                    business_project,
-                    tax_unit,
-                    salary_change_reason,
-                    raw_row,
+                    org_scope_count,
                     created_at,
                     updated_at
                 ) VALUES (
@@ -193,16 +177,8 @@ class PostgresPermissionStore(_PostgresStoreBase):
                     %(role_name)s,
                     %(role_desc)s,
                     %(role_code)s,
-                    %(same_role_multi_dimension_flag)s,
-                    %(administrative_org_text)s,
-                    %(administrative_org_detail_text)s,
-                    %(position_text)s,
                     %(social_security_unit)s,
-                    %(social_security_unit_detail)s,
-                    %(business_project)s,
-                    %(tax_unit)s,
-                    %(salary_change_reason)s,
-                    %(raw_row)s,
+                    %(org_scope_count)s,
                     NOW(),
                     NOW()
                 )
@@ -212,7 +188,7 @@ class PostgresPermissionStore(_PostgresStoreBase):
                         **row,
                         "document_no": document_no,
                         "line_no": self._null_if_blank(row.get("line_no")),
-                        "raw_row": json.dumps(row, ensure_ascii=False),
+                        "org_scope_count": self._to_int_or_none(row.get("org_scope_count")),
                     }
                     for row in detail_rows
                 ],
@@ -261,7 +237,7 @@ class PostgresPermissionStore(_PostgresStoreBase):
         if org_codes:
             cursor.executemany(
                 f"""
-                INSERT INTO {ORGANIZATION_CODE_TABLE} (document_no, org_code, created_at)
+                INSERT INTO {APPLY_FORM_ORG_SCOPE_TABLE} (document_no, org_code, created_at)
                 VALUES (%s, %s, NOW())
                 ON CONFLICT (document_no, org_code) DO NOTHING
                 """,

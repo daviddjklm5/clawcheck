@@ -93,6 +93,16 @@ def _read_yaml(path: Path) -> dict[str, Any]:
     return data
 
 
+def _ensure_string_list(value: Any, key: str) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [item.strip() for item in value.split(",") if item.strip()]
+    if isinstance(value, list) and all(isinstance(v, str) for v in value):
+        return [item.strip() for item in value if item.strip()]
+    raise ValueError(f"Config '{key}' must be a string or list[str]")
+
+
 def load_settings(path: Path) -> Settings:
     raw = _read_yaml(path)
 

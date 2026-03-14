@@ -16,6 +16,25 @@ playwright install chromium
 - Prod credentials: `automation/config/credentials.prod.local.yaml`
 - Selectors: `automation/config/selectors.yaml`
 
+Default runtime target:
+- `check/login/run/collect/roster/orglist` use prod config by default when `--config` / `--credentials` are not passed.
+- UAT remains available via explicit `--config automation/config/settings.yaml --credentials automation/config/credentials.local.yaml`.
+
+Mail credentials can be stored in `automation/config/credentials.prod.local.yaml`:
+```yaml
+mail:
+  username: "robot@yourcorp.com"
+  password: "your_mail_client_password"
+```
+
+Or provided by environment variables:
+```bash
+export IERP_MAIL_ENABLED=true
+export IERP_MAIL_USERNAME="robot@yourcorp.com"
+export IERP_MAIL_PASSWORD="your_mail_client_password"
+export IERP_MAIL_TO_ADDRS="receiver1@yourcorp.com,receiver2@yourcorp.com"
+```
+
 ## 3. Commands
 Health check:
 ```bash
@@ -25,12 +44,17 @@ python automation/scripts/run.py check --headed
 Login and save auth state:
 ```bash
 python automation/scripts/run.py login --headed
-python automation/scripts/run.py login --config automation/config/settings.prod.yaml --credentials automation/config/credentials.prod.local.yaml --headed
+python automation/scripts/run.py login --config automation/config/settings.yaml --credentials automation/config/credentials.local.yaml --headed
 ```
 
 Permission collection:
 ```bash
 python automation/scripts/run.py collect --limit 3 --dry-run --headed
+```
+
+Workflow run:
+```bash
+python automation/scripts/run.py run --headed
 ```
 
 Active roster download + import:
@@ -103,6 +127,7 @@ python automation/scripts/run.py rolecatalog \
 - SQL: `automation/sql/010_permission_apply_collect_migrate_basic_info.sql`
 
 ## 5. Notes
+- Default home entry for `001/003/004` related browser actions is `https://hr.onewo.com/ierp/?formId=home_page`.
 - Prod roster flow targets `https://hr.onewo.com/ierp/?formId=home_page`.
 - The permission collect import auto-migrates legacy PostgreSQL table `basic_info` into `申请单基本信息` before writing.
 - The actual recent-menu entry is `在职人员花名册`.

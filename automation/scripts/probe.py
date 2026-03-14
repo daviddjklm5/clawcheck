@@ -11,7 +11,7 @@ from playwright.sync_api import sync_playwright
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Probe iERP page structure for selector discovery")
-    parser.add_argument("--url", default="https://thr.onewo.com:8443/ierp/?formId=home_page")
+    parser.add_argument("--url", default="https://hr.onewo.com/ierp/?formId=home_page")
     parser.add_argument("--out-dir", default="automation/logs")
     parser.add_argument("--headless", action="store_true", help="Run headless browser")
     return parser.parse_args()
