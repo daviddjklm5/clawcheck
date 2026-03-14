@@ -70,6 +70,7 @@ class PermissionCollectFlow:
         trigger.wait_for(state="visible", timeout=self.timeout_ms)
         trigger.click(force=True)
         self.page.locator("#gridview").first.wait_for(state="visible", timeout=self.timeout_ms)
+        self._ensure_todo_page_size(1000)
         self._wait_for_grid_headers(TODO_HEADERS)
 
     def open_document(self, document_no: str) -> None:
@@ -83,6 +84,8 @@ class PermissionCollectFlow:
         tab = self.page.locator("li[data-splitscreen-pageid$='hrobs_pc_messagecenter']").first
         tab.wait_for(state="visible", timeout=self.timeout_ms)
         tab.click(force=True)
+        self.page.locator("#gridview").first.wait_for(state="visible", timeout=self.timeout_ms)
+        self._ensure_todo_page_size(1000)
         self._wait_for_grid_headers(TODO_HEADERS)
 
     def collect_current_document(self) -> dict[str, Any]:
@@ -421,6 +424,32 @@ class PermissionCollectFlow:
                 pass
             self.page.wait_for_timeout(200)
         raise PlaywrightTimeoutError(f"Grid headers not ready: {required_headers}. Last headers={last_headers}")
+
+    def _ensure_todo_page_size(self, page_size: int) -> None:
+        target_text = f"{page_size}条/页"
+        trigger = self.page.locator(
+            "#gridview .kd-pagination-selector button.kd-dropdown-trigger.kd-pagination-selector-size.kd-pagination-options-dropdown"
+        ).first
+        trigger.wait_for(state="visible", timeout=self.timeout_ms)
+
+        deadline = time.monotonic() + (self.timeout_ms / 1000)
+        last_text = ""
+        while time.monotonic() < deadline:
+            last_text = re.sub(r"\s+", "", trigger.inner_text() or "")
+            if target_text in last_text:
+                return
+
+            trigger.click(force=True)
+            option = self.page.locator(
+                f'.kd-dropdown.kd-cq-pagination-dropdown li.kd-dropdown-menu-item[title="{target_text}"]'
+            ).first
+            option.wait_for(state="visible", timeout=3000)
+            option.click(force=True)
+            self.page.wait_for_timeout(500)
+
+        raise PlaywrightTimeoutError(
+            f"Todo page size did not become {target_text}. last_text={last_text}"
+        )
 
     def _extract_best_grid(self, required_headers: Sequence[str]) -> dict[str, Any]:
         root_selector = None
