@@ -92,20 +92,6 @@ def resolve_runtime_paths(args: argparse.Namespace) -> tuple[Path, Path, Path]:
     return config_path, credentials_path, selectors_path
 
 
-def _env_flag(name: str, default: bool) -> bool:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _env_list(name: str, default: list[str]) -> list[str]:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    return [item.strip() for item in raw.split(",") if item.strip()]
-
-
 def build_context(playwright, settings, state_file: Path, use_state: bool):
     browser = playwright.chromium.launch(
         headless=not settings.browser.headed,
@@ -166,9 +152,8 @@ def ensure_login(login_page, settings, retries: int, wait_sec: float, retry_call
 
 def main() -> int:
     args = parse_args()
-    from automation.utils.config_loader import load_local_credentials, load_selectors, load_settings
+    from automation.utils.config_loader import load_local_auth, load_selectors, load_settings
     from automation.utils.logger import setup_logger
-    from automation.utils.mail_notifier import send_action_notification
 
     settings_path, credentials_path, selectors_path = resolve_runtime_paths(args)
 
@@ -176,21 +161,11 @@ def main() -> int:
     selectors = load_selectors(selectors_path)
 
     if credentials_path.exists():
-        local_credentials = load_local_credentials(credentials_path)
-        local_auth = local_credentials["auth"]
-        local_mail = local_credentials["mail"]
+        local_auth = load_local_auth(credentials_path)
         if local_auth.get("username"):
             settings.auth.username = local_auth["username"]
         if local_auth.get("password"):
             settings.auth.password = local_auth["password"]
-        if local_mail.get("username"):
-            settings.mail.username = local_mail["username"]
-        if local_mail.get("password"):
-            settings.mail.password = local_mail["password"]
-        if local_mail.get("from_addr"):
-            settings.mail.from_addr = local_mail["from_addr"]
-        if local_mail.get("from_name"):
-            settings.mail.from_name = local_mail["from_name"]
 
     settings.auth.username = os.getenv("IERP_USERNAME", settings.auth.username)
     settings.auth.password = os.getenv("IERP_PASSWORD", settings.auth.password)
@@ -202,25 +177,6 @@ def main() -> int:
     settings.db.password = os.getenv("IERP_PG_PASSWORD", settings.db.password)
     settings.db.schema = os.getenv("IERP_PG_SCHEMA", settings.db.schema)
     settings.db.sslmode = os.getenv("IERP_PG_SSLMODE", settings.db.sslmode)
-
-    settings.mail.enabled = _env_flag("IERP_MAIL_ENABLED", settings.mail.enabled)
-    settings.mail.host = os.getenv("IERP_MAIL_HOST", settings.mail.host)
-    settings.mail.port = int(os.getenv("IERP_MAIL_PORT", str(settings.mail.port)))
-    settings.mail.use_ssl = _env_flag("IERP_MAIL_USE_SSL", settings.mail.use_ssl)
-    settings.mail.use_starttls = _env_flag("IERP_MAIL_USE_STARTTLS", settings.mail.use_starttls)
-    settings.mail.username = os.getenv("IERP_MAIL_USERNAME", settings.mail.username)
-    settings.mail.password = os.getenv("IERP_MAIL_PASSWORD", settings.mail.password)
-    settings.mail.from_name = os.getenv("IERP_MAIL_FROM_NAME", settings.mail.from_name)
-    settings.mail.from_addr = os.getenv("IERP_MAIL_FROM_ADDR", settings.mail.from_addr)
-    settings.mail.to_addrs = _env_list("IERP_MAIL_TO_ADDRS", settings.mail.to_addrs)
-    settings.mail.cc_addrs = _env_list("IERP_MAIL_CC_ADDRS", settings.mail.cc_addrs)
-    settings.mail.send_on_success = _env_list("IERP_MAIL_SEND_ON_SUCCESS", settings.mail.send_on_success)
-    settings.mail.send_on_failure = _env_flag("IERP_MAIL_SEND_ON_FAILURE", settings.mail.send_on_failure)
-    settings.mail.timeout_sec = float(os.getenv("IERP_MAIL_TIMEOUT_SEC", str(settings.mail.timeout_sec)))
-    settings.mail.attach_error_screenshot = _env_flag(
-        "IERP_MAIL_ATTACH_ERROR_SCREENSHOT",
-        settings.mail.attach_error_screenshot,
-    )
 
     if args.headed:
         settings.browser.headed = True
@@ -243,48 +199,6 @@ def main() -> int:
         logger.info("Credentials: %s", credentials_path)
     logger.info("Selectors: %s", selectors_path)
 
-    run_started_at = datetime.now()
-    notification_context: dict[str, object] = {
-        "config_path": str(settings_path),
-        "credentials_path": str(credentials_path) if credentials_path.exists() else "",
-        "selectors_path": str(selectors_path),
-        "headed": settings.browser.headed,
-        "log_file_path": getattr(logger, "log_file_path", ""),
-    }
-    notification_sent = False
-
-    def notify_once(
-        *,
-        success: bool,
-        error_message: str | None = None,
-        attachment_paths: list[Path] | None = None,
-    ) -> None:
-        nonlocal notification_sent
-        if notification_sent:
-            return
-
-        attachments = list(attachment_paths or [])
-        if not success and not settings.mail.attach_error_screenshot:
-            attachments = []
-
-        try:
-            sent = send_action_notification(
-                mail_settings=settings.mail,
-                action=args.action,
-                success=success,
-                started_at=run_started_at,
-                finished_at=datetime.now(),
-                summary=notification_context,
-                error_message=error_message,
-                attachment_paths=attachments,
-            )
-            if sent:
-                logger.info("Email notification sent: action=%s success=%s", args.action, success)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Email notification failed: %s", exc)
-        finally:
-            notification_sent = True
-
     if args.action == "rolecatalog":
         from automation.db.postgres import PostgresPermissionCatalogStore
 
@@ -296,20 +210,15 @@ def main() -> int:
             dump_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
             logger.info("Permission catalog initialized. Summary dump: %s", dump_path)
             logger.info("Permission catalog summary: %s", summary)
-            notification_context["summary_dump"] = str(dump_path)
-            notification_context["catalog_summary"] = summary
-            notify_once(success=True)
             logger.info("Automation finished successfully")
             return 0
         except Exception as exc:  # noqa: BLE001
             logger.exception("Permission catalog initialization failed: %s", exc)
-            notify_once(success=False, error_message=str(exc))
             return 1
 
     try:
         from playwright.sync_api import sync_playwright
     except ModuleNotFoundError:
-        notify_once(success=False, error_message="Missing dependency: playwright")
         print(
             "Missing dependency: playwright. Run:\n"
             "1) pip install -r automation/requirements.txt\n"
@@ -415,23 +324,17 @@ def main() -> int:
     try:
         if args.action == "roster" and args.input_file.strip():
             logger.info("Roster import-only mode. input_file=%s", args.input_file)
-            roster_import_result = import_roster_file(resolve_path(args.input_file.strip()), fallback_query_date=None)
-            notification_context["import_mode"] = "input_file"
-            notification_context["roster_import_result"] = roster_import_result
-            notify_once(success=True)
+            import_roster_file(resolve_path(args.input_file.strip()), fallback_query_date=None)
             logger.info("Roster import-only flow completed successfully")
             return 0
 
         if args.action == "orglist" and args.input_file.strip():
             logger.info("Organization list import-only mode. input_file=%s", args.input_file)
-            orglist_import_result = import_orglist_file(
+            import_orglist_file(
                 resolve_path(args.input_file.strip()),
                 source_root_org="万物云",
                 include_all_children=True,
             )
-            notification_context["import_mode"] = "input_file"
-            notification_context["orglist_import_result"] = orglist_import_result
-            notify_once(success=True)
             logger.info("Organization list import-only flow completed successfully")
             return 0
 
@@ -474,7 +377,6 @@ def main() -> int:
                         raise RuntimeError("Neither home markers nor login markers were detected")
 
                     check_shot = save_screenshot(page, shots_dir, "check_ready")
-                    notification_context["check_screenshot"] = str(check_shot)
                     logger.info("Check passed. Screenshot: %s", check_shot)
 
                 elif args.action == "login":
@@ -486,7 +388,6 @@ def main() -> int:
                         retry_call,
                     )
                     context.storage_state(path=str(state_file))
-                    notification_context["state_file"] = str(state_file)
                     logger.info("Auth state saved: %s", state_file)
 
                 elif args.action == "run":
@@ -524,7 +425,6 @@ def main() -> int:
                         wait_sec=settings.runtime.retry_wait_sec,
                     )
                     result_shot = save_screenshot(page, shots_dir, "run_result")
-                    notification_context["result_screenshot"] = str(result_shot)
                     logger.info("Run completed. Screenshot: %s", result_shot)
 
                 elif args.action == "collect":
@@ -567,9 +467,6 @@ def main() -> int:
                     dump_path = resolve_path(args.dump_json) if args.dump_json else logs_dir / f"collect_{timestamp_slug()}.json"
                     dump_path.parent.mkdir(parents=True, exist_ok=True)
                     dump_path.write_text(json.dumps(documents, ensure_ascii=False, indent=2), encoding="utf-8")
-                    notification_context["collect_dump_path"] = str(dump_path)
-                    notification_context["collected_count"] = len(documents)
-                    notification_context["dry_run"] = args.dry_run
                     logger.info("Collected %s document(s). JSON dump: %s", len(documents), dump_path)
 
                     if args.dry_run:
@@ -580,7 +477,6 @@ def main() -> int:
                         logger.info("Persisted %s document(s) to PostgreSQL", len(documents))
 
                     result_shot = save_screenshot(page, shots_dir, "collect_result")
-                    notification_context["result_screenshot"] = str(result_shot)
                     logger.info("Collect completed. Screenshot: %s", result_shot)
 
                 elif args.action == "roster":
@@ -622,7 +518,6 @@ def main() -> int:
                         retries=settings.runtime.retries,
                         wait_sec=settings.runtime.retry_wait_sec,
                     )
-                    notification_context["roster_flow_result"] = roster_result
                     logger.info("Roster flow result: %s", roster_result)
 
                     downloaded_file = roster_result.get("downloaded_file")
@@ -631,12 +526,10 @@ def main() -> int:
                             file_path=Path(str(downloaded_file)),
                             fallback_query_date=roster_result.get("query_summary", {}).get("query_date"),
                         )
-                        notification_context["roster_import_result"] = roster_import_result
                     else:
                         logger.info("Roster flow finished without export file (skip-export mode)")
 
                     result_shot = save_screenshot(page, shots_dir, "roster_result")
-                    notification_context["result_screenshot"] = str(result_shot)
                     logger.info("Roster completed. Screenshot: %s", result_shot)
 
                 elif args.action == "orglist":
@@ -677,7 +570,6 @@ def main() -> int:
                         retries=settings.runtime.retries,
                         wait_sec=settings.runtime.retry_wait_sec,
                     )
-                    notification_context["orglist_flow_result"] = orglist_result
                     logger.info("Organization list flow result: %s", orglist_result)
 
                     downloaded_file = orglist_result.get("downloaded_file")
@@ -687,21 +579,17 @@ def main() -> int:
                             source_root_org=str(orglist_result.get("root_org_name") or "万物云"),
                             include_all_children=bool(orglist_result.get("include_all_children", True)),
                         )
-                        notification_context["orglist_import_result"] = orglist_import_result
                     else:
                         logger.info("Organization list flow finished without export file (skip-export mode)")
 
                     result_shot = save_screenshot(page, shots_dir, "orglist_result")
-                    notification_context["result_screenshot"] = str(result_shot)
                     logger.info("Organization list completed. Screenshot: %s", result_shot)
 
             except Exception as exc:  # noqa: BLE001
                 result_code = 1
                 logger.exception("Automation failed: %s", exc)
                 shot = save_screenshot(page, shots_dir, "error")
-                notification_context["error_screenshot"] = str(shot)
                 logger.error("Error screenshot: %s", shot)
-                notify_once(success=False, error_message=str(exc), attachment_paths=[Path(str(shot))])
             finally:
                 context.close()
                 browser.close()
@@ -709,11 +597,9 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001
         result_code = 1
         logger.exception("Automation failed before browser startup: %s", exc)
-        notify_once(success=False, error_message=str(exc))
 
     if result_code == 0:
         logger.info("Automation finished successfully")
-        notify_once(success=True)
     return result_code
 
 

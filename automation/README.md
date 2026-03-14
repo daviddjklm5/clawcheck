@@ -20,21 +20,6 @@ Default runtime target:
 - `check/login/run/collect/roster/orglist` use prod config by default when `--config` / `--credentials` are not passed.
 - UAT remains available via explicit `--config automation/config/settings.yaml --credentials automation/config/credentials.local.yaml`.
 
-Mail credentials can be stored in `automation/config/credentials.prod.local.yaml`:
-```yaml
-mail:
-  username: "robot@yourcorp.com"
-  password: "your_mail_client_password"
-```
-
-Or provided by environment variables:
-```bash
-export IERP_MAIL_ENABLED=true
-export IERP_MAIL_USERNAME="robot@yourcorp.com"
-export IERP_MAIL_PASSWORD="your_mail_client_password"
-export IERP_MAIL_TO_ADDRS="receiver1@yourcorp.com,receiver2@yourcorp.com"
-```
-
 ## 3. Commands
 Health check:
 ```bash
