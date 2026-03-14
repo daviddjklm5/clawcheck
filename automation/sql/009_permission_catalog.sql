@@ -4,6 +4,7 @@ CREATE TABLE IF NOT EXISTS "权限列表" (
     permission_level VARCHAR(64) NOT NULL,
     role_group VARCHAR(16) NOT NULL,
     is_remote_role BOOLEAN NOT NULL DEFAULT FALSE,
+    "不检查组织范围" BOOLEAN NOT NULL DEFAULT FALSE,
     is_deprecated BOOLEAN NOT NULL DEFAULT FALSE,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     source_system VARCHAR(32) NOT NULL DEFAULT 'manual_seed',
@@ -11,6 +12,9 @@ CREATE TABLE IF NOT EXISTS "权限列表" (
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE "权限列表"
+    ADD COLUMN IF NOT EXISTS "不检查组织范围" BOOLEAN NOT NULL DEFAULT FALSE;
 
 WITH seed_data(role_code, role_name, permission_level, sort_order) AS (
     VALUES
@@ -117,6 +121,7 @@ INSERT INTO "权限列表" (
     permission_level,
     role_group,
     is_remote_role,
+    "不检查组织范围",
     is_deprecated,
     is_active,
     source_system,
@@ -139,6 +144,7 @@ SELECT
         ELSE 'UNKNOWN'
     END AS role_group,
     permission_level = 'A类-远程' AS is_remote_role,
+    role_code IN ('RLHMD001', 'DTX009') AS "不检查组织范围",
     permission_level = 'W类-取消' AS is_deprecated,
     permission_level <> 'W类-取消' AS is_active,
     'manual_seed' AS source_system,
@@ -156,6 +162,7 @@ SET role_name = EXCLUDED.role_name,
     permission_level = EXCLUDED.permission_level,
     role_group = EXCLUDED.role_group,
     is_remote_role = EXCLUDED.is_remote_role,
+    "不检查组织范围" = EXCLUDED."不检查组织范围",
     is_deprecated = EXCLUDED.is_deprecated,
     is_active = EXCLUDED.is_active,
     source_system = EXCLUDED.source_system,
