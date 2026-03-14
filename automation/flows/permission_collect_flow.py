@@ -32,6 +32,8 @@ class PermissionCollectFlow:
         self.timeout_ms = timeout_ms
         self.home_url = home_url
         self.skip_org_scope_role_codes = skip_org_scope_role_codes or set()
+        self.current_document_tab_pageid: str | None = None
+        self.current_document_tab_text = ""
 
     def collect(self, document_no: str | None = None, limit: int = 1) -> list[dict[str, Any]]:
         self.open_todo_list()
@@ -45,33 +47,45 @@ class PermissionCollectFlow:
         documents: list[dict[str, Any]] = []
         document_nos = [row.get("单据编号", "").strip() for row in permission_rows if row.get("单据编号")]
         for index, current_document_no in enumerate(document_nos):
-            self.logger.info("Collecting document: %s", current_document_no)
-            started_at = datetime.now()
-            started_ts = time.monotonic()
-            if index > 0:
-                self.return_to_todo_list()
-            self.open_document(current_document_no)
-            document = self.collect_current_document()
-            elapsed_seconds = round(time.monotonic() - started_ts, 3)
-            finished_at = datetime.now()
-            document["collection_started_at"] = started_at.isoformat(timespec="seconds")
-            document["collection_finished_at"] = finished_at.isoformat(timespec="seconds")
-            document["collection_elapsed_seconds"] = elapsed_seconds
-            self.logger.info(
-                "Collected document %s in %.3f seconds",
-                current_document_no,
-                elapsed_seconds,
+            documents.append(
+                self.collect_document_from_todo(
+                    document_no=current_document_no,
+                    close_document_tab_after=index < len(document_nos) - 1,
+                )
             )
-            documents.append(document)
         return documents
 
     def open_todo_list(self) -> None:
         trigger = self.page.locator("div[id^='processflexpanelap_']").filter(has_text="待办任务").first
         trigger.wait_for(state="visible", timeout=self.timeout_ms)
         trigger.click(force=True)
-        self.page.locator("#gridview").first.wait_for(state="visible", timeout=self.timeout_ms)
-        self._ensure_todo_page_size(1000)
-        self._wait_for_grid_headers(TODO_HEADERS)
+        self._wait_for_todo_list_ready()
+
+    def collect_document_from_todo(
+        self,
+        document_no: str,
+        close_document_tab_after: bool = False,
+    ) -> dict[str, Any]:
+        self.logger.info("Collecting document: %s", document_no)
+        started_at = datetime.now()
+        started_ts = time.monotonic()
+        self.open_document(document_no)
+        document = self.collect_current_document()
+        elapsed_seconds = round(time.monotonic() - started_ts, 3)
+        finished_at = datetime.now()
+        document["collection_started_at"] = started_at.isoformat(timespec="seconds")
+        document["collection_finished_at"] = finished_at.isoformat(timespec="seconds")
+        document["collection_elapsed_seconds"] = elapsed_seconds
+        self.logger.info(
+            "Collected document %s in %.3f seconds",
+            document_no,
+            elapsed_seconds,
+        )
+        if close_document_tab_after:
+            self.close_current_document_tab(document_no)
+            self.page.wait_for_timeout(200)
+            self.return_to_todo_list()
+        return document
 
     def open_document(self, document_no: str) -> None:
         subject_text = f"单据编号：{document_no}"
@@ -79,14 +93,13 @@ class PermissionCollectFlow:
         subject_link.wait_for(state="visible", timeout=self.timeout_ms)
         subject_link.click(force=True)
         self._wait_for_document_loaded(document_no)
+        self._remember_current_document_tab(document_no)
 
     def return_to_todo_list(self) -> None:
         tab = self.page.locator("li[data-splitscreen-pageid$='hrobs_pc_messagecenter']").first
         tab.wait_for(state="visible", timeout=self.timeout_ms)
         tab.click(force=True)
-        self.page.locator("#gridview").first.wait_for(state="visible", timeout=self.timeout_ms)
-        self._ensure_todo_page_size(1000)
-        self._wait_for_grid_headers(TODO_HEADERS)
+        self._wait_for_todo_list_ready()
 
     def collect_current_document(self) -> dict[str, Any]:
         basic_info = self.extract_basic_info()
@@ -450,6 +463,201 @@ class PermissionCollectFlow:
         raise PlaywrightTimeoutError(
             f"Todo page size did not become {target_text}. last_text={last_text}"
         )
+
+    def _wait_for_todo_list_ready(self) -> None:
+        self.page.locator("#gridview").first.wait_for(state="visible", timeout=self.timeout_ms)
+        self._ensure_todo_page_size(1000)
+        self._wait_for_grid_headers(TODO_HEADERS)
+
+    def _remember_current_document_tab(self, document_no: str) -> None:
+        tab_info = self.page.evaluate(
+            r"""(todoPageIdSuffix) => {
+                const normalize = (value) => (value || '').replace(/\s+/g, ' ').trim();
+                const visible = (el) => {
+                    if (!el) return false;
+                    const rect = el.getBoundingClientRect();
+                    const style = window.getComputedStyle(el);
+                    return (
+                        rect.width > 0 &&
+                        rect.height > 0 &&
+                        style.display !== 'none' &&
+                        style.visibility !== 'hidden'
+                    );
+                };
+                const score = (tab) => {
+                    const className = String(tab.className || '').toLowerCase();
+                    let value = 0;
+                    if (tab.getAttribute('aria-selected') === 'true') value += 100;
+                    if (tab.getAttribute('aria-current') === 'page') value += 100;
+                    if (/\b(active|selected|focus|focused|current|on)\b/.test(className)) value += 80;
+                    return value;
+                };
+                const tabs = [...document.querySelectorAll('li[data-splitscreen-pageid]')]
+                    .filter((tab) => {
+                        const pageId = tab.getAttribute('data-splitscreen-pageid') || '';
+                        return visible(tab) && pageId && !pageId.endsWith(todoPageIdSuffix);
+                    })
+                    .map((tab, index) => ({
+                        index,
+                        pageId: tab.getAttribute('data-splitscreen-pageid') || '',
+                        text: normalize(tab.innerText || ''),
+                        score: score(tab),
+                    }));
+                tabs.sort((left, right) => {
+                    if (right.score !== left.score) return right.score - left.score;
+                    return right.index - left.index;
+                });
+                return tabs[0] || null;
+            }""",
+            "hrobs_pc_messagecenter",
+        )
+        self.current_document_tab_pageid = None
+        self.current_document_tab_text = ""
+        if not tab_info:
+            self.logger.warning("Failed to capture current document tab after opening %s", document_no)
+            return
+        pageid = str(tab_info.get("pageId", "")).strip()
+        self.current_document_tab_pageid = pageid or None
+        self.current_document_tab_text = str(tab_info.get("text", "")).strip()
+        self.logger.info(
+            "Captured document tab for %s: pageid=%s, text=%s",
+            document_no,
+            self.current_document_tab_pageid,
+            self.current_document_tab_text,
+        )
+
+    def close_current_document_tab(self, document_no: str = "") -> None:
+        close_result = self.page.evaluate(
+            r"""(payload) => {
+                const { todoPageIdSuffix, trackedPageId } = payload;
+                const normalize = (value) => (value || '').replace(/\s+/g, ' ').trim();
+                const visible = (el) => {
+                    if (!el) return false;
+                    const rect = el.getBoundingClientRect();
+                    const style = window.getComputedStyle(el);
+                    return (
+                        rect.width > 0 &&
+                        rect.height > 0 &&
+                        style.display !== 'none' &&
+                        style.visibility !== 'hidden'
+                    );
+                };
+                const score = (tab) => {
+                    const className = String(tab.className || '').toLowerCase();
+                    let value = 0;
+                    if (tab.getAttribute('aria-selected') === 'true') value += 100;
+                    if (tab.getAttribute('aria-current') === 'page') value += 100;
+                    if (/\b(active|selected|focus|focused|current|on)\b/.test(className)) value += 80;
+                    return value;
+                };
+                const matchesClose = (el) => {
+                    const text = normalize(el.innerText || el.textContent || '');
+                    const title = normalize(el.getAttribute('title') || '');
+                    const ariaLabel = normalize(el.getAttribute('aria-label') || '');
+                    const className = String(el.className || '').toLowerCase();
+                    return (
+                        el.hasAttribute('drop-close-icon') ||
+                        className.includes('kdfont-toubudaohang_guanbi') ||
+                        text === '×' ||
+                        text === 'x' ||
+                        text.includes('关闭') ||
+                        title.includes('关闭') ||
+                        ariaLabel.includes('关闭') ||
+                        className.includes('close') ||
+                        className.includes('remove')
+                    );
+                };
+                const findCloseTarget = (tab) => {
+                    const directIcon = tab.querySelector('i[drop-close-icon], i.kdfont-toubudaohang_guanbi');
+                    if (directIcon) return directIcon;
+                    const descendants = [...tab.querySelectorAll('*')];
+                    const explicit = descendants.find((el) => matchesClose(el));
+                    if (explicit) return explicit;
+                    const iconLike = descendants
+                        .map((el) => ({
+                            el,
+                            rect: el.getBoundingClientRect(),
+                            className: String(el.className || '').toLowerCase(),
+                            text: normalize(el.innerText || el.textContent || ''),
+                        }))
+                        .filter(({ rect, className, text }) => {
+                            const isCompact = rect.width <= 32 && rect.height <= 32;
+                            const isLikelyIcon = className.includes('icon') || className.includes('btn') || text === '×';
+                            return isCompact && isLikelyIcon;
+                        })
+                        .sort((left, right) => right.rect.left - left.rect.left);
+                    return iconLike[0]?.el || null;
+                };
+                const tabs = [...document.querySelectorAll('li[data-splitscreen-pageid]')]
+                    .filter((tab) => {
+                        const pageId = tab.getAttribute('data-splitscreen-pageid') || '';
+                        return visible(tab) && pageId && !pageId.endsWith(todoPageIdSuffix);
+                    });
+                const target =
+                    (trackedPageId && tabs.find((tab) => (tab.getAttribute('data-splitscreen-pageid') || '') === trackedPageId)) ||
+                    tabs
+                        .map((tab, index) => ({
+                            index,
+                            score: score(tab),
+                            tab,
+                        }))
+                        .sort((left, right) => {
+                            if (right.score !== left.score) return right.score - left.score;
+                            return right.index - left.index;
+                        })[0]?.tab ||
+                    null;
+                if (!target) {
+                    return {
+                        clicked: false,
+                        reason: 'document_tab_not_found',
+                        trackedPageId,
+                    };
+                }
+                target.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+                target.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+                target.click();
+                const closeTarget = findCloseTarget(target);
+                if (!closeTarget) {
+                    return {
+                        clicked: false,
+                        reason: 'close_button_not_found',
+                        trackedPageId,
+                        pageId: target.getAttribute('data-splitscreen-pageid') || '',
+                        text: normalize(target.innerText || ''),
+                    };
+                }
+                closeTarget.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+                closeTarget.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+                closeTarget.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+                closeTarget.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+                closeTarget.click();
+                return {
+                    clicked: true,
+                    trackedPageId,
+                    pageId: target.getAttribute('data-splitscreen-pageid') || '',
+                    text: normalize(target.innerText || ''),
+                };
+            }""",
+            {
+                "todoPageIdSuffix": "hrobs_pc_messagecenter",
+                "trackedPageId": self.current_document_tab_pageid or "",
+            },
+        )
+        if close_result.get("clicked"):
+            self.logger.info(
+                "Closed document tab for %s: pageid=%s, text=%s",
+                document_no or self.current_document_tab_text or self.current_document_tab_pageid or "<unknown>",
+                close_result.get("pageId", ""),
+                close_result.get("text", ""),
+            )
+        else:
+            self.logger.warning(
+                "Failed to close current document tab for %s: %s",
+                document_no or self.current_document_tab_text or self.current_document_tab_pageid or "<unknown>",
+                close_result,
+            )
+        self.current_document_tab_pageid = None
+        self.current_document_tab_text = ""
 
     def _extract_best_grid(self, required_headers: Sequence[str]) -> dict[str, Any]:
         root_selector = None

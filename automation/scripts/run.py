@@ -492,18 +492,13 @@ def main() -> int:
                         skip_org_scope_role_codes=skip_org_scope_role_codes,
                     )
 
-                    def _collect_by_document_no(target_document_no: str) -> dict[str, object]:
-                        home_page.open()
-                        home_page.wait_ready()
-                        documents = collector.collect(document_no=target_document_no, limit=1)
-                        if not documents:
-                            raise RuntimeError(f"No permission application documents matched document_no={target_document_no}")
-                        return documents[0]
-
-                    def _list_target_document_nos() -> list[str]:
+                    def _reset_collect_session_to_todo_list() -> None:
                         home_page.open()
                         home_page.wait_ready()
                         collector.open_todo_list()
+
+                    def _list_target_document_nos() -> list[str]:
+                        _reset_collect_session_to_todo_list()
                         todo_rows = collector.extract_grid_rows(TODO_HEADERS)
                         permission_rows = [row for row in todo_rows if row.get("单据") == "权限申请"]
                         target_document_nos = [row.get("单据编号", "").strip() for row in permission_rows if row.get("单据编号")]
@@ -520,16 +515,44 @@ def main() -> int:
                     )
                     documents: list[dict[str, object]] = []
                     failed_documents: list[dict[str, str]] = []
-                    for target_document_no in target_document_nos:
+                    todo_list_ready = True
+                    for index, target_document_no in enumerate(target_document_nos):
+                        close_document_tab_after = index < len(target_document_nos) - 1
+
+                        attempt_no = 0
+
+                        def _collect_by_document_no(
+                            target_document_no: str = target_document_no,
+                            close_document_tab_after: bool = close_document_tab_after,
+                        ) -> dict[str, object]:
+                            nonlocal todo_list_ready, attempt_no
+                            attempt_no += 1
+                            if attempt_no > 1 or not todo_list_ready:
+                                logger.info(
+                                    "Resetting collect session to todo list before collecting %s (attempt %s)",
+                                    target_document_no,
+                                    attempt_no,
+                                )
+                                _reset_collect_session_to_todo_list()
+                                todo_list_ready = True
+
+                            document = collector.collect_document_from_todo(
+                                document_no=target_document_no,
+                                close_document_tab_after=close_document_tab_after,
+                            )
+                            todo_list_ready = close_document_tab_after
+                            return document
+
                         try:
                             documents.append(
                                 retry_call(
-                                    lambda target_document_no=target_document_no: _collect_by_document_no(target_document_no),
+                                    _collect_by_document_no,
                                     retries=settings.runtime.retries,
                                     wait_sec=settings.runtime.retry_wait_sec,
                                 )
                             )
                         except Exception as exc:  # noqa: BLE001
+                            todo_list_ready = False
                             logger.error("Collect failed for document %s: %s", target_document_no, exc)
                             failed_documents.append(
                                 {
