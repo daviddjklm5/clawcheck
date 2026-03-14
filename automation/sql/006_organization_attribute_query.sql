@@ -416,72 +416,57 @@ $$;
 
 
 CREATE TABLE IF NOT EXISTS "组织属性查询" (
-    org_code TEXT PRIMARY KEY,
-    row_no INTEGER,
-    org_name TEXT,
-    org_type TEXT,
-    parent_org_name TEXT,
-    parent_org_code TEXT,
-    established_date TEXT,
-    company_name TEXT,
-    business_status TEXT,
-    org_level TEXT,
-    org_function TEXT,
-    city_name TEXT,
-    work_location TEXT,
-    physical_level TEXT,
-    pending_disable_date TEXT,
-    department_type TEXT,
-    process_level_name TEXT,
-    process_level_name_resolved TEXT,
-    process_level_category TEXT,
-    dept_subcategory_code TEXT,
-    dept_subcategory_name TEXT,
-    dept_category_code TEXT,
-    dept_category_name TEXT,
-    org_created_time TEXT,
-    org_full_name TEXT,
-    org_unit_name TEXT,
-    org_unit_rule TEXT,
-    org_auth_level TEXT,
-    org_auth_level_rule TEXT,
-    wanyu_city_sales_department TEXT,
-    war_zone TEXT,
-    source_import_batch_no TEXT,
-    refreshed_at TIMESTAMPTZ NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    "行政组织编码" TEXT PRIMARY KEY,
+    "序号" INTEGER,
+    "行政组织名称" TEXT,
+    "行政组织类型" TEXT,
+    "上级行政组织" TEXT,
+    "上级行政组织编码" TEXT,
+    "成立日期" TEXT,
+    "所属公司" TEXT,
+    "业务状态" TEXT,
+    "行政组织层级" TEXT,
+    "行政组织职能" TEXT,
+    "所在城市" TEXT,
+    "工作地" TEXT,
+    "物理层级" TEXT,
+    "待停用日期" TEXT,
+    "部门类型" TEXT,
+    "流程层级_名称" TEXT,
+    "组织流程层级判断" TEXT,
+    "组织流程层级分类" TEXT,
+    "部门子分类_编码" TEXT,
+    "部门子分类_名称" TEXT,
+    "部门分类_编码" TEXT,
+    "部门分类_名称" TEXT,
+    "创建时间" TEXT,
+    "组织长名称" TEXT,
+    "组织单位" TEXT,
+    "组织单位命中规则" TEXT,
+    "组织授权级别" TEXT,
+    "组织授权级别命中规则" TEXT,
+    "万御城市营业部" TEXT,
+    "所属战区" TEXT,
+    "来源导入批次号" TEXT,
+    "刷新时间" TIMESTAMPTZ NOT NULL,
+    "记录创建时间" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    "记录更新时间" TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-ALTER TABLE "组织属性查询"
-    ADD COLUMN IF NOT EXISTS wanyu_city_sales_department TEXT;
-
-ALTER TABLE "组织属性查询"
-    ADD COLUMN IF NOT EXISTS process_level_category TEXT;
-
-ALTER TABLE "组织属性查询"
-    ADD COLUMN IF NOT EXISTS org_auth_level TEXT;
-
-ALTER TABLE "组织属性查询"
-    ADD COLUMN IF NOT EXISTS org_auth_level_rule TEXT;
-
-ALTER TABLE "组织属性查询"
-    DROP COLUMN IF EXISTS hr_admin_center_name;
-
-CREATE INDEX IF NOT EXISTS idx_组织属性查询_org_name ON "组织属性查询" (org_name);
-CREATE INDEX IF NOT EXISTS idx_组织属性查询_parent_org_code ON "组织属性查询" (parent_org_code);
-CREATE INDEX IF NOT EXISTS idx_组织属性查询_company_name ON "组织属性查询" (company_name);
-CREATE INDEX IF NOT EXISTS idx_组织属性查询_org_level ON "组织属性查询" (org_level);
-CREATE INDEX IF NOT EXISTS idx_组织属性查询_city_name ON "组织属性查询" (city_name);
-CREATE INDEX IF NOT EXISTS idx_组织属性查询_process_level_category ON "组织属性查询" (process_level_category);
-CREATE INDEX IF NOT EXISTS idx_组织属性查询_dept_category_code ON "组织属性查询" (dept_category_code);
-CREATE INDEX IF NOT EXISTS idx_组织属性查询_dept_subcategory_code ON "组织属性查询" (dept_subcategory_code);
-CREATE INDEX IF NOT EXISTS idx_组织属性查询_org_unit_name ON "组织属性查询" (org_unit_name);
-CREATE INDEX IF NOT EXISTS idx_组织属性查询_org_auth_level ON "组织属性查询" (org_auth_level);
-CREATE INDEX IF NOT EXISTS idx_组织属性查询_wanyu_city_sales_department ON "组织属性查询" (wanyu_city_sales_department);
-CREATE INDEX IF NOT EXISTS idx_组织属性查询_war_zone ON "组织属性查询" (war_zone);
-CREATE INDEX IF NOT EXISTS idx_组织属性查询_war_zone_city_name ON "组织属性查询" (war_zone, city_name);
-CREATE INDEX IF NOT EXISTS idx_组织属性查询_org_unit_name_company_name ON "组织属性查询" (org_unit_name, company_name);
+CREATE INDEX IF NOT EXISTS idx_组织属性查询_org_name ON "组织属性查询" ("行政组织名称");
+CREATE INDEX IF NOT EXISTS idx_组织属性查询_parent_org_code ON "组织属性查询" ("上级行政组织编码");
+CREATE INDEX IF NOT EXISTS idx_组织属性查询_company_name ON "组织属性查询" ("所属公司");
+CREATE INDEX IF NOT EXISTS idx_组织属性查询_org_level ON "组织属性查询" ("行政组织层级");
+CREATE INDEX IF NOT EXISTS idx_组织属性查询_city_name ON "组织属性查询" ("所在城市");
+CREATE INDEX IF NOT EXISTS idx_组织属性查询_process_level_category ON "组织属性查询" ("组织流程层级分类");
+CREATE INDEX IF NOT EXISTS idx_组织属性查询_dept_category_code ON "组织属性查询" ("部门分类_编码");
+CREATE INDEX IF NOT EXISTS idx_组织属性查询_dept_subcategory_code ON "组织属性查询" ("部门子分类_编码");
+CREATE INDEX IF NOT EXISTS idx_组织属性查询_org_unit_name ON "组织属性查询" ("组织单位");
+CREATE INDEX IF NOT EXISTS idx_组织属性查询_org_auth_level ON "组织属性查询" ("组织授权级别");
+CREATE INDEX IF NOT EXISTS idx_组织属性查询_wanyu_city_sales_department ON "组织属性查询" ("万御城市营业部");
+CREATE INDEX IF NOT EXISTS idx_组织属性查询_war_zone ON "组织属性查询" ("所属战区");
+CREATE INDEX IF NOT EXISTS idx_组织属性查询_war_zone_city_name ON "组织属性查询" ("所属战区", "所在城市");
+CREATE INDEX IF NOT EXISTS idx_组织属性查询_org_unit_name_company_name ON "组织属性查询" ("组织单位", "所属公司");
 
 
 CREATE OR REPLACE FUNCTION refresh_组织属性查询()
@@ -492,103 +477,103 @@ BEGIN
     EXECUTE 'DROP TABLE IF EXISTS "组织属性查询__staging"';
     EXECUTE '
         CREATE TABLE "组织属性查询__staging" (
-            org_code TEXT NOT NULL,
-            row_no INTEGER,
-            org_name TEXT,
-            org_type TEXT,
-            parent_org_name TEXT,
-            parent_org_code TEXT,
-            established_date TEXT,
-            company_name TEXT,
-            business_status TEXT,
-            org_level TEXT,
-            org_function TEXT,
-            city_name TEXT,
-            work_location TEXT,
-            physical_level TEXT,
-            pending_disable_date TEXT,
-            department_type TEXT,
-            process_level_name TEXT,
-            process_level_name_resolved TEXT,
-            process_level_category TEXT,
-            dept_subcategory_code TEXT,
-            dept_subcategory_name TEXT,
-            dept_category_code TEXT,
-            dept_category_name TEXT,
-            org_created_time TEXT,
-            org_full_name TEXT,
-            org_unit_name TEXT,
-            org_unit_rule TEXT,
-            org_auth_level TEXT,
-            org_auth_level_rule TEXT,
-            wanyu_city_sales_department TEXT,
-            war_zone TEXT,
-            source_import_batch_no TEXT,
-            refreshed_at TIMESTAMPTZ NOT NULL,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            "行政组织编码" TEXT NOT NULL,
+            "序号" INTEGER,
+            "行政组织名称" TEXT,
+            "行政组织类型" TEXT,
+            "上级行政组织" TEXT,
+            "上级行政组织编码" TEXT,
+            "成立日期" TEXT,
+            "所属公司" TEXT,
+            "业务状态" TEXT,
+            "行政组织层级" TEXT,
+            "行政组织职能" TEXT,
+            "所在城市" TEXT,
+            "工作地" TEXT,
+            "物理层级" TEXT,
+            "待停用日期" TEXT,
+            "部门类型" TEXT,
+            "流程层级_名称" TEXT,
+            "组织流程层级判断" TEXT,
+            "组织流程层级分类" TEXT,
+            "部门子分类_编码" TEXT,
+            "部门子分类_名称" TEXT,
+            "部门分类_编码" TEXT,
+            "部门分类_名称" TEXT,
+            "创建时间" TEXT,
+            "组织长名称" TEXT,
+            "组织单位" TEXT,
+            "组织单位命中规则" TEXT,
+            "组织授权级别" TEXT,
+            "组织授权级别命中规则" TEXT,
+            "万御城市营业部" TEXT,
+            "所属战区" TEXT,
+            "来源导入批次号" TEXT,
+            "刷新时间" TIMESTAMPTZ NOT NULL,
+            "记录创建时间" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            "记录更新时间" TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )';
 
     EXECUTE $INSERT$
         INSERT INTO "组织属性查询__staging" (
-            org_code,
-            row_no,
-            org_name,
-            org_type,
-            parent_org_name,
-            parent_org_code,
-            established_date,
-            company_name,
-            business_status,
-            org_level,
-            org_function,
-            city_name,
-            work_location,
-            physical_level,
-            pending_disable_date,
-            department_type,
-            process_level_name,
-            process_level_name_resolved,
-            process_level_category,
-            dept_subcategory_code,
-            dept_subcategory_name,
-            dept_category_code,
-            dept_category_name,
-            org_created_time,
-            org_full_name,
-            org_unit_name,
-            org_unit_rule,
-            org_auth_level,
-            org_auth_level_rule,
-            wanyu_city_sales_department,
-            war_zone,
-            source_import_batch_no,
-            refreshed_at,
-            created_at,
-            updated_at
+            "行政组织编码",
+            "序号",
+            "行政组织名称",
+            "行政组织类型",
+            "上级行政组织",
+            "上级行政组织编码",
+            "成立日期",
+            "所属公司",
+            "业务状态",
+            "行政组织层级",
+            "行政组织职能",
+            "所在城市",
+            "工作地",
+            "物理层级",
+            "待停用日期",
+            "部门类型",
+            "流程层级_名称",
+            "组织流程层级判断",
+            "组织流程层级分类",
+            "部门子分类_编码",
+            "部门子分类_名称",
+            "部门分类_编码",
+            "部门分类_名称",
+            "创建时间",
+            "组织长名称",
+            "组织单位",
+            "组织单位命中规则",
+            "组织授权级别",
+            "组织授权级别命中规则",
+            "万御城市营业部",
+            "所属战区",
+            "来源导入批次号",
+            "刷新时间",
+            "记录创建时间",
+            "记录更新时间"
         )
         WITH RECURSIVE process_level_chain AS (
             SELECT
-                o.org_code AS root_org_code,
-                o.parent_org_code AS next_parent_org_code,
-                NULLIF(BTRIM(o.process_level_name), '') AS candidate_process_level_name,
+                o."行政组织编码" AS root_org_code,
+                o."上级行政组织编码" AS next_parent_org_code,
+                NULLIF(BTRIM(o."流程层级_名称"), '') AS candidate_process_level_name,
                 0 AS depth,
-                ARRAY[o.org_code] AS visited_org_codes
+                ARRAY[o."行政组织编码"] AS visited_org_codes
             FROM "组织列表" o
 
             UNION ALL
 
             SELECT
                 plc.root_org_code,
-                p.parent_org_code AS next_parent_org_code,
-                NULLIF(BTRIM(p.process_level_name), '') AS candidate_process_level_name,
+                p."上级行政组织编码" AS next_parent_org_code,
+                NULLIF(BTRIM(p."流程层级_名称"), '') AS candidate_process_level_name,
                 plc.depth + 1 AS depth,
-                plc.visited_org_codes || p.org_code AS visited_org_codes
+                plc.visited_org_codes || p."行政组织编码" AS visited_org_codes
             FROM process_level_chain plc
             JOIN "组织列表" p
-              ON plc.next_parent_org_code = p.org_code
+              ON plc.next_parent_org_code = p."行政组织编码"
             WHERE plc.candidate_process_level_name IS NULL
-              AND NOT (p.org_code = ANY(plc.visited_org_codes))
+              AND NOT (p."行政组织编码" = ANY(plc.visited_org_codes))
         ),
         resolved_process_level AS (
             SELECT DISTINCT ON (root_org_code)
@@ -599,72 +584,72 @@ BEGIN
             ORDER BY root_org_code, depth
         )
         SELECT
-            o.org_code,
-            o.row_no,
-            o.org_name,
-            o.org_type,
-            o.parent_org_name,
-            o.parent_org_code,
-            o.established_date,
-            o.company_name,
-            o.business_status,
-            o.org_level,
-            o.org_function,
-            o.city_name,
-            o.work_location,
-            o.physical_level,
-            o.pending_disable_date,
-            o.department_type,
-            o.process_level_name,
-            COALESCE(fn_map_process_level_name_override(o.org_full_name), rpl.process_level_name_resolved) AS process_level_name_resolved,
+            o."行政组织编码",
+            o."序号",
+            o."行政组织名称",
+            o."行政组织类型",
+            o."上级行政组织",
+            o."上级行政组织编码",
+            o."成立日期",
+            o."所属公司",
+            o."业务状态",
+            o."行政组织层级",
+            o."行政组织职能",
+            o."所在城市",
+            o."工作地",
+            o."物理层级",
+            o."待停用日期",
+            o."部门类型",
+            o."流程层级_名称",
+            COALESCE(fn_map_process_level_name_override(o."组织长名称"), rpl.process_level_name_resolved),
             fn_map_process_level_category(
-                COALESCE(fn_map_process_level_name_override(o.org_full_name), rpl.process_level_name_resolved),
-                o.company_name,
-                o.org_full_name
-            ) AS process_level_category,
-            o.dept_subcategory_code,
-            o.dept_subcategory_name,
-            o.dept_category_code,
-            o.dept_category_name,
-            o.org_created_time,
-            o.org_full_name,
-            fn_map_org_unit_name(o.org_full_name) AS org_unit_name,
-            fn_map_org_unit_rule(o.org_full_name) AS org_unit_rule,
+                COALESCE(fn_map_process_level_name_override(o."组织长名称"), rpl.process_level_name_resolved),
+                o."所属公司",
+                o."组织长名称"
+            ),
+            o."部门子分类_编码",
+            o."部门子分类_名称",
+            o."部门分类_编码",
+            o."部门分类_名称",
+            o."创建时间",
+            o."组织长名称",
+            fn_map_org_unit_name(o."组织长名称"),
+            fn_map_org_unit_rule(o."组织长名称"),
             fn_map_org_auth_level(
-                o.org_code,
-                o.org_level,
-                o.physical_level,
-                o.org_full_name,
-                fn_map_org_unit_name(o.org_full_name),
+                o."行政组织编码",
+                o."行政组织层级",
+                o."物理层级",
+                o."组织长名称",
+                fn_map_org_unit_name(o."组织长名称"),
                 fn_map_process_level_category(
-                    COALESCE(fn_map_process_level_name_override(o.org_full_name), rpl.process_level_name_resolved),
-                    o.company_name,
-                    o.org_full_name
+                    COALESCE(fn_map_process_level_name_override(o."组织长名称"), rpl.process_level_name_resolved),
+                    o."所属公司",
+                    o."组织长名称"
                 )
-            ) AS org_auth_level,
+            ),
             fn_map_org_auth_level_rule(
-                o.org_code,
-                o.org_level,
-                o.physical_level,
-                o.org_full_name,
-                fn_map_org_unit_name(o.org_full_name),
+                o."行政组织编码",
+                o."行政组织层级",
+                o."物理层级",
+                o."组织长名称",
+                fn_map_org_unit_name(o."组织长名称"),
                 fn_map_process_level_category(
-                    COALESCE(fn_map_process_level_name_override(o.org_full_name), rpl.process_level_name_resolved),
-                    o.company_name,
-                    o.org_full_name
+                    COALESCE(fn_map_process_level_name_override(o."组织长名称"), rpl.process_level_name_resolved),
+                    o."所属公司",
+                    o."组织长名称"
                 )
-            ) AS org_auth_level_rule,
-            fn_map_wanyu_city_sales_department(o.org_full_name) AS wanyu_city_sales_department,
-            z.war_zone,
-            o.import_batch_no,
+            ),
+            fn_map_wanyu_city_sales_department(o."组织长名称"),
+            z."所属战区",
+            o."导入批次号",
             NOW(),
             NOW(),
             NOW()
         FROM "组织列表" o
         LEFT JOIN resolved_process_level rpl
-            ON o.org_code = rpl.org_code
+            ON o."行政组织编码" = rpl.org_code
         LEFT JOIN "城市所属战区" z
-            ON o.city_name = z.city_name
+            ON o."所在城市" = z."城市名称"
     $INSERT$;
 
     EXECUTE 'ANALYZE "组织属性查询__staging"';
@@ -675,21 +660,21 @@ BEGIN
     EXECUTE 'ALTER TABLE "组织属性查询__staging" RENAME TO "组织属性查询"';
     EXECUTE 'DROP TABLE "组织属性查询__old"';
 
-    EXECUTE 'ALTER TABLE "组织属性查询" ADD CONSTRAINT "组织属性查询_pkey" PRIMARY KEY (org_code)';
-    EXECUTE 'CREATE INDEX idx_组织属性查询_org_name ON "组织属性查询" (org_name)';
-    EXECUTE 'CREATE INDEX idx_组织属性查询_parent_org_code ON "组织属性查询" (parent_org_code)';
-    EXECUTE 'CREATE INDEX idx_组织属性查询_company_name ON "组织属性查询" (company_name)';
-    EXECUTE 'CREATE INDEX idx_组织属性查询_org_level ON "组织属性查询" (org_level)';
-    EXECUTE 'CREATE INDEX idx_组织属性查询_city_name ON "组织属性查询" (city_name)';
-    EXECUTE 'CREATE INDEX idx_组织属性查询_process_level_category ON "组织属性查询" (process_level_category)';
-    EXECUTE 'CREATE INDEX idx_组织属性查询_dept_category_code ON "组织属性查询" (dept_category_code)';
-    EXECUTE 'CREATE INDEX idx_组织属性查询_dept_subcategory_code ON "组织属性查询" (dept_subcategory_code)';
-    EXECUTE 'CREATE INDEX idx_组织属性查询_org_unit_name ON "组织属性查询" (org_unit_name)';
-    EXECUTE 'CREATE INDEX idx_组织属性查询_org_auth_level ON "组织属性查询" (org_auth_level)';
-    EXECUTE 'CREATE INDEX idx_组织属性查询_wanyu_city_sales_department ON "组织属性查询" (wanyu_city_sales_department)';
-    EXECUTE 'CREATE INDEX idx_组织属性查询_war_zone ON "组织属性查询" (war_zone)';
-    EXECUTE 'CREATE INDEX idx_组织属性查询_war_zone_city_name ON "组织属性查询" (war_zone, city_name)';
-    EXECUTE 'CREATE INDEX idx_组织属性查询_org_unit_name_company_name ON "组织属性查询" (org_unit_name, company_name)';
+    EXECUTE 'ALTER TABLE "组织属性查询" ADD CONSTRAINT "组织属性查询_pkey" PRIMARY KEY ("行政组织编码")';
+    EXECUTE 'CREATE INDEX idx_组织属性查询_org_name ON "组织属性查询" ("行政组织名称")';
+    EXECUTE 'CREATE INDEX idx_组织属性查询_parent_org_code ON "组织属性查询" ("上级行政组织编码")';
+    EXECUTE 'CREATE INDEX idx_组织属性查询_company_name ON "组织属性查询" ("所属公司")';
+    EXECUTE 'CREATE INDEX idx_组织属性查询_org_level ON "组织属性查询" ("行政组织层级")';
+    EXECUTE 'CREATE INDEX idx_组织属性查询_city_name ON "组织属性查询" ("所在城市")';
+    EXECUTE 'CREATE INDEX idx_组织属性查询_process_level_category ON "组织属性查询" ("组织流程层级分类")';
+    EXECUTE 'CREATE INDEX idx_组织属性查询_dept_category_code ON "组织属性查询" ("部门分类_编码")';
+    EXECUTE 'CREATE INDEX idx_组织属性查询_dept_subcategory_code ON "组织属性查询" ("部门子分类_编码")';
+    EXECUTE 'CREATE INDEX idx_组织属性查询_org_unit_name ON "组织属性查询" ("组织单位")';
+    EXECUTE 'CREATE INDEX idx_组织属性查询_org_auth_level ON "组织属性查询" ("组织授权级别")';
+    EXECUTE 'CREATE INDEX idx_组织属性查询_wanyu_city_sales_department ON "组织属性查询" ("万御城市营业部")';
+    EXECUTE 'CREATE INDEX idx_组织属性查询_war_zone ON "组织属性查询" ("所属战区")';
+    EXECUTE 'CREATE INDEX idx_组织属性查询_war_zone_city_name ON "组织属性查询" ("所属战区", "所在城市")';
+    EXECUTE 'CREATE INDEX idx_组织属性查询_org_unit_name_company_name ON "组织属性查询" ("组织单位", "所属公司")';
     EXECUTE 'ANALYZE "组织属性查询"';
 END;
 $$;

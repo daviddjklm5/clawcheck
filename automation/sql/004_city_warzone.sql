@@ -1,13 +1,13 @@
 CREATE TABLE IF NOT EXISTS "城市所属战区" (
-    city_name TEXT PRIMARY KEY,
-    war_zone TEXT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    "城市名称" TEXT PRIMARY KEY,
+    "所属战区" TEXT NOT NULL,
+    "记录创建时间" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    "记录更新时间" TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_城市所属战区_战区 ON "城市所属战区" (war_zone);
+CREATE INDEX IF NOT EXISTS idx_城市所属战区_所属战区 ON "城市所属战区" ("所属战区");
 
-INSERT INTO "城市所属战区" (city_name, war_zone)
+INSERT INTO "城市所属战区" ("城市名称", "所属战区")
 VALUES
     ('阿坝藏族羌族自治州', '川云战区'),
     ('阿克苏地区', '西北战区'),
@@ -414,6 +414,6 @@ VALUES
     ('大埔区', '深圳战区'),
     ('深水埗区', '深圳战区'),
     ('省直辖县级行政区划', '琼桂战区')
-ON CONFLICT (city_name) DO UPDATE SET
-    war_zone = EXCLUDED.war_zone,
-    updated_at = NOW();
+ON CONFLICT ("城市名称") DO UPDATE
+SET "所属战区" = EXCLUDED."所属战区",
+    "记录更新时间" = NOW();

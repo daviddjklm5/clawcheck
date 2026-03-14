@@ -18,14 +18,14 @@ DEFAULT_CREDENTIALS_PATH = "automation/config/credentials.local.yaml"
 DEFAULT_SELECTORS_PATH = "automation/config/selectors.yaml"
 PROD_CONFIG_PATH = "automation/config/settings.prod.yaml"
 PROD_CREDENTIALS_PATH = "automation/config/credentials.prod.local.yaml"
-PROD_DEFAULT_ACTIONS = {"check", "login", "run", "collect", "roster", "orglist"}
+PROD_DEFAULT_ACTIONS = {"check", "login", "run", "collect", "roster", "orglist", "rolecatalog", "dbinit"}
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="iERP automation runner")
     parser.add_argument(
         "action",
-        choices=["check", "login", "run", "collect", "roster", "orglist", "rolecatalog"],
+        choices=["check", "login", "run", "collect", "roster", "orglist", "rolecatalog", "dbinit"],
         help="Action to execute",
     )
     parser.add_argument("--config", default=DEFAULT_CONFIG_PATH, help="Settings YAML path")
@@ -199,21 +199,53 @@ def main() -> int:
         logger.info("Credentials: %s", credentials_path)
     logger.info("Selectors: %s", selectors_path)
 
-    if args.action == "rolecatalog":
-        from automation.db.postgres import PostgresPermissionCatalogStore
+    if args.action in {"rolecatalog", "dbinit"}:
+        from automation.db.postgres import (
+            PostgresActiveRosterStore,
+            PostgresOrganizationListStore,
+            PostgresPermissionCatalogStore,
+            PostgresPermissionStore,
+        )
 
         try:
-            store = PostgresPermissionCatalogStore(settings.db)
-            summary = store.seed_catalog()
-            dump_path = resolve_path(args.dump_json) if args.dump_json else logs_dir / f"rolecatalog_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+            if args.action == "rolecatalog":
+                summary = PostgresPermissionCatalogStore(settings.db).seed_catalog()
+                default_name = "rolecatalog"
+            else:
+                permission_store = PostgresPermissionStore(settings.db)
+                roster_store = PostgresActiveRosterStore(settings.db)
+                org_store = PostgresOrganizationListStore(settings.db)
+                catalog_store = PostgresPermissionCatalogStore(settings.db)
+
+                permission_store.ensure_table()
+                roster_store.ensure_table()
+                org_store.ensure_table()
+                permission_catalog = catalog_store.seed_catalog()
+                summary = {
+                    "initialized_tables": [
+                        "申请单基本信息",
+                        "申请单权限列表",
+                        "申请单审批记录",
+                        "申请表组织范围",
+                        "在职花名册表",
+                        "组织列表",
+                        "城市所属战区",
+                        "组织属性查询",
+                        "权限列表",
+                    ],
+                    "permission_catalog": permission_catalog,
+                }
+                default_name = "dbinit"
+
+            dump_path = resolve_path(args.dump_json) if args.dump_json else logs_dir / f"{default_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
             dump_path.parent.mkdir(parents=True, exist_ok=True)
             dump_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
-            logger.info("Permission catalog initialized. Summary dump: %s", dump_path)
-            logger.info("Permission catalog summary: %s", summary)
+            logger.info("%s completed. Summary dump: %s", args.action, dump_path)
+            logger.info("%s summary: %s", args.action, summary)
             logger.info("Automation finished successfully")
             return 0
         except Exception as exc:  # noqa: BLE001
-            logger.exception("Permission catalog initialization failed: %s", exc)
+            logger.exception("%s failed: %s", args.action, exc)
             return 1
 
     try:

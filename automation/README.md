@@ -96,6 +96,13 @@ python automation/scripts/run.py rolecatalog \
   --credentials automation/config/credentials.prod.local.yaml
 ```
 
+Initialize all 9 tables/functions on a new database:
+```bash
+python automation/scripts/run.py dbinit \
+  --config automation/config/settings.prod.yaml \
+  --credentials automation/config/credentials.prod.local.yaml
+```
+
 ## 4. Output
 - logs: `automation/logs/`
 - screenshots: `automation/screenshots/`
@@ -114,7 +121,8 @@ python automation/scripts/run.py rolecatalog \
 ## 5. Notes
 - Default home entry for `001/003/004` related browser actions is `https://hr.onewo.com/ierp/?formId=home_page`.
 - Prod roster flow targets `https://hr.onewo.com/ierp/?formId=home_page`.
-- The permission collect import auto-migrates legacy PostgreSQL table `basic_info` into `申请单基本信息` before writing.
+- The permission collect import can still migrate legacy auxiliary tables `basic_info` / `permission_apply_detail` / `approval_record` into the Chinese schema before writing.
+- If the target database is still on the pre-011 English physical columns, run `automation/sql/012_rename_columns_to_cn_fixed_schema.sql` first; the application now blocks mixed/legacy English fixed schemas.
 - The actual recent-menu entry is `在职人员花名册`.
 - The actual export dialog button is `转后台执行`.
 - Report scheme and employment type are both selected through F7 dialogs.

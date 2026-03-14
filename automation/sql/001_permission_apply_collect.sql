@@ -1,55 +1,55 @@
 CREATE TABLE IF NOT EXISTS "申请单基本信息" (
-    document_no VARCHAR(64) PRIMARY KEY,
-    employee_no VARCHAR(64) NOT NULL,
-    permission_target VARCHAR(128) NOT NULL,
-    apply_reason TEXT,
-    document_status VARCHAR(64),
-    hr_org VARCHAR(128),
-    company_name VARCHAR(128),
-    department_name VARCHAR(128),
-    position_name VARCHAR(128),
-    apply_time TIMESTAMP NULL,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+    "单据编号" VARCHAR(64) PRIMARY KEY,
+    "工号" VARCHAR(64) NOT NULL,
+    "权限对象" VARCHAR(128) NOT NULL,
+    "申请理由" TEXT,
+    "单据状态" VARCHAR(64),
+    "人事管理组织" VARCHAR(128),
+    "公司" VARCHAR(128),
+    "部门" VARCHAR(128),
+    "职位" VARCHAR(128),
+    "申请日期" TIMESTAMP NULL,
+    "记录创建时间" TIMESTAMP NOT NULL DEFAULT NOW(),
+    "记录更新时间" TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS "申请单权限列表" (
-    id BIGSERIAL PRIMARY KEY,
-    document_no VARCHAR(64) NOT NULL REFERENCES "申请单基本信息"(document_no) ON DELETE CASCADE,
-    line_no VARCHAR(32),
-    apply_type VARCHAR(128),
-    role_name VARCHAR(255),
-    role_desc TEXT,
-    role_code VARCHAR(128),
-    social_security_unit TEXT,
-    org_scope_count INTEGER,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    CONSTRAINT uq_apply_form_permission_list UNIQUE (document_no, line_no)
+    "权限明细ID" BIGSERIAL PRIMARY KEY,
+    "单据编号" VARCHAR(64) NOT NULL REFERENCES "申请单基本信息"("单据编号") ON DELETE CASCADE,
+    "明细行号" VARCHAR(32),
+    "申请类型" VARCHAR(128),
+    "角色名称" VARCHAR(255),
+    "角色描述" TEXT,
+    "角色编码" VARCHAR(128),
+    "参保单位" TEXT,
+    "组织范围数量" INTEGER,
+    "记录创建时间" TIMESTAMP NOT NULL DEFAULT NOW(),
+    "记录更新时间" TIMESTAMP NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_apply_form_permission_list UNIQUE ("单据编号", "明细行号")
 );
 
 CREATE TABLE IF NOT EXISTS "申请单审批记录" (
-    id BIGSERIAL PRIMARY KEY,
-    document_no VARCHAR(64) NOT NULL REFERENCES "申请单基本信息"(document_no) ON DELETE CASCADE,
-    record_seq INTEGER,
-    node_name VARCHAR(128),
-    approver_name VARCHAR(128),
-    approver_org_or_position VARCHAR(255),
-    approval_action VARCHAR(64),
-    approval_opinion TEXT,
-    approval_time TIMESTAMP NULL,
-    raw_text TEXT,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    "审批记录ID" BIGSERIAL PRIMARY KEY,
+    "单据编号" VARCHAR(64) NOT NULL REFERENCES "申请单基本信息"("单据编号") ON DELETE CASCADE,
+    "审批记录顺序号" INTEGER,
+    "节点名称" VARCHAR(128),
+    "审批人" VARCHAR(128),
+    "审批人组织或职位" VARCHAR(255),
+    "审批动作" VARCHAR(64),
+    "审批意见" TEXT,
+    "审批时间" TIMESTAMP NULL,
+    "原始展示文本" TEXT,
+    "记录创建时间" TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS "申请表组织范围" (
-    id BIGSERIAL PRIMARY KEY,
-    document_no VARCHAR(64) NOT NULL REFERENCES "申请单基本信息"(document_no) ON DELETE CASCADE,
-    org_code VARCHAR(64) NOT NULL,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    CONSTRAINT uq_apply_form_org_scope UNIQUE (document_no, org_code)
+    "组织范围ID" BIGSERIAL PRIMARY KEY,
+    "单据编号" VARCHAR(64) NOT NULL REFERENCES "申请单基本信息"("单据编号") ON DELETE CASCADE,
+    "组织编码" VARCHAR(64) NOT NULL,
+    "记录创建时间" TIMESTAMP NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_apply_form_org_scope UNIQUE ("单据编号", "组织编码")
 );
 
-CREATE INDEX IF NOT EXISTS idx_apply_form_permission_list_document_no ON "申请单权限列表"(document_no);
-CREATE INDEX IF NOT EXISTS idx_apply_form_approval_record_document_no ON "申请单审批记录"(document_no);
-CREATE INDEX IF NOT EXISTS idx_apply_form_org_scope_document_no ON "申请表组织范围"(document_no);
+CREATE INDEX IF NOT EXISTS idx_apply_form_permission_list_document_no ON "申请单权限列表"("单据编号");
+CREATE INDEX IF NOT EXISTS idx_apply_form_approval_record_document_no ON "申请单审批记录"("单据编号");
+CREATE INDEX IF NOT EXISTS idx_apply_form_org_scope_document_no ON "申请表组织范围"("单据编号");

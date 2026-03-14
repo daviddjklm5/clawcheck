@@ -1,16 +1,16 @@
 CREATE TABLE IF NOT EXISTS "权限列表" (
-    role_code VARCHAR(64) PRIMARY KEY,
-    role_name VARCHAR(255) NOT NULL,
-    permission_level VARCHAR(64) NOT NULL,
-    role_group VARCHAR(16) NOT NULL,
-    is_remote_role BOOLEAN NOT NULL DEFAULT FALSE,
+    "角色编码" VARCHAR(64) PRIMARY KEY,
+    "角色名称" VARCHAR(255) NOT NULL,
+    "原始权限级别" VARCHAR(64) NOT NULL,
+    "归一化分组" VARCHAR(16) NOT NULL,
+    "是否远程角色" BOOLEAN NOT NULL DEFAULT FALSE,
     "不检查组织范围" BOOLEAN NOT NULL DEFAULT FALSE,
-    is_deprecated BOOLEAN NOT NULL DEFAULT FALSE,
-    is_active BOOLEAN NOT NULL DEFAULT TRUE,
-    source_system VARCHAR(32) NOT NULL DEFAULT 'manual_seed',
-    raw_payload JSONB,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+    "是否已取消角色" BOOLEAN NOT NULL DEFAULT FALSE,
+    "是否有效" BOOLEAN NOT NULL DEFAULT TRUE,
+    "数据来源" VARCHAR(32) NOT NULL DEFAULT 'manual_seed',
+    "原始快照" JSONB,
+    "记录创建时间" TIMESTAMP NOT NULL DEFAULT NOW(),
+    "记录更新时间" TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
 ALTER TABLE "权限列表"
@@ -116,18 +116,18 @@ WITH seed_data(role_code, role_name, permission_level, sort_order) AS (
         ('WY72', '（万物云其他军种）离司维护', 'W类-取消', 96)
 )
 INSERT INTO "权限列表" (
-    role_code,
-    role_name,
-    permission_level,
-    role_group,
-    is_remote_role,
+    "角色编码",
+    "角色名称",
+    "原始权限级别",
+    "归一化分组",
+    "是否远程角色",
     "不检查组织范围",
-    is_deprecated,
-    is_active,
-    source_system,
-    raw_payload,
-    created_at,
-    updated_at
+    "是否已取消角色",
+    "是否有效",
+    "数据来源",
+    "原始快照",
+    "记录创建时间",
+    "记录更新时间"
 )
 SELECT
     role_code,
@@ -157,23 +157,23 @@ SELECT
     NOW() AS created_at,
     NOW() AS updated_at
 FROM seed_data
-ON CONFLICT (role_code) DO UPDATE
-SET role_name = EXCLUDED.role_name,
-    permission_level = EXCLUDED.permission_level,
-    role_group = EXCLUDED.role_group,
-    is_remote_role = EXCLUDED.is_remote_role,
+ON CONFLICT ("角色编码") DO UPDATE
+SET "角色名称" = EXCLUDED."角色名称",
+    "原始权限级别" = EXCLUDED."原始权限级别",
+    "归一化分组" = EXCLUDED."归一化分组",
+    "是否远程角色" = EXCLUDED."是否远程角色",
     "不检查组织范围" = EXCLUDED."不检查组织范围",
-    is_deprecated = EXCLUDED.is_deprecated,
-    is_active = EXCLUDED.is_active,
-    source_system = EXCLUDED.source_system,
-    raw_payload = EXCLUDED.raw_payload,
-    updated_at = NOW();
+    "是否已取消角色" = EXCLUDED."是否已取消角色",
+    "是否有效" = EXCLUDED."是否有效",
+    "数据来源" = EXCLUDED."数据来源",
+    "原始快照" = EXCLUDED."原始快照",
+    "记录更新时间" = NOW();
 
 CREATE INDEX IF NOT EXISTS "idx_权限列表_permission_level"
-    ON "权限列表"(permission_level);
+    ON "权限列表"("原始权限级别");
 
 CREATE INDEX IF NOT EXISTS "idx_权限列表_role_group"
-    ON "权限列表"(role_group);
+    ON "权限列表"("归一化分组");
 
 CREATE INDEX IF NOT EXISTS "idx_权限列表_is_active"
-    ON "权限列表"(is_active);
+    ON "权限列表"("是否有效");

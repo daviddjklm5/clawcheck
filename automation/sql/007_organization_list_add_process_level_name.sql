@@ -1,2 +1,2 @@
 ALTER TABLE IF EXISTS "组织列表"
-    ADD COLUMN IF NOT EXISTS process_level_name TEXT;
+    ADD COLUMN IF NOT EXISTS "流程层级_名称" TEXT;

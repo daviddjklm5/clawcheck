@@ -75,6 +75,7 @@ PERMISSION_CATALOG_COLUMNS = {
     "permission_level": "原始权限级别",
     "role_group": "归一化分组",
     "is_remote_role": "是否远程角色",
+    "skip_org_scope_check": "不检查组织范围",
     "is_deprecated": "是否已取消角色",
     "is_active": "是否有效",
     "source_system": "数据来源",
@@ -202,6 +203,8 @@ class PostgresPermissionStore(_PostgresStoreBase):
             with connection.cursor() as cursor:
                 if self._column_exists(cursor, "申请单基本信息", BASIC_INFO_COLUMNS["document_no"]):
                     return
+                if self._column_exists(cursor, "申请单基本信息", "document_no"):
+                    raise RuntimeError('Detected legacy English schema for "申请单基本信息". Run automation/sql/012_rename_columns_to_cn_fixed_schema.sql first.')
                 cursor.execute(ddl)
                 for migration_sql_file in self.migration_sql_files:
                     cursor.execute(migration_sql_file.read_text(encoding="utf-8"))
@@ -397,6 +400,8 @@ class PostgresPermissionCatalogStore(_PostgresStoreBase):
             with connection.cursor() as cursor:
                 if self._column_exists(cursor, "权限列表", PERMISSION_CATALOG_COLUMNS["role_code"]):
                     return
+                if self._column_exists(cursor, "权限列表", "role_code"):
+                    raise RuntimeError('Detected legacy English schema for "权限列表". Run automation/sql/012_rename_columns_to_cn_fixed_schema.sql first.')
                 cursor.execute(ddl)
 
     def seed_catalog(self) -> dict[str, Any]:
@@ -434,6 +439,8 @@ class PostgresActiveRosterStore(_PostgresStoreBase):
             with connection.cursor() as cursor:
                 if self._column_exists(cursor, "在职花名册表", "人员编号"):
                     return
+                if self._column_exists(cursor, "在职花名册表", "employee_no"):
+                    raise RuntimeError('Detected legacy English schema for "在职花名册表". Run automation/sql/012_rename_columns_to_cn_fixed_schema.sql first.')
                 cursor.execute(ddl)
 
     def write_rows(
@@ -588,6 +595,8 @@ class PostgresOrganizationListStore(_PostgresStoreBase):
             with connection.cursor() as cursor:
                 if self._column_exists(cursor, "组织列表", "行政组织编码"):
                     return
+                if self._column_exists(cursor, "组织列表", "org_code"):
+                    raise RuntimeError('Detected legacy English schema for "组织列表". Run automation/sql/012_rename_columns_to_cn_fixed_schema.sql first.')
                 cursor.execute(ddl)
                 for migration_sql_file in self.migration_sql_files:
                     cursor.execute(migration_sql_file.read_text(encoding="utf-8"))
