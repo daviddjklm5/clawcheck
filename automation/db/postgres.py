@@ -379,14 +379,25 @@ class PostgresPermissionStore(_PostgresStoreBase):
             with connection.cursor() as cursor:
                 cursor.execute(
                     f"""
+                    WITH approval_counts AS (
+                        SELECT
+                            {self._quote_identifier(APPROVAL_RECORD_COLUMNS["document_no"])} AS document_no,
+                            COUNT(*)::INTEGER AS approval_record_count
+                        FROM {APPROVAL_RECORD_TABLE}
+                        WHERE {self._quote_identifier(APPROVAL_RECORD_COLUMNS["document_no"])} = ANY(%s)
+                        GROUP BY {self._quote_identifier(APPROVAL_RECORD_COLUMNS["document_no"])}
+                    )
                     SELECT
-                        {self._quote_identifier(BASIC_INFO_COLUMNS["document_no"])},
-                        {self._quote_identifier(BASIC_INFO_COLUMNS["latest_approval_time"])},
-                        COALESCE({self._quote_identifier(BASIC_INFO_COLUMNS["collection_count"])}, 1)
-                    FROM {BASIC_INFO_TABLE}
-                    WHERE {self._quote_identifier(BASIC_INFO_COLUMNS["document_no"])} = ANY(%s)
+                        bi.{self._quote_identifier(BASIC_INFO_COLUMNS["document_no"])},
+                        bi.{self._quote_identifier(BASIC_INFO_COLUMNS["latest_approval_time"])},
+                        COALESCE(bi.{self._quote_identifier(BASIC_INFO_COLUMNS["collection_count"])}, 1),
+                        COALESCE(ac.approval_record_count, 0)
+                    FROM {BASIC_INFO_TABLE} bi
+                    LEFT JOIN approval_counts ac
+                      ON ac.document_no = bi.{self._quote_identifier(BASIC_INFO_COLUMNS["document_no"])}
+                    WHERE bi.{self._quote_identifier(BASIC_INFO_COLUMNS["document_no"])} = ANY(%s)
                     """,
-                    (normalized_document_nos,),
+                    (normalized_document_nos, normalized_document_nos),
                 )
                 rows = cursor.fetchall()
 
@@ -395,6 +406,7 @@ class PostgresPermissionStore(_PostgresStoreBase):
                 "document_no": str(row[0]).strip(),
                 "latest_approval_time": self._normalize_timestamp_text(row[1]),
                 "collection_count": int(row[2]) if row[2] is not None else 1,
+                "approval_record_count": int(row[3]) if row[3] is not None else 0,
             }
             for row in rows
             if row and isinstance(row[0], str) and row[0].strip()

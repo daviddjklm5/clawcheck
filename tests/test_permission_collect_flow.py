@@ -147,6 +147,40 @@ class PermissionCollectFlowTest(unittest.TestCase):
         self.assertEqual(document["approval_records"][0]["approver_name"], "何颖")
         self.assertEqual(document["approval_records"][0]["approver_employee_no"], "00769528")
 
+    def test_collect_approval_record_cards_uses_scrollable_tabpage_script(self) -> None:
+        self.page.evaluate.return_value = []
+
+        self.flow._collect_approval_record_cards()
+
+        script, selector = self.page.evaluate.call_args.args
+        self.assertIn("scrollTop", script)
+        self.assertEqual(selector, "#tabpageap_approvalrecord")
+
+    def test_parse_approval_record_cards_preserves_multi_round_records(self) -> None:
+        records = [
+            {
+                "record_seq": "1",
+                "header_text": "权限申请提交 何颖(00769528)|人力业务支持专业经理 提交",
+                "approval_time": "2026-03-12 09:42:23",
+                "approval_opinion": "提交",
+                "raw_text": "权限申请提交 何颖(00769528)|人力业务支持专业经理 提交 2026-03-12 09:42:23 提交",
+            },
+            {
+                "record_seq": "5",
+                "header_text": "权限申请提交 何颖(00769528)|人力业务支持专业经理 提交",
+                "approval_time": "2026-03-13 15:46:49",
+                "approval_opinion": "提交",
+                "raw_text": "权限申请提交 何颖(00769528)|人力业务支持专业经理 提交 2026-03-13 15:46:49 提交",
+            },
+        ]
+
+        normalized = self.flow._parse_approval_record_cards(records)
+
+        self.assertEqual(len(normalized), 2)
+        self.assertEqual(normalized[0]["approver_name"], "何颖(00769528)")
+        self.assertEqual(normalized[0]["approval_time"], "2026-03-12 09:42:23")
+        self.assertEqual(normalized[1]["approval_time"], "2026-03-13 15:46:49")
+
 
 if __name__ == "__main__":
     unittest.main()

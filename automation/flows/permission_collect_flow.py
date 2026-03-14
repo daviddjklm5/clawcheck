@@ -18,6 +18,7 @@ DETAIL_PREFERRED_HEADERS = ["行政组织详情", "行政组织", "角色描述"
 ORG_HEADERS = ["组织编码", "组织名称", "所属公司", "组织长名称"]
 APPROVAL_TIMESTAMP_RE = re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}")
 DETAIL_COUNT_RE = re.compile(r"查看详情\((\d+)\)")
+APPROVAL_TABPAGE_SELECTOR = "#tabpageap_approvalrecord"
 
 
 class PermissionCollectFlow:
@@ -698,33 +699,125 @@ class PermissionCollectFlow:
         approval_tab.click(force=True)
         deadline = time.monotonic() + (self.timeout_ms / 1000)
         while time.monotonic() < deadline:
-            visible_blocks = self.page.locator("li.kd-cq-tabpage:not(.hidden) ._2QHPFSVv")
+            visible_blocks = self.page.locator(f"{APPROVAL_TABPAGE_SELECTOR} ._2QHPFSVv")
+            if visible_blocks.count() == 0:
+                visible_blocks = self.page.locator("li.kd-cq-tabpage:not(.hidden) ._2QHPFSVv")
             if visible_blocks.count() > 0:
                 break
             self.page.wait_for_timeout(200)
         else:
             raise PlaywrightTimeoutError("Approval record tab did not become visible")
-        records = self.page.evaluate(
-            r"""() => {
+
+        records = self._collect_approval_record_cards()
+        return self._parse_approval_record_cards(records)
+
+    def _collect_approval_record_cards(self) -> list[dict[str, str]]:
+        return self.page.evaluate(
+            r"""async (tabSelector) => {
                 const normalize = (value) => (value || '').replace(/\s+/g, ' ').trim();
-                const blocks = [...document.querySelectorAll('li.kd-cq-tabpage:not(.hidden) ._2QHPFSVv')];
-                return blocks.map((block, index) => {
+                const wait = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
+                const waitForPaint = async () => {
+                    await new Promise((resolve) => window.requestAnimationFrame(() => resolve(undefined)));
+                    await wait(80);
+                };
+                const root =
+                    document.querySelector(tabSelector)
+                    || document.querySelector('li.kd-cq-tabpage:not(.hidden)');
+                if (!root) return [];
+
+                const cardSelector = '._2QHPFSVv';
+                const toRecord = (block) => {
                     const header = block.querySelector('h4');
                     const fullHeader = normalize(header?.innerText || '');
                     const timeText = normalize(block.querySelector('p.zPG-NFNf')?.innerText || '');
                     const opinionNode = block.querySelector('p._3aIXYPkW');
                     const opinionVisible = opinionNode && window.getComputedStyle(opinionNode).display !== 'none';
-                    const opinion = opinionVisible ? normalize(opinionNode.innerText) : '';
+                    const opinion = opinionVisible ? normalize(opinionNode.innerText || '') : '';
                     return {
-                        record_seq: String(index + 1),
                         header_text: fullHeader,
                         approval_time: timeText,
                         approval_opinion: opinion,
                         raw_text: normalize(block.innerText || ''),
                     };
-                });
-            }"""
+                };
+                const findScrollable = () => {
+                    const candidates = [root, ...root.querySelectorAll('*')];
+                    for (const element of candidates) {
+                        if (!(element instanceof HTMLElement)) continue;
+                        if (!element.querySelector(cardSelector) && !element.matches(cardSelector)) continue;
+                        const style = window.getComputedStyle(element);
+                        const overflowY = `${style.overflowY} ${style.overflow}`.toLowerCase();
+                        if (!/(auto|scroll|overlay)/.test(overflowY)) continue;
+                        if (element.scrollHeight <= element.clientHeight + 4) continue;
+                        return element;
+                    }
+                    return null;
+                };
+
+                const collected = [];
+                const seen = new Set();
+                const collectVisibleCards = () => {
+                    const blocks = [...root.querySelectorAll(cardSelector)];
+                    for (const block of blocks) {
+                        const record = toRecord(block);
+                        const uniqueKey = record.raw_text || `${record.header_text}__${record.approval_time}`;
+                        if (!uniqueKey || seen.has(uniqueKey)) continue;
+                        seen.add(uniqueKey);
+                        collected.push(record);
+                    }
+                };
+
+                const scrollable = findScrollable();
+                collectVisibleCards();
+                if (!scrollable) {
+                    return collected.map((record, index) => ({ ...record, record_seq: String(index + 1) }));
+                }
+
+                let lastSeenCount = collected.length;
+                let stagnantRounds = 0;
+                for (let attempt = 0; attempt < 200; attempt += 1) {
+                    const maxScrollTop = Math.max(0, scrollable.scrollHeight - scrollable.clientHeight);
+                    if (scrollable.scrollTop >= maxScrollTop - 2) {
+                        break;
+                    }
+
+                    const nextScrollTop = Math.min(
+                        maxScrollTop,
+                        scrollable.scrollTop + Math.max(Math.floor(scrollable.clientHeight * 0.8), 160),
+                    );
+                    if (nextScrollTop <= scrollable.scrollTop) {
+                        break;
+                    }
+
+                    scrollable.scrollTop = nextScrollTop;
+                    scrollable.dispatchEvent(new Event('scroll', { bubbles: true }));
+                    await waitForPaint();
+                    collectVisibleCards();
+
+                    if (collected.length == lastSeenCount) {
+                        stagnantRounds += 1;
+                        if (stagnantRounds >= 3) {
+                            if (scrollable.scrollTop >= maxScrollTop - 2) {
+                                break;
+                            }
+                            scrollable.scrollTop = Math.min(maxScrollTop, scrollable.scrollTop + 40);
+                            scrollable.dispatchEvent(new Event('scroll', { bubbles: true }));
+                            await waitForPaint();
+                            collectVisibleCards();
+                        }
+                    } else {
+                        stagnantRounds = 0;
+                        lastSeenCount = collected.length;
+                    }
+                }
+
+                return collected.map((record, index) => ({ ...record, record_seq: String(index + 1) }));
+            }""",
+            APPROVAL_TABPAGE_SELECTOR,
         )
+
+    @staticmethod
+    def _parse_approval_record_cards(records: list[dict[str, str]]) -> list[dict[str, str]]:
         normalized: list[dict[str, str]] = []
         for item in records:
             header_text = item.get("header_text", "")

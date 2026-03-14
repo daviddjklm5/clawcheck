@@ -574,14 +574,20 @@ def main() -> int:
                                 live_latest_approval_time = normalize_timestamp_text(
                                     probe.get("latest_approval_time")
                                 )
+                                live_approval_record_count = len(list(probe.get("approval_records") or []))
                                 stored_latest_approval_time = normalize_timestamp_text(
                                     existing_state.get("latest_approval_time")
                                 )
-                                if live_latest_approval_time == stored_latest_approval_time:
+                                stored_approval_record_count = int(existing_state.get("approval_record_count") or 0)
+                                if (
+                                    live_latest_approval_time == stored_latest_approval_time
+                                    and live_approval_record_count == stored_approval_record_count
+                                ):
                                     logger.info(
-                                        "Skipping document %s because latest approval time is unchanged: %s",
+                                        "Skipping document %s because approval snapshot is unchanged: latest=%s, count=%s",
                                         target_document_no,
                                         live_latest_approval_time or "<empty>",
+                                        live_approval_record_count,
                                     )
                                     if close_document_tab_after:
                                         collector.close_current_document_tab(target_document_no)
@@ -596,7 +602,17 @@ def main() -> int:
                                         "document_no": target_document_no,
                                         "stored_latest_approval_time": stored_latest_approval_time,
                                         "live_latest_approval_time": live_latest_approval_time,
+                                        "stored_approval_record_count": str(stored_approval_record_count),
+                                        "live_approval_record_count": str(live_approval_record_count),
                                     }
+                                logger.info(
+                                    "Recollecting document %s because approval snapshot changed: latest=%s->%s, count=%s->%s",
+                                    target_document_no,
+                                    stored_latest_approval_time or "<empty>",
+                                    live_latest_approval_time or "<empty>",
+                                    stored_approval_record_count,
+                                    live_approval_record_count,
+                                )
 
                             document = collector.collect_current_document(probe=probe)
                             elapsed_seconds = round(time.monotonic() - started_ts, 3)
@@ -643,6 +659,12 @@ def main() -> int:
                                         ),
                                         "live_latest_approval_time": str(
                                             collected_document.get("live_latest_approval_time") or ""
+                                        ),
+                                        "stored_approval_record_count": str(
+                                            collected_document.get("stored_approval_record_count") or ""
+                                        ),
+                                        "live_approval_record_count": str(
+                                            collected_document.get("live_approval_record_count") or ""
                                         ),
                                     }
                                 )
