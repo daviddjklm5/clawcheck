@@ -234,15 +234,15 @@ ALTER TABLE "组织属性查询" RENAME COLUMN updated_at TO "记录更新时间
 
 ALTER TABLE "权限列表" RENAME COLUMN role_code TO "角色编码";
 ALTER TABLE "权限列表" RENAME COLUMN role_name TO "角色名称";
-ALTER TABLE "权限列表" RENAME COLUMN permission_level TO "原始权限级别";
-ALTER TABLE "权限列表" RENAME COLUMN role_group TO "归一化分组";
-ALTER TABLE "权限列表" RENAME COLUMN is_remote_role TO "是否远程角色";
-ALTER TABLE "权限列表" RENAME COLUMN is_deprecated TO "是否已取消角色";
-ALTER TABLE "权限列表" RENAME COLUMN is_active TO "是否有效";
+ALTER TABLE "权限列表" RENAME COLUMN permission_level TO "权限级别";
 ALTER TABLE "权限列表" RENAME COLUMN source_system TO "数据来源";
 ALTER TABLE "权限列表" RENAME COLUMN raw_payload TO "原始快照";
 ALTER TABLE "权限列表" RENAME COLUMN created_at TO "记录创建时间";
 ALTER TABLE "权限列表" RENAME COLUMN updated_at TO "记录更新时间";
+ALTER TABLE "权限列表" DROP COLUMN IF EXISTS role_group;
+ALTER TABLE "权限列表" DROP COLUMN IF EXISTS is_remote_role;
+ALTER TABLE "权限列表" DROP COLUMN IF EXISTS is_deprecated;
+ALTER TABLE "权限列表" DROP COLUMN IF EXISTS is_active;
 
 CREATE OR REPLACE FUNCTION refresh_组织属性查询()
 RETURNS VOID

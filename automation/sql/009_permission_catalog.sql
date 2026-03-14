@@ -1,12 +1,8 @@
 CREATE TABLE IF NOT EXISTS "权限列表" (
     "角色编码" VARCHAR(64) PRIMARY KEY,
     "角色名称" VARCHAR(255) NOT NULL,
-    "原始权限级别" VARCHAR(64) NOT NULL,
-    "归一化分组" VARCHAR(16) NOT NULL,
-    "是否远程角色" BOOLEAN NOT NULL DEFAULT FALSE,
+    "权限级别" VARCHAR(64) NOT NULL,
     "不检查组织范围" BOOLEAN NOT NULL DEFAULT FALSE,
-    "是否已取消角色" BOOLEAN NOT NULL DEFAULT FALSE,
-    "是否有效" BOOLEAN NOT NULL DEFAULT TRUE,
     "数据来源" VARCHAR(32) NOT NULL DEFAULT 'manual_seed',
     "原始快照" JSONB,
     "记录创建时间" TIMESTAMP NOT NULL DEFAULT NOW(),
@@ -15,6 +11,32 @@ CREATE TABLE IF NOT EXISTS "权限列表" (
 
 ALTER TABLE "权限列表"
     ADD COLUMN IF NOT EXISTS "不检查组织范围" BOOLEAN NOT NULL DEFAULT FALSE;
+
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND table_name = '权限列表'
+          AND column_name = '原始权限级别'
+    ) AND NOT EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND table_name = '权限列表'
+          AND column_name = '权限级别'
+    ) THEN
+        EXECUTE 'ALTER TABLE "权限列表" RENAME COLUMN "原始权限级别" TO "权限级别"';
+    END IF;
+END
+$$;
+
+ALTER TABLE "权限列表"
+    DROP COLUMN IF EXISTS "归一化分组",
+    DROP COLUMN IF EXISTS "是否远程角色",
+    DROP COLUMN IF EXISTS "是否已取消角色",
+    DROP COLUMN IF EXISTS "是否有效";
 
 WITH seed_data(role_code, role_name, permission_level, sort_order) AS (
     VALUES
@@ -118,12 +140,8 @@ WITH seed_data(role_code, role_name, permission_level, sort_order) AS (
 INSERT INTO "权限列表" (
     "角色编码",
     "角色名称",
-    "原始权限级别",
-    "归一化分组",
-    "是否远程角色",
+    "权限级别",
     "不检查组织范围",
-    "是否已取消角色",
-    "是否有效",
     "数据来源",
     "原始快照",
     "记录创建时间",
@@ -133,20 +151,7 @@ SELECT
     role_code,
     role_name,
     permission_level,
-    CASE
-        WHEN permission_level LIKE 'A类-%' THEN 'A'
-        WHEN permission_level LIKE 'B1类-%' THEN 'B1'
-        WHEN permission_level LIKE 'B2类-%' THEN 'B2'
-        WHEN permission_level LIKE 'C类-%' THEN 'C'
-        WHEN permission_level LIKE 'S1类-%' THEN 'S1'
-        WHEN permission_level LIKE 'S2类-%' THEN 'S2'
-        WHEN permission_level LIKE 'W类-%' THEN 'W'
-        ELSE 'UNKNOWN'
-    END AS role_group,
-    permission_level = 'A类-远程' AS is_remote_role,
     role_code IN ('RLHMD001', 'DTX009') AS "不检查组织范围",
-    permission_level = 'W类-取消' AS is_deprecated,
-    permission_level <> 'W类-取消' AS is_active,
     'manual_seed' AS source_system,
     jsonb_build_object(
         'role_code', role_code,
@@ -159,21 +164,11 @@ SELECT
 FROM seed_data
 ON CONFLICT ("角色编码") DO UPDATE
 SET "角色名称" = EXCLUDED."角色名称",
-    "原始权限级别" = EXCLUDED."原始权限级别",
-    "归一化分组" = EXCLUDED."归一化分组",
-    "是否远程角色" = EXCLUDED."是否远程角色",
+    "权限级别" = EXCLUDED."权限级别",
     "不检查组织范围" = EXCLUDED."不检查组织范围",
-    "是否已取消角色" = EXCLUDED."是否已取消角色",
-    "是否有效" = EXCLUDED."是否有效",
     "数据来源" = EXCLUDED."数据来源",
     "原始快照" = EXCLUDED."原始快照",
     "记录更新时间" = NOW();
 
 CREATE INDEX IF NOT EXISTS "idx_权限列表_permission_level"
-    ON "权限列表"("原始权限级别");
-
-CREATE INDEX IF NOT EXISTS "idx_权限列表_role_group"
-    ON "权限列表"("归一化分组");
-
-CREATE INDEX IF NOT EXISTS "idx_权限列表_is_active"
-    ON "权限列表"("是否有效");
+    ON "权限列表"("权限级别");

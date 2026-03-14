@@ -233,11 +233,7 @@ ALTER TABLE "组织属性查询" RENAME COLUMN "记录更新时间" TO updated_a
 
 ALTER TABLE "权限列表" RENAME COLUMN "角色编码" TO role_code;
 ALTER TABLE "权限列表" RENAME COLUMN "角色名称" TO role_name;
-ALTER TABLE "权限列表" RENAME COLUMN "原始权限级别" TO permission_level;
-ALTER TABLE "权限列表" RENAME COLUMN "归一化分组" TO role_group;
-ALTER TABLE "权限列表" RENAME COLUMN "是否远程角色" TO is_remote_role;
-ALTER TABLE "权限列表" RENAME COLUMN "是否已取消角色" TO is_deprecated;
-ALTER TABLE "权限列表" RENAME COLUMN "是否有效" TO is_active;
+ALTER TABLE "权限列表" RENAME COLUMN "权限级别" TO permission_level;
 ALTER TABLE "权限列表" RENAME COLUMN "数据来源" TO source_system;
 ALTER TABLE "权限列表" RENAME COLUMN "原始快照" TO raw_payload;
 ALTER TABLE "权限列表" RENAME COLUMN "记录创建时间" TO created_at;

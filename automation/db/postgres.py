@@ -72,12 +72,8 @@ APPLY_FORM_ORG_SCOPE_COLUMNS = {
 PERMISSION_CATALOG_COLUMNS = {
     "role_code": "角色编码",
     "role_name": "角色名称",
-    "permission_level": "原始权限级别",
-    "role_group": "归一化分组",
-    "is_remote_role": "是否远程角色",
+    "permission_level": "权限级别",
     "skip_org_scope_check": "不检查组织范围",
-    "is_deprecated": "是否已取消角色",
-    "is_active": "是否有效",
     "source_system": "数据来源",
     "raw_payload": "原始快照",
     "created_at": "记录创建时间",
@@ -426,6 +422,38 @@ class PostgresPermissionCatalogStore(_PostgresStoreBase):
             "table_name": self.table_name.strip('"'),
             "total_rows": total_rows,
             "counts_by_permission_level": counts_by_permission_level,
+        }
+
+    def fetch_by_role_codes(self, role_codes: Iterable[str]) -> dict[str, dict[str, Any]]:
+        normalized_codes = sorted({code.strip() for code in role_codes if isinstance(code, str) and code.strip()})
+        if not normalized_codes:
+            return {}
+
+        self.ensure_table()
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    f"""
+                    SELECT
+                        {self._quote_identifier(PERMISSION_CATALOG_COLUMNS["role_code"])},
+                        {self._quote_identifier(PERMISSION_CATALOG_COLUMNS["role_name"])},
+                        {self._quote_identifier(PERMISSION_CATALOG_COLUMNS["permission_level"])},
+                        {self._quote_identifier(PERMISSION_CATALOG_COLUMNS["skip_org_scope_check"])}
+                    FROM {self.table_name}
+                    WHERE {self._quote_identifier(PERMISSION_CATALOG_COLUMNS["role_code"])} = ANY(%s)
+                    """,
+                    (normalized_codes,),
+                )
+                rows = cursor.fetchall()
+
+        return {
+            str(row[0]): {
+                "role_code": str(row[0]),
+                "role_name": str(row[1]),
+                "permission_level": str(row[2]),
+                "skip_org_scope_check": bool(row[3]),
+            }
+            for row in rows
         }
 
 
