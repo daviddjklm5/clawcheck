@@ -6,6 +6,11 @@ import json
 from pathlib import Path
 from typing import Any
 
+from automation.utils.approval_record_helpers import (
+    collect_unresolved_approver_names,
+    derive_latest_approval_time,
+    normalize_approval_records,
+)
 from automation.utils.config_loader import DatabaseSettings
 
 try:
@@ -30,6 +35,7 @@ BASIC_INFO_COLUMNS = {
     "department_name": "部门",
     "position_name": "职位",
     "apply_time": "申请日期",
+    "latest_approval_time": "最新审批时间",
     "created_at": "记录创建时间",
     "updated_at": "记录更新时间",
 }
@@ -54,6 +60,7 @@ APPROVAL_RECORD_COLUMNS = {
     "record_seq": "审批记录顺序号",
     "node_name": "节点名称",
     "approver_name": "审批人",
+    "approver_employee_no": "工号",
     "approver_org_or_position": "审批人组织或职位",
     "approval_action": "审批动作",
     "approval_opinion": "审批意见",
@@ -194,6 +201,9 @@ class PostgresPermissionStore(_PostgresStoreBase):
         Path(__file__).resolve().parents[1] / "sql" / "010_permission_apply_collect_migrate_basic_info.sql",
         Path(__file__).resolve().parents[1] / "sql" / "011_permission_apply_collect_trim_columns.sql",
     ]
+    schema_upgrade_sql_files = [
+        Path(__file__).resolve().parents[1] / "sql" / "016_permission_apply_collect_approval_record_latest_time.sql",
+    ]
     role_org_scope_migration_sql = (
         Path(__file__).resolve().parents[1] / "sql" / "014_apply_form_org_scope_role_org_refactor.sql"
     )
@@ -256,17 +266,133 @@ class PostgresPermissionStore(_PostgresStoreBase):
                         cursor.execute(migration_sql_file.read_text(encoding="utf-8"))
                 if self._apply_form_org_scope_needs_role_refactor(cursor):
                     cursor.execute(self.role_org_scope_migration_sql.read_text(encoding="utf-8"))
+                for migration_sql_file in self.schema_upgrade_sql_files:
+                    cursor.execute(migration_sql_file.read_text(encoding="utf-8"))
+
+    @classmethod
+    def _normalize_document_locally(cls, document: dict[str, Any]) -> dict[str, Any]:
+        normalized_document = dict(document)
+        basic_info = dict(document.get("basic_info", {}))
+        approval_records = normalize_approval_records(list(document.get("approval_records", [])))
+        basic_info["latest_approval_time"] = derive_latest_approval_time(approval_records)
+        normalized_document["basic_info"] = basic_info
+        normalized_document["approval_records"] = approval_records
+        return normalized_document
+
+    @classmethod
+    def _normalize_documents_locally(cls, documents: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [cls._normalize_document_locally(document) for document in documents]
+
+    @classmethod
+    def _collect_unresolved_approver_names(cls, documents: Iterable[dict[str, Any]]) -> set[str]:
+        unresolved_names: set[str] = set()
+        for document in documents:
+            unresolved_names.update(collect_unresolved_approver_names(list(document.get("approval_records", []))))
+        return unresolved_names
+
+    @classmethod
+    def _apply_approver_employee_no_map(
+        cls,
+        documents: Iterable[dict[str, Any]],
+        approver_employee_no_by_name: dict[str, str],
+    ) -> list[dict[str, Any]]:
+        normalized_documents: list[dict[str, Any]] = []
+        for document in documents:
+            normalized_document = dict(document)
+            basic_info = dict(document.get("basic_info", {}))
+            approval_records = normalize_approval_records(
+                list(document.get("approval_records", [])),
+                approver_employee_no_by_name=approver_employee_no_by_name,
+            )
+            basic_info["latest_approval_time"] = derive_latest_approval_time(approval_records)
+            normalized_document["basic_info"] = basic_info
+            normalized_document["approval_records"] = approval_records
+            normalized_documents.append(normalized_document)
+        return normalized_documents
+
+    def prepare_documents(
+        self,
+        documents: Iterable[dict[str, Any]],
+        resolve_roster_approver_employee_no: bool = True,
+    ) -> list[dict[str, Any]]:
+        normalized_documents = self._normalize_documents_locally(documents)
+        if not normalized_documents or not resolve_roster_approver_employee_no:
+            return normalized_documents
+        if psycopg is None or not self.is_configured(self.settings):
+            return normalized_documents
+
+        unresolved_names = self._collect_unresolved_approver_names(normalized_documents)
+        if not unresolved_names:
+            return normalized_documents
+
+        try:
+            with self.connect() as connection:
+                with connection.cursor() as cursor:
+                    approver_employee_no_by_name = self._fetch_unique_roster_employee_no_by_names(cursor, unresolved_names)
+        except Exception:
+            return normalized_documents
+
+        return self._apply_approver_employee_no_map(normalized_documents, approver_employee_no_by_name)
 
     def write_documents(self, documents: Iterable[dict[str, Any]]) -> None:
-        normalized_documents = list(documents)
+        normalized_documents = self._normalize_documents_locally(documents)
         if not normalized_documents:
             return
 
         self.ensure_table()
         with self.connect() as connection:
             with connection.cursor() as cursor:
+                unresolved_names = self._collect_unresolved_approver_names(normalized_documents)
+                approver_employee_no_by_name = self._fetch_unique_roster_employee_no_by_names(cursor, unresolved_names)
+                normalized_documents = self._apply_approver_employee_no_map(
+                    normalized_documents,
+                    approver_employee_no_by_name,
+                )
                 for document in normalized_documents:
                     self._write_document(cursor, document)
+
+    def _fetch_unique_roster_employee_no_by_names(self, cursor, approver_names: Iterable[str]) -> dict[str, str]:
+        name_list = sorted(
+            {
+                str(name).strip()
+                for name in approver_names
+                if isinstance(name, str) and name.strip()
+            }
+        )
+        if not name_list:
+            return {}
+        if (
+            not self._column_exists(cursor, "在职花名册表", "姓名")
+            or not self._column_exists(cursor, "在职花名册表", "人员编号")
+        ):
+            return {}
+
+        cursor.execute(
+            """
+            WITH matched AS (
+                SELECT "姓名", "人员编号"
+                FROM "在职花名册表"
+                WHERE "姓名" = ANY(%s)
+                  AND "姓名" IS NOT NULL
+                  AND "人员编号" IS NOT NULL
+            )
+            SELECT "姓名", MIN("人员编号") AS "人员编号"
+            FROM matched
+            GROUP BY "姓名"
+            HAVING COUNT(DISTINCT "人员编号") = 1
+            """,
+            (name_list,),
+        )
+        rows = cursor.fetchall()
+        return {
+            str(row[0]).strip(): str(row[1]).strip()
+            for row in rows
+            if row
+            and isinstance(row[0], str)
+            and row[0].strip()
+            and isinstance(row[1], str)
+            and row[1].strip()
+        }
 
     def _write_document(self, cursor, document: dict[str, Any]) -> None:
         basic = document["basic_info"]
@@ -282,6 +408,7 @@ class PostgresPermissionStore(_PostgresStoreBase):
             BASIC_INFO_COLUMNS["department_name"],
             BASIC_INFO_COLUMNS["position_name"],
             BASIC_INFO_COLUMNS["apply_time"],
+            BASIC_INFO_COLUMNS["latest_approval_time"],
             BASIC_INFO_COLUMNS["created_at"],
             BASIC_INFO_COLUMNS["updated_at"],
         ]
@@ -301,6 +428,7 @@ class PostgresPermissionStore(_PostgresStoreBase):
                 %(department_name)s,
                 %(position_name)s,
                 %(apply_time)s,
+                %(latest_approval_time)s,
                 NOW(),
                 NOW()
             )
@@ -314,11 +442,13 @@ class PostgresPermissionStore(_PostgresStoreBase):
                 {self._quote_identifier(BASIC_INFO_COLUMNS["department_name"])} = EXCLUDED.{self._quote_identifier(BASIC_INFO_COLUMNS["department_name"])},
                 {self._quote_identifier(BASIC_INFO_COLUMNS["position_name"])} = EXCLUDED.{self._quote_identifier(BASIC_INFO_COLUMNS["position_name"])},
                 {self._quote_identifier(BASIC_INFO_COLUMNS["apply_time"])} = EXCLUDED.{self._quote_identifier(BASIC_INFO_COLUMNS["apply_time"])},
+                {self._quote_identifier(BASIC_INFO_COLUMNS["latest_approval_time"])} = EXCLUDED.{self._quote_identifier(BASIC_INFO_COLUMNS["latest_approval_time"])},
                 {self._quote_identifier(BASIC_INFO_COLUMNS["updated_at"])} = NOW()
             """,
             {
                 **basic,
                 "apply_time": self._null_if_blank(basic.get("apply_time")),
+                "latest_approval_time": self._null_if_blank(basic.get("latest_approval_time")),
             },
         )
 
@@ -384,6 +514,7 @@ class PostgresPermissionStore(_PostgresStoreBase):
                 APPROVAL_RECORD_COLUMNS["record_seq"],
                 APPROVAL_RECORD_COLUMNS["node_name"],
                 APPROVAL_RECORD_COLUMNS["approver_name"],
+                APPROVAL_RECORD_COLUMNS["approver_employee_no"],
                 APPROVAL_RECORD_COLUMNS["approver_org_or_position"],
                 APPROVAL_RECORD_COLUMNS["approval_action"],
                 APPROVAL_RECORD_COLUMNS["approval_opinion"],
@@ -400,6 +531,7 @@ class PostgresPermissionStore(_PostgresStoreBase):
                     %(record_seq)s,
                     %(node_name)s,
                     %(approver_name)s,
+                    %(approver_employee_no)s,
                     %(approver_org_or_position)s,
                     %(approval_action)s,
                     %(approval_opinion)s,
@@ -413,6 +545,7 @@ class PostgresPermissionStore(_PostgresStoreBase):
                         **row,
                         "document_no": document_no,
                         "record_seq": self._to_int_or_none(row.get("record_seq")),
+                        "approver_employee_no": self._null_if_blank(row.get("approver_employee_no")),
                         "approval_time": self._null_if_blank(row.get("approval_time")),
                     }
                     for row in approval_rows

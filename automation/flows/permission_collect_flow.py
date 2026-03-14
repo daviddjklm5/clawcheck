@@ -9,6 +9,8 @@ from typing import Any
 
 from playwright.sync_api import Page, TimeoutError as PlaywrightTimeoutError
 
+from automation.utils.approval_record_helpers import derive_latest_approval_time, normalize_approval_records
+
 
 TODO_HEADERS = ["单据", "单据编号", "发起人", "主题", "状态"]
 DETAIL_HEADERS = ["申请类型", "角色名称", "角色编码"]
@@ -109,7 +111,8 @@ class PermissionCollectFlow:
             basic_info.get("单据编号", ""),
             permission_details,
         )
-        approval_records = self.extract_approval_records()
+        approval_records = normalize_approval_records(self.extract_approval_records())
+        latest_approval_time = derive_latest_approval_time(approval_records)
         organization_codes = sorted(
             {
                 code
@@ -130,6 +133,7 @@ class PermissionCollectFlow:
                 "department_name": basic_info.get("部门", ""),
                 "position_name": basic_info.get("职位", ""),
                 "apply_time": basic_info.get("申请日期", ""),
+                "latest_approval_time": latest_approval_time,
             },
             "permission_details": permission_details,
             "approval_records": approval_records,

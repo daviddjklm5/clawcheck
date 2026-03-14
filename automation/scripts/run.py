@@ -271,6 +271,7 @@ def main() -> int:
     from automation.pages.home_page import HomePage
     from automation.pages.login_page import LoginPage
     from automation.utils.playwright_helpers import save_screenshot, timestamp_slug
+    from automation.utils.approval_record_helpers import collect_unresolved_approver_names
     from automation.utils.retry import retry_call
     from automation.utils.organization_list_excel import parse_organization_list_workbook
     from automation.utils.roster_excel import parse_roster_workbook
@@ -563,6 +564,26 @@ def main() -> int:
                     if not documents:
                         raise RuntimeError("No permission application documents were collected successfully")
 
+                    store = PostgresPermissionStore(settings.db)
+                    documents = store.prepare_documents(documents)
+                    unresolved_approver_names = sorted(
+                        {
+                            approver_name
+                            for document in documents
+                            for approver_name in collect_unresolved_approver_names(
+                                list(document.get("approval_records", []))
+                            )
+                        }
+                    )
+                    if unresolved_approver_names:
+                        preview_names = ", ".join(unresolved_approver_names[:20])
+                        logger.warning(
+                            "Approver employee_no unresolved for %s name(s): %s%s",
+                            len(unresolved_approver_names),
+                            preview_names,
+                            " ..." if len(unresolved_approver_names) > 20 else "",
+                        )
+
                     dump_path = resolve_path(args.dump_json) if args.dump_json else logs_dir / f"collect_{timestamp_slug()}.json"
                     dump_path.parent.mkdir(parents=True, exist_ok=True)
                     dump_path.write_text(json.dumps(documents, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -576,7 +597,6 @@ def main() -> int:
                     if args.dry_run:
                         logger.info("Dry-run enabled; skipping PostgreSQL write")
                     else:
-                        store = PostgresPermissionStore(settings.db)
                         store.write_documents(documents)
                         logger.info("Persisted %s document(s) to PostgreSQL", len(documents))
 

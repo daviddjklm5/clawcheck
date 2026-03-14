@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS "申请单基本信息" (
     "部门" VARCHAR(128),
     "职位" VARCHAR(128),
     "申请日期" TIMESTAMP NULL,
+    "最新审批时间" TIMESTAMP NULL,
     "记录创建时间" TIMESTAMP NOT NULL DEFAULT NOW(),
     "记录更新时间" TIMESTAMP NOT NULL DEFAULT NOW()
 );
@@ -34,6 +35,7 @@ CREATE TABLE IF NOT EXISTS "申请单审批记录" (
     "审批记录顺序号" INTEGER,
     "节点名称" VARCHAR(128),
     "审批人" VARCHAR(128),
+    "工号" VARCHAR(64),
     "审批人组织或职位" VARCHAR(255),
     "审批动作" VARCHAR(64),
     "审批意见" TEXT,

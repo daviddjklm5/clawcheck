@@ -107,6 +107,46 @@ class PermissionCollectFlowTest(unittest.TestCase):
             ],
         )
 
+    def test_collect_current_document_filters_empty_approval_steps_and_sets_latest_time(self) -> None:
+        with (
+            patch.object(self.flow, "extract_basic_info", return_value={"单据编号": "QX-1", "工号": "05026859"}),
+            patch.object(self.flow, "_wait_for_permission_detail_grid_ready"),
+            patch.object(self.flow, "extract_grid_rows", return_value=[]),
+            patch.object(self.flow, "extract_role_organization_scopes", return_value=[]),
+            patch.object(
+                self.flow,
+                "extract_approval_records",
+                return_value=[
+                    {
+                        "record_seq": "1",
+                        "node_name": "属地人力资源部负责人",
+                        "approver_name": "",
+                        "approver_org_or_position": "",
+                        "approval_action": "",
+                        "approval_opinion": "",
+                        "approval_time": "",
+                        "raw_text": "属地人力资源部负责人 通过规则：全部通过",
+                    },
+                    {
+                        "record_seq": "2",
+                        "node_name": "部门负责人",
+                        "approver_name": "何颖(00769528)",
+                        "approver_org_or_position": "负责人",
+                        "approval_action": "同意",
+                        "approval_opinion": "",
+                        "approval_time": "2026-03-14 10:00:00",
+                        "raw_text": "部门负责人 何颖(00769528)|负责人 同意 2026-03-14 10:00:00",
+                    },
+                ],
+            ),
+        ):
+            document = self.flow.collect_current_document()
+
+        self.assertEqual(document["basic_info"]["latest_approval_time"], "2026-03-14 10:00:00")
+        self.assertEqual(len(document["approval_records"]), 1)
+        self.assertEqual(document["approval_records"][0]["approver_name"], "何颖")
+        self.assertEqual(document["approval_records"][0]["approver_employee_no"], "00769528")
+
 
 if __name__ == "__main__":
     unittest.main()

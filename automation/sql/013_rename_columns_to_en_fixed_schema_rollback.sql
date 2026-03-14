@@ -15,6 +15,7 @@ ALTER TABLE "申请单基本信息" RENAME COLUMN "公司" TO company_name;
 ALTER TABLE "申请单基本信息" RENAME COLUMN "部门" TO department_name;
 ALTER TABLE "申请单基本信息" RENAME COLUMN "职位" TO position_name;
 ALTER TABLE "申请单基本信息" RENAME COLUMN "申请日期" TO apply_time;
+ALTER TABLE "申请单基本信息" RENAME COLUMN "最新审批时间" TO latest_approval_time;
 ALTER TABLE "申请单基本信息" RENAME COLUMN "记录创建时间" TO created_at;
 ALTER TABLE "申请单基本信息" RENAME COLUMN "记录更新时间" TO updated_at;
 
@@ -35,6 +36,7 @@ ALTER TABLE "申请单审批记录" RENAME COLUMN "单据编号" TO document_no;
 ALTER TABLE "申请单审批记录" RENAME COLUMN "审批记录顺序号" TO record_seq;
 ALTER TABLE "申请单审批记录" RENAME COLUMN "节点名称" TO node_name;
 ALTER TABLE "申请单审批记录" RENAME COLUMN "审批人" TO approver_name;
+ALTER TABLE "申请单审批记录" RENAME COLUMN "工号" TO approver_employee_no;
 ALTER TABLE "申请单审批记录" RENAME COLUMN "审批人组织或职位" TO approver_org_or_position;
 ALTER TABLE "申请单审批记录" RENAME COLUMN "审批动作" TO approval_action;
 ALTER TABLE "申请单审批记录" RENAME COLUMN "审批意见" TO approval_opinion;
