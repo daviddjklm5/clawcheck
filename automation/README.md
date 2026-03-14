@@ -100,9 +100,11 @@ python automation/scripts/run.py rolecatalog \
 - SQL: `automation/sql/007_organization_list_add_process_level_name.sql`
 - SQL: `automation/sql/008_organization_list_standardize_latest_columns.sql`
 - SQL: `automation/sql/009_permission_catalog.sql`
+- SQL: `automation/sql/010_permission_apply_collect_migrate_basic_info.sql`
 
 ## 5. Notes
 - Prod roster flow targets `https://hr.onewo.com/ierp/?formId=home_page`.
+- The permission collect import auto-migrates legacy PostgreSQL table `basic_info` into `申请单基本信息` before writing.
 - The actual recent-menu entry is `在职人员花名册`.
 - The actual export dialog button is `转后台执行`.
 - Report scheme and employment type are both selected through F7 dialogs.

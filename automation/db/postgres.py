@@ -77,10 +77,28 @@ class _PostgresStoreBase:
 
 
 class PostgresPermissionStore(_PostgresStoreBase):
-    def write_documents(self, documents: Iterable[dict[str, Any]]) -> None:
+    schema_sql = Path(__file__).resolve().parents[1] / "sql" / "001_permission_apply_collect.sql"
+    migration_sql_files = [
+        Path(__file__).resolve().parents[1] / "sql" / "010_permission_apply_collect_migrate_basic_info.sql",
+    ]
+
+    def ensure_table(self) -> None:
+        ddl = self.schema_sql.read_text(encoding="utf-8")
         with self.connect() as connection:
             with connection.cursor() as cursor:
-                for document in documents:
+                cursor.execute(ddl)
+                for migration_sql_file in self.migration_sql_files:
+                    cursor.execute(migration_sql_file.read_text(encoding="utf-8"))
+
+    def write_documents(self, documents: Iterable[dict[str, Any]]) -> None:
+        normalized_documents = list(documents)
+        if not normalized_documents:
+            return
+
+        self.ensure_table()
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                for document in normalized_documents:
                     self._write_document(cursor, document)
 
     def _write_document(self, cursor, document: dict[str, Any]) -> None:

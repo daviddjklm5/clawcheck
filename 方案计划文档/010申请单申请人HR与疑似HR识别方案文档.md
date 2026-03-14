@@ -1,16 +1,17 @@
 # 方案编号010：申请单申请人HR与疑似HR识别方案文档
 
 ## 1. 方案目标
-基于 `申请单基本信息` 中的申请人工号，从 `在职花名册表` 匹配员工主数据，并结合以下字段判断申请人属于哪一类 HR 身份：
+基于 `申请单基本信息` 中的申请人工号，从 `在职花名册表` 匹配员工主数据，并结合以下字段及外部组织属性口径判断申请人属于哪一类 HR 身份：
 
 - `一级职能名称`
 - `二级职能名称`
 - `职位名称`
 - `标准岗位名称`
 - `组织路径名称`
+- `组织属性查询.wanyu_city_sales_department`
 
 本方案目标：
-- 建立一套可执行的 `H1 / H2 / H3 / HX` 分类口径
+- 建立一套可执行的 `H1 / H2 / HY / HX` 分类口径
 - 将“明确 HR”“推定 HR”“疑似 HR”“不是 HR”分层处理
 - 避免把挂在人力组织下的行政、法务、司机、PMO、运营等岗位直接误判为 HR
 - 为后续规则引擎输出稳定、可解释、可扩展的申请人身份标签
@@ -28,14 +29,14 @@
 - `H2`
   - 推定为 HR
   - 即当前在弱信号样本中，经调查后可单独提升为 HR 的职位
-- `H3`
+- `HY`
   - 疑似 HR
   - 当前存在 HR 弱信号，但证据不足，待后续继续补充规则
 - `HX`
   - 不是 HR
 
 ### 2.2 未匹配花名册的处理
-`H1 / H2 / H3 / HX` 建议仅用于**成功匹配花名册**的申请人。
+`H1 / H2 / HY / HX` 建议仅用于**成功匹配花名册**的申请人。
 
 若申请人工号未匹配到 `在职花名册表`，建议：
 - `roster_match_status = UNMATCHED`
@@ -58,7 +59,7 @@
 - 花名册快照日期：`2026-03-11`
 
 同时核对了当前申请单主表现状：
-- 当前数据库中的物理表名仍是 `basic_info`
+- 当前数据库中的申请单主表为 `申请单基本信息`
 - 当前仅有 `1` 条申请单主表记录
 - 该记录的 `employee_no` 未匹配到当前花名册
 
@@ -72,10 +73,17 @@
 - `职位名称`：`154,849`
 - `标准岗位名称`：`152,492`
 - `组织路径名称`：`154,849`
+- `department_id`：`154,849`
+
+与 `组织属性查询` 的关联情况如下：
+- 关联键：`在职花名册表.department_id = 组织属性查询.org_code`
+- 可关联到 `组织属性查询` 的人数：`154,849`
+- 其中 `wanyu_city_sales_department` 非空人数：`34,256`
 
 结论：
 - `一级职能名称`、`二级职能名称`、`标准岗位名称` 完整度较高，可作为主要判定字段
 - `职位名称`、`组织路径名称` 基本全量可用
+- `department_id -> 组织属性查询.org_code` 的关联链路可直接落地，可支撑基于 `wanyu_city_sales_department` 的增强判断
 - `职务` 字段本次不纳入主判定逻辑
 
 ### 3.3 H1 强信号分析
@@ -84,13 +92,25 @@
 - `一级职能名称 = 人力资源`：`3,492` 人
 - `职位名称` 命中 `人力 / 人事 / HR / HRBP` 等显式关键词：`2,334` 人
 - `标准岗位名称` 命中 `人力 / 人事 / HR / HRBP` 等显式关键词：`2,723` 人
+- `职位名称` 包含 `组织发展 / 薪酬 / 绩效 / 福利`：按最终口径纳入 `H1` 的共 `7` 人
+  - 其中 `目标与绩效管理专业总监` 仅在 `组织路径名称` 包含 `人力` 或 `人事` 时才纳入 H1
+- `组织属性查询.wanyu_city_sales_department` 非空，且 `职位名称 in ('认证中心负责人', '服务站总站长')`：`32` 人
+  - `服务站总站长`：`16` 人，原本已因 `一级职能名称 = 人力资源` 进入 H1
+  - `认证中心负责人`：`16` 人，属于该条规则额外覆盖的人群
+
+说明：
+- 以上为各强信号字段的命中量统计，字段之间存在交叉重叠，不能直接相加
+- 最终 `H1` 人数以 `4.2` 规则优先级判定结果为准
 
 按当前 H1 口径：
 - `一级职能名称 = 人力资源`
 - 或 `职位名称` 明确命中 HR 关键词
+- 或 `职位名称` 包含 `组织发展 / 薪酬 / 绩效 / 福利`
+  - 其中 `目标与绩效管理专业总监` 需同时满足 `组织路径名称` 包含 `人力` 或 `人事`
 - 或 `标准岗位名称` 明确命中 HR 关键词
+- 或 `wanyu_city_sales_department` 非空，且 `职位名称 in ('认证中心负责人', '服务站总站长')`
 
-则可识别出 `H1` 共 `3,565` 人。
+则可识别出 `H1` 共 `3,588` 人。
 
 ### 3.4 二级职能分析结果
 在 `一级职能名称 = 人力资源` 的 `3,492` 人中，`二级职能名称` 分布如下：
@@ -112,14 +132,14 @@
 结论：
 - `二级职能名称` 对于**解释 HR 内部子域**非常有价值
 - 但在当前数据中，`二级职能名称` 没有单独新增识别出额外 HR 人员
-- 因此 `二级职能名称` 适合作为解释字段，不建议在当前版本单独作为 H1 / H2 / H3 的主判定条件
+- 因此 `二级职能名称` 适合作为解释字段，不建议在当前版本单独作为 H1 / H2 / HY 的主判定条件
 
 ### 3.5 弱信号分析
-若仅使用 `组织路径名称` 中包含 `人力 / 人事 / HR` 作为判定条件，会命中一批弱信号人员。
+若仅使用 `组织路径名称` 中包含 `人力 / 人事` 作为判定条件，会命中一批弱信号人员。
 
-在去除 H1 强信号后，这批弱信号人员共 `120` 人，其中：
-- `H2`：`5` 人
-- `H3`：`115` 人
+在去除 H1 强信号后，这批弱信号人员共 `114` 人，其中：
+- `H2`：`11` 人
+- `HY`：`103` 人
 
 弱信号人群中，抽样确认存在以下明显非 HR 岗位：
 - `运营经理`
@@ -134,7 +154,13 @@
 - `组织路径名称` 不能直接把所有弱信号人群判成 HR
 - 但弱信号中也可能存在应当提升为 HR 的少量岗位，需要单独抽取并固化成 `H2`
 
-## 4. H1 / H2 / H3 / HX 判定口径
+补充调查结论：
+- 当前花名册中，`组织路径名称` 包含 `HR` 的记录仅 `12` 人，对应 `3` 条唯一路径
+- 其中只有 `1` 条路径不含 `人力 / 人事`：`万物云_祥盈企服_公共服务中心_深圳片区_深圳公共服务中心_A万科集团HR-SSC`
+- 该路径下 `2` 名人员本身已因其他强信号进入 `H1`
+- 因此将组织路径规则从“`人力 / 人事 / HR`”收窄为“`人力 / 人事`”，当前不会改变分类结果
+
+## 4. H1 / H2 / HY / HX 判定口径
 
 ### 4.1 第一步：按工号匹配花名册
 建议使用：
@@ -155,9 +181,12 @@
 
 1. `一级职能名称 = 人力资源`
 2. `职位名称` 明确命中 HR 关键词
-3. `标准岗位名称` 明确命中 HR 关键词
+3. `职位名称` 包含 `组织发展`、`薪酬`、`绩效`、`福利`
+   - 其中 `目标与绩效管理专业总监` 仅在 `组织路径名称` 包含 `人力` 或 `人事` 时纳入 `H1`
+4. `标准岗位名称` 明确命中 HR 关键词
+5. 通过 `department_id -> 组织属性查询.org_code` 关联后，`wanyu_city_sales_department` 非空，且 `职位名称 in ('认证中心负责人', '服务站总站长')`
 
-建议首版 H1 显式关键词口径采用保守规则，优先识别以下显式文本：
+H1 显式关键词口径采用保守规则，优先识别以下显式文本：
 - `人力`
 - `人事`
 - `HRBP`
@@ -169,8 +198,15 @@
 - `人力行政`
 - `人力业务支持`
 
+其中：
+- `出纳兼人事`、`行政人事主管`、`人力行政主管` 等也会因 `职位名称` 命中显式 HR 关键词进入 `H1`
+- 若后续业务希望将“行政人事 / 人力行政”类岗位下调到 `HY` 或 `HX`，需另行收紧 `H1` 的显式关键词规则
+
 这样设计的原因：
 - 可直接识别 `HRBP`、`人事运营`、`人力资源岗`、`人力综合管理`、`人事远程交付中心总经理` 等明确 HR 身份
+- 按当前规则，`职位` 包含 `组织发展 / 薪酬 / 绩效 / 福利` 时通常视为 H1；但 `目标与绩效管理专业总监` 必须同时位于 `人力 / 人事` 组织路径下才纳入 H1
+- 可补充识别万御城市营业部体系下的 `认证中心负责人`
+- `服务站总站长` 虽当前样本已被 `一级职能名称 = 人力资源` 覆盖，但保留在该规则中更稳，便于后续职能口径变化时仍可判定为 H1
 - 不会因为 `招聘`、`培训`、`人才发展` 等词出现在非 HR 职位里而误放大人群
 
 ### 4.3 H2：推定为 HR
@@ -183,13 +219,18 @@
 - `运营经理`
 - `运营主管`
 - `数据分析`
+- `组织与效能资深总监`
+- `部门负责人`
+- `AI与流程变革资深总监`
+- `平台与运营资深总监`
+- `总经理（或包含总经理字样，如副总经理）`
 
 并且必须同时满足：
 1. 不满足 H1
-2. `组织路径名称` 包含 `人力`、`人事` 或 `HR`
+2. `组织路径名称` 包含 `人力` 或 `人事`
 3. `职位名称` 属于上述 H2 白名单
 
-当前调查结果中，H2 共 `5` 人，样本包括：
+当前调查结果中，H2 共 `11` 人，样本包括：
 - `数据分析`
   - `万物云_万科物业_人力资源与行政服务部`
 - `运营主管`
@@ -200,26 +241,42 @@
   - `万物云_万物云城_高投城资_C人力资源与行政服务部`
 - `运营经理`
   - `万物云_福建战区代表处_K厦门联美万誉_K人力行政部-联美万誉`
+- `组织与效能资深总监`
+  - `万物云_万物云本部_人力资源与行政服务中心_BG人力资源行政服务中心_组织与效能组`
+- `部门负责人`
+  - `万物云_祥盈企服_远程交付中心_财务远程交付中心_武汉财务远程交付中心_人力资源组`
+- `AI与流程变革资深总监`
+  - `万物云_万物云本部_人力资源与行政服务中心_BG人力资源行政服务中心_平台与运营组`
+- `平台与运营资深总监`
+  - `万物云_万物云本部_人力资源与行政服务中心_BG人力资源行政服务中心_平台与运营组`
+- `总经理（三类）` / `副总经理`
+  - `万物云_投资与创新发展中心_万物成长被投企业_重庆天骄_西南区域_成都分公司_人力行政部`
 
 说明：
 - H2 是“经人工调查后提升”的职位型规则
 - 当前 H2 仅覆盖已调查确认的弱信号岗位
 - 后续若发现更多应提升岗位，可继续追加到 H2 白名单
 
-### 4.4 H3：疑似 HR
-满足以下条件时判为 `H3`：
+### 4.4 HY：疑似 HR
+满足以下条件时判为 `HY`：
 
 1. 已匹配到花名册
 2. 不满足 H1
 3. 不满足 H2
-4. `组织路径名称` 包含 `人力`、`人事` 或 `HR`
+4. `组织路径名称` 包含 `人力` 或 `人事`
 
 说明：
 - 这类人员通常挂在 HR 部门、人力共享、人事远程交付或人力行政服务组织下
 - 但目前证据不足，不能直接判 H1，也未进入 H2 白名单
 - 该类人群保留为“待补充规则”的疑似 HR 池
 
-当前统计下，H3 共 `115` 人。
+按当前口径统计，HY 当前共涉及 `41` 种职位、`103` 人。按职位语义可归纳为以下几类：
+- `员工体验与行政类`：`员工体验与行政（32）`、`员工体验与行政专业经理（11）`、`员工体验与行政高级专业经理（4）`、`员工体验与行政资深专业经理（1）`
+- `行政与综合支持类`：`行政管理（4）`、`行政主管（3）`、`综合行政（2）`、`行政经理（2）`、`前台（1）`、`后勤专员（1）`、`综合主管（1）`、`综合管理部经理（1）`、`行政专员（1）`、`驻场经理（1）`、`管家助理（1）`、`经理（1）`、`仓管员（1）`
+- `运营类`：`运营专员（5）`、`产品运营（1）`、`战略运营总监（1）`、`文化运营专家（1）`、`计划运营（1）`、`计划运营经理（1）`、`运营助理（1）`、`运营管理（1）`、`PMO（1）`
+- `企业文化与党建类`：`企业文化（3）`、`企业文化&可持续发展（1）`、`党务专员（1）`、`党建行政经理（1）`、`党建负责人（1）`
+- `客服与现场服务类`：`客服专员（4）`
+- `专业支持与其他待核类`：`法务（2）`、`司机（2）`、`业务BP（1）`、`信息主管（1）`、`信息技术副经理（1）`、`廉正监察专家（1）`、`招采副经理（1）`、`招采经理（1）`、`残疾人（1）`
 
 ### 4.5 HX：不是 HR
 满足以下条件时判为 `HX`：
@@ -227,9 +284,9 @@
 - 已匹配到花名册
 - 不满足 H1
 - 不满足 H2
-- 不满足 H3
+- 不满足 HY
 
-当前统计下，HX 共 `151,164` 人。
+当前统计下，HX 共 `151,147` 人。
 
 ## 5. 二级职能的使用建议
 
@@ -250,6 +307,7 @@
 ### 5.2 建议的 HR 子域标签
 对已判定为 `H1` 或 `H2` 的人员，建议进一步输出 `hr_subdomain`：
 
+- 映射顺序建议为：先按 `二级职能名称` 映射；若未命中，再按 `一级职能名称` 补充映射；若仍未命中，则回落到 `other_hr_domain`
 - `人力资源` -> `hr_general`
 - `人事运营` -> `hr_operations`
 - `招聘` / `招聘外包服务` -> `recruiting`
@@ -257,6 +315,7 @@
 - `员工关系` -> `employee_relations`
 - `人才发展` / `组织发展` -> `org_talent_development`
 - `人力业务支持` -> `hr_business_support`
+- `一级职能名称 in ('管理', '职能综合管理')` -> `hr_management`
 - 其他 -> `other_hr_domain`
 
 ## 6. 建议输出字段
@@ -265,22 +324,27 @@
 - `roster_match_status`
   - `MATCHED / UNMATCHED`
 - `hr_type`
-  - `H1 / H2 / H3 / HX`
+  - `H1 / H2 / HY / HX`
 - `is_hr_staff`
   - 当 `hr_type in ('H1', 'H2')` 时为 `true`
 - `is_suspected_hr_staff`
-  - 当 `hr_type = 'H3'` 时为 `true`
+  - 当 `hr_type = 'HY'` 时为 `true`
 - `hr_primary_evidence`
-  - 如 `level1_function_name`、`position_name`、`standard_position_name`、`org_path_name`
+  - 如 `level1_function_name`、`position_name`、`standard_position_name`、`org_path_name`、`wanyu_city_sales_department`
 - `hr_primary_value`
   - 命中的原始值
 - `hr_subdomain`
-  - HR 子域标签
+  - 当 `hr_type in ('H1', 'H2')` 时输出 HR 子域标签
+  - 若属于 `H1 / H2` 但未命中已定义子域，则输出 `other_hr_domain`
+  - 若 `hr_type in ('HY', 'HX')` 或 `roster_match_status = UNMATCHED`，则建议为空
 - `hr_judgement_reason`
   - 便于审计追溯，例如：
     - `level1_is_hr`
     - `position_keyword_hit`
+    - `position_org_dev_comp_perf_benefit_hit`
     - `standard_position_keyword_hit`
+    - `wanyu_city_sales_department_position_hit`
+    - `weak_signal_management_position_promoted_to_h2`
     - `weak_signal_position_promoted_to_h2`
     - `org_path_keyword_hit_only`
     - `roster_not_found`
@@ -288,13 +352,10 @@
 ## 7. SQL 实现建议
 
 ### 7.1 当前落地说明
-从方案命名上，后续应对接：
+当前数据库中申请单主表已使用：
 - `申请单基本信息`
 
-但当前数据库中实际物理表名仍为：
-- `basic_info`
-
-在完成正式迁移前，可先临时用 `basic_info` 验证 SQL；迁移完成后再切到 `申请单基本信息`。
+因此 `7.2` 的示例 SQL 可直接基于 `申请单基本信息` 执行；若后续再次发生表名或字段迁移，应同步更新输入表与字段映射。
 
 ### 7.2 建议 SQL
 ```sql
@@ -307,6 +368,7 @@ WITH applicant AS (
 roster AS (
     SELECT
         BTRIM(employee_no) AS employee_no,
+        BTRIM(department_id) AS department_id,
         employee_name,
         level1_function_name,
         level2_function_name,
@@ -315,7 +377,13 @@ roster AS (
         org_path_name
     FROM "在职花名册表"
 ),
-joined AS (
+org_attr AS (
+    SELECT
+        BTRIM(org_code) AS org_code,
+        wanyu_city_sales_department
+    FROM "组织属性查询"
+),
+base_joined AS (
     SELECT
         a.document_no,
         a.employee_no AS applicant_employee_no,
@@ -325,51 +393,96 @@ joined AS (
         r.position_name,
         r.standard_position_name,
         r.org_path_name,
+        o.wanyu_city_sales_department,
         CASE
             WHEN r.employee_no IS NULL THEN 'UNMATCHED'
             ELSE 'MATCHED'
-        END AS roster_match_status,
-        CASE
-            WHEN r.employee_no IS NULL THEN NULL
-            WHEN COALESCE(r.level1_function_name, '') = '人力资源' THEN 'H1'
-            WHEN COALESCE(r.position_name, '') ~ '(人力|人事|HRBP|HR共享|业务HR|项目HR|综合人事|人力资源|人力行政|人力业务支持|hrbp|hr)'
-              THEN 'H1'
-            WHEN COALESCE(r.standard_position_name, '') ~ '(人力|人事|HRBP|HR共享|综合人事|人力资源|人力行政|人力业务支持|人力综合|hrbp|hr)'
-              THEN 'H1'
-            WHEN COALESCE(r.org_path_name, '') ~ '(人力|人事|HR|hr)'
-             AND COALESCE(r.position_name, '') IN ('运营经理', '运营主管', '数据分析')
-              THEN 'H2'
-            WHEN COALESCE(r.org_path_name, '') ~ '(人力|人事|HR|hr)'
-              THEN 'H3'
-            ELSE 'HX'
-        END AS hr_type,
-        CASE
-            WHEN r.employee_no IS NULL THEN 'roster_not_found'
-            WHEN COALESCE(r.level1_function_name, '') = '人力资源' THEN 'level1_is_hr'
-            WHEN COALESCE(r.position_name, '') ~ '(人力|人事|HRBP|HR共享|业务HR|项目HR|综合人事|人力资源|人力行政|人力业务支持|hrbp|hr)'
-              THEN 'position_keyword_hit'
-            WHEN COALESCE(r.standard_position_name, '') ~ '(人力|人事|HRBP|HR共享|综合人事|人力资源|人力行政|人力业务支持|人力综合|hrbp|hr)'
-              THEN 'standard_position_keyword_hit'
-            WHEN COALESCE(r.org_path_name, '') ~ '(人力|人事|HR|hr)'
-             AND COALESCE(r.position_name, '') IN ('运营经理', '运营主管', '数据分析')
-              THEN 'weak_signal_position_promoted_to_h2'
-            WHEN COALESCE(r.org_path_name, '') ~ '(人力|人事|HR|hr)'
-              THEN 'org_path_keyword_hit_only'
-            ELSE 'no_hr_signal'
-        END AS hr_judgement_reason,
-        CASE
-            WHEN COALESCE(r.level2_function_name, '') = '人力资源' THEN 'hr_general'
-            WHEN COALESCE(r.level2_function_name, '') = '人事运营' THEN 'hr_operations'
-            WHEN COALESCE(r.level2_function_name, '') IN ('招聘', '招聘外包服务') THEN 'recruiting'
-            WHEN COALESCE(r.level2_function_name, '') = '薪酬绩效' THEN 'compensation_performance'
-            WHEN COALESCE(r.level2_function_name, '') = '员工关系' THEN 'employee_relations'
-            WHEN COALESCE(r.level2_function_name, '') IN ('人才发展', '组织发展') THEN 'org_talent_development'
-            WHEN COALESCE(r.level2_function_name, '') = '人力业务支持' THEN 'hr_business_support'
-            ELSE NULL
-        END AS hr_subdomain
+        END AS roster_match_status
     FROM applicant a
     LEFT JOIN roster r
         ON a.employee_no = r.employee_no
+    LEFT JOIN org_attr o
+        ON r.department_id = o.org_code
+),
+classified AS (
+    SELECT
+        b.*,
+        CASE
+            WHEN b.employee_name IS NULL THEN NULL
+            WHEN COALESCE(b.level1_function_name, '') = '人力资源' THEN 'H1'
+            WHEN COALESCE(b.position_name, '') ~ '(人力|人事|HRBP|HR共享|业务HR|项目HR|综合人事|人力资源|人力行政|人力业务支持|hrbp|hr)'
+              THEN 'H1'
+            WHEN COALESCE(b.position_name, '') = '目标与绩效管理专业总监'
+             AND (COALESCE(b.org_path_name, '') LIKE '%人力%' OR COALESCE(b.org_path_name, '') LIKE '%人事%')
+              THEN 'H1'
+            WHEN COALESCE(b.position_name, '') <> '目标与绩效管理专业总监'
+             AND COALESCE(b.position_name, '') ~ '(组织发展|薪酬|绩效|福利)'
+              THEN 'H1'
+            WHEN COALESCE(b.standard_position_name, '') ~ '(人力|人事|HRBP|HR共享|综合人事|人力资源|人力行政|人力业务支持|人力综合|hrbp|hr)'
+              THEN 'H1'
+            WHEN COALESCE(b.wanyu_city_sales_department, '') <> ''
+             AND COALESCE(b.position_name, '') IN ('认证中心负责人', '服务站总站长')
+              THEN 'H1'
+            WHEN (COALESCE(b.org_path_name, '') LIKE '%人力%' OR COALESCE(b.org_path_name, '') LIKE '%人事%')
+             AND (
+                    COALESCE(b.position_name, '') IN ('组织与效能资深总监', '部门负责人', 'AI与流程变革资深总监', '平台与运营资深总监')
+                    OR COALESCE(b.position_name, '') LIKE '%总经理%'
+                 )
+              THEN 'H2'
+            WHEN (COALESCE(b.org_path_name, '') LIKE '%人力%' OR COALESCE(b.org_path_name, '') LIKE '%人事%')
+             AND COALESCE(b.position_name, '') IN ('运营经理', '运营主管', '数据分析')
+              THEN 'H2'
+            WHEN (COALESCE(b.org_path_name, '') LIKE '%人力%' OR COALESCE(b.org_path_name, '') LIKE '%人事%')
+              THEN 'HY'
+            ELSE 'HX'
+        END AS hr_type,
+        CASE
+            WHEN b.employee_name IS NULL THEN 'roster_not_found'
+            WHEN COALESCE(b.level1_function_name, '') = '人力资源' THEN 'level1_is_hr'
+            WHEN COALESCE(b.position_name, '') ~ '(人力|人事|HRBP|HR共享|业务HR|项目HR|综合人事|人力资源|人力行政|人力业务支持|hrbp|hr)'
+              THEN 'position_keyword_hit'
+            WHEN COALESCE(b.position_name, '') = '目标与绩效管理专业总监'
+             AND (COALESCE(b.org_path_name, '') LIKE '%人力%' OR COALESCE(b.org_path_name, '') LIKE '%人事%')
+              THEN 'position_org_dev_comp_perf_benefit_hit'
+            WHEN COALESCE(b.position_name, '') <> '目标与绩效管理专业总监'
+             AND COALESCE(b.position_name, '') ~ '(组织发展|薪酬|绩效|福利)'
+              THEN 'position_org_dev_comp_perf_benefit_hit'
+            WHEN COALESCE(b.standard_position_name, '') ~ '(人力|人事|HRBP|HR共享|综合人事|人力资源|人力行政|人力业务支持|人力综合|hrbp|hr)'
+              THEN 'standard_position_keyword_hit'
+            WHEN COALESCE(b.wanyu_city_sales_department, '') <> ''
+             AND COALESCE(b.position_name, '') IN ('认证中心负责人', '服务站总站长')
+              THEN 'wanyu_city_sales_department_position_hit'
+            WHEN (COALESCE(b.org_path_name, '') LIKE '%人力%' OR COALESCE(b.org_path_name, '') LIKE '%人事%')
+             AND (
+                    COALESCE(b.position_name, '') IN ('组织与效能资深总监', '部门负责人', 'AI与流程变革资深总监', '平台与运营资深总监')
+                    OR COALESCE(b.position_name, '') LIKE '%总经理%'
+                 )
+              THEN 'weak_signal_management_position_promoted_to_h2'
+            WHEN (COALESCE(b.org_path_name, '') LIKE '%人力%' OR COALESCE(b.org_path_name, '') LIKE '%人事%')
+             AND COALESCE(b.position_name, '') IN ('运营经理', '运营主管', '数据分析')
+              THEN 'weak_signal_position_promoted_to_h2'
+            WHEN (COALESCE(b.org_path_name, '') LIKE '%人力%' OR COALESCE(b.org_path_name, '') LIKE '%人事%')
+              THEN 'org_path_keyword_hit_only'
+            ELSE 'no_hr_signal'
+        END AS hr_judgement_reason
+    FROM base_joined b
+),
+joined AS (
+    SELECT
+        c.*,
+        CASE
+            WHEN c.hr_type NOT IN ('H1', 'H2') THEN NULL
+            WHEN COALESCE(c.level2_function_name, '') = '人力资源' THEN 'hr_general'
+            WHEN COALESCE(c.level2_function_name, '') = '人事运营' THEN 'hr_operations'
+            WHEN COALESCE(c.level2_function_name, '') IN ('招聘', '招聘外包服务') THEN 'recruiting'
+            WHEN COALESCE(c.level2_function_name, '') = '薪酬绩效' THEN 'compensation_performance'
+            WHEN COALESCE(c.level2_function_name, '') = '员工关系' THEN 'employee_relations'
+            WHEN COALESCE(c.level2_function_name, '') IN ('人才发展', '组织发展') THEN 'org_talent_development'
+            WHEN COALESCE(c.level2_function_name, '') = '人力业务支持' THEN 'hr_business_support'
+            WHEN COALESCE(c.level1_function_name, '') IN ('管理', '职能综合管理') THEN 'hr_management'
+            ELSE 'other_hr_domain'
+        END AS hr_subdomain
+    FROM classified c
 )
 SELECT *
 FROM joined;
@@ -389,13 +502,31 @@ FROM joined;
 
 因此 H2 应保持“小而稳”的白名单特征，不建议一次性扩得过宽。
 
-### 8.3 H3 需要继续补充规则
-当前 H3 只是“疑似 HR 池”，后续可以继续补充：
+### 8.3 H1 的绩效类职位需要保留组织约束
+当前规则中：
+- `职位名称` 包含 `组织发展 / 薪酬 / 绩效 / 福利` 的岗位通常进入 H1
+- 但 `目标与绩效管理专业总监` 需同时满足 `组织路径名称` 含 `人力 / 人事`
+
+这样做的原因是：`目标与绩效管理专业总监` 这类职位名称虽然含有 `绩效`，但实际可能挂在非 HR 组织中。
+
+当前已观察到的样本包括：
+- `目标与绩效管理专业总监`
+  - `万物云_万科物业_财务及运营管理部`
+  - 因组织并非 `人力 / 人事` 部门，当前不再纳入 `H1`
+- `绩效经理`
+  - `万物云_投资与创新发展中心_万物成长被投企业_重庆天骄_组织发展中心`
+
+这说明：
+- 不能仅因职位中含 `绩效` 就直接判为 HR
+- 对 `目标与绩效管理专业总监` 需要额外叠加组织约束
+
+### 8.4 HY 需要继续补充规则
+当前 HY 只是“疑似 HR 池”，后续可以继续补充：
 - 新的弱信号职位白名单
 - 更细的组织路径规则
 - 特定人力共享中心、HRBP 组、组织发展组等增强规则
 
-### 8.4 组织路径不能直接替代职位判断
+### 8.5 组织路径不能直接替代职位判断
 路径中含 `人力` / `人事` 的人员，不一定是 HR，本次已看到以下非 HR 样本：
 - 行政
 - 法务
@@ -404,18 +535,22 @@ FROM joined;
 - 运营
 - 廉正监察
 
-因此凡是“只靠组织路径命中”的人员，至少应先落到 H2 或 H3，而不能直接提升为 H1。
+因此凡是“只靠组织路径命中”的人员，至少应先落到 H2 或 HY，而不能直接提升为 H1。
 
 ## 9. 验收标准
 满足以下条件可视为方案完成：
 
 - 可按申请人工号关联到 `在职花名册表`
-- 能输出 `H1 / H2 / H3 / HX`
+- 能输出 `H1 / H2 / HY / HX`
 - 能额外输出 `roster_match_status`
 - `一级职能名称 = 人力资源` 的人员可稳定识别为 `H1`
 - `职位名称` / `标准岗位名称` 明确出现 `人力 / 人事 / HRBP / HR共享` 等文本的人员可识别为 `H1`
-- 弱信号中 `职位名称 in ('运营经理', '运营主管', '数据分析')` 且路径命中 HR 关键词的人员可识别为 `H2`
-- 仅因 `组织路径名称` 含 `人力 / 人事 / HR` 的其他弱信号人员识别为 `H3`
+- `职位名称` 包含 `组织发展 / 薪酬 / 绩效 / 福利` 的人员可识别为 `H1`
+  - 但 `目标与绩效管理专业总监` 必须同时满足 `组织路径名称` 命中 `人力 / 人事`
+- `department_id` 可关联到 `组织属性查询.org_code`，且 `wanyu_city_sales_department` 非空并且 `职位名称 in ('认证中心负责人', '服务站总站长')` 的人员可识别为 `H1`
+- `组织路径名称` 命中 `人力 / 人事`，且 `职位名称` 属于 `组织与效能资深总监 / 部门负责人 / AI与流程变革资深总监 / 平台与运营资深总监 / 总经理类` 的人员可识别为 `H2`
+- 弱信号中 `职位名称 in ('运营经理', '运营主管', '数据分析')` 且路径命中 `人力 / 人事` 关键词的人员可识别为 `H2`
+- 仅因 `组织路径名称` 含 `人力 / 人事` 的其他弱信号人员识别为 `HY`
 - 其他已匹配人员识别为 `HX`
 
 ## 10. 交付物

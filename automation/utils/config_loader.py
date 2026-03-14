@@ -55,12 +55,32 @@ class DatabaseSettings:
 
 
 @dataclass
+class MailSettings:
+    enabled: bool
+    host: str
+    port: int
+    use_ssl: bool
+    use_starttls: bool
+    username: str
+    password: str
+    from_name: str
+    from_addr: str
+    to_addrs: list[str]
+    cc_addrs: list[str]
+    send_on_success: list[str]
+    send_on_failure: bool
+    timeout_sec: float
+    attach_error_screenshot: bool
+
+
+@dataclass
 class Settings:
     app: AppSettings
     auth: AuthSettings
     browser: BrowserSettings
     runtime: RuntimeSettings
     db: DatabaseSettings
+    mail: MailSettings
 
 
 def _read_yaml(path: Path) -> dict[str, Any]:
@@ -81,6 +101,7 @@ def load_settings(path: Path) -> Settings:
     browser = raw.get("browser", {})
     runtime = raw.get("runtime", {})
     db = raw.get("db", {})
+    mail = raw.get("mail", {})
 
     return Settings(
         app=AppSettings(
@@ -116,6 +137,23 @@ def load_settings(path: Path) -> Settings:
             schema=str(db.get("schema", "public")).strip() or "public",
             sslmode=str(db.get("sslmode", "prefer")).strip() or "prefer",
         ),
+        mail=MailSettings(
+            enabled=bool(mail.get("enabled", False)),
+            host=str(mail.get("host", "smtp.exmail.qq.com")).strip(),
+            port=int(mail.get("port", 465)),
+            use_ssl=bool(mail.get("use_ssl", True)),
+            use_starttls=bool(mail.get("use_starttls", False)),
+            username=str(mail.get("username", "")).strip(),
+            password=str(mail.get("password", "")).strip(),
+            from_name=str(mail.get("from_name", "clawcheck")).strip(),
+            from_addr=str(mail.get("from_addr", "")).strip(),
+            to_addrs=_ensure_string_list(mail.get("to_addrs", []), "mail.to_addrs"),
+            cc_addrs=_ensure_string_list(mail.get("cc_addrs", []), "mail.cc_addrs"),
+            send_on_success=_ensure_string_list(mail.get("send_on_success", []), "mail.send_on_success"),
+            send_on_failure=bool(mail.get("send_on_failure", True)),
+            timeout_sec=float(mail.get("timeout_sec", 15.0)),
+            attach_error_screenshot=bool(mail.get("attach_error_screenshot", True)),
+        ),
     )
 
 
@@ -147,11 +185,32 @@ def load_selectors(path: Path) -> dict[str, dict[str, list[str]]]:
 
 
 def load_local_auth(path: Path) -> dict[str, str]:
+    return load_local_credentials(path)["auth"]
+
+
+def load_local_credentials(path: Path) -> dict[str, dict[str, str]]:
     data = _read_yaml(path)
     auth_section = data.get("auth", data)
     if not isinstance(auth_section, dict):
         raise ValueError("Local credentials file must be an object or contain an 'auth' object")
+    mail_section = data.get("mail", {})
+    if mail_section is None:
+        mail_section = {}
+    if not isinstance(mail_section, dict):
+        raise ValueError("Local credentials file 'mail' section must be an object")
 
     username = str(auth_section.get("username", "")).strip()
     password = str(auth_section.get("password", "")).strip()
-    return {"username": username, "password": password}
+    mail_username = str(mail_section.get("username", "")).strip()
+    mail_password = str(mail_section.get("password", "")).strip()
+    mail_from_addr = str(mail_section.get("from_addr", "")).strip()
+    mail_from_name = str(mail_section.get("from_name", "")).strip()
+    return {
+        "auth": {"username": username, "password": password},
+        "mail": {
+            "username": mail_username,
+            "password": mail_password,
+            "from_addr": mail_from_addr,
+            "from_name": mail_from_name,
+        },
+    }
