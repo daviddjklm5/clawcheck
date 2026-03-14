@@ -390,14 +390,46 @@ class PostgresPermissionCatalogStore(_PostgresStoreBase):
     table_name = '"权限列表"'
     schema_sql = Path(__file__).resolve().parents[1] / "sql" / "009_permission_catalog.sql"
 
+    def _needs_schema_update(self, cursor) -> bool:
+        if self._column_exists(cursor, "权限列表", "role_code"):
+            raise RuntimeError('Detected legacy English schema for "权限列表". Run automation/sql/012_rename_columns_to_cn_fixed_schema.sql first.')
+
+        if not self._column_exists(cursor, "权限列表", PERMISSION_CATALOG_COLUMNS["role_code"]):
+            return True
+
+        required_columns = [
+            PERMISSION_CATALOG_COLUMNS["role_name"],
+            PERMISSION_CATALOG_COLUMNS["permission_level"],
+            PERMISSION_CATALOG_COLUMNS["skip_org_scope_check"],
+            PERMISSION_CATALOG_COLUMNS["source_system"],
+            PERMISSION_CATALOG_COLUMNS["raw_payload"],
+            PERMISSION_CATALOG_COLUMNS["created_at"],
+            PERMISSION_CATALOG_COLUMNS["updated_at"],
+        ]
+        legacy_columns = [
+            "原始权限级别",
+            "归一化分组",
+            "是否远程角色",
+            "是否已取消角色",
+            "是否有效",
+        ]
+
+        missing_required_columns = any(
+            not self._column_exists(cursor, "权限列表", column_name)
+            for column_name in required_columns
+        )
+        has_legacy_columns = any(
+            self._column_exists(cursor, "权限列表", column_name)
+            for column_name in legacy_columns
+        )
+        return missing_required_columns or has_legacy_columns
+
     def ensure_table(self) -> None:
         ddl = self.schema_sql.read_text(encoding="utf-8")
         with self.connect() as connection:
             with connection.cursor() as cursor:
-                if self._column_exists(cursor, "权限列表", PERMISSION_CATALOG_COLUMNS["role_code"]):
+                if not self._needs_schema_update(cursor):
                     return
-                if self._column_exists(cursor, "权限列表", "role_code"):
-                    raise RuntimeError('Detected legacy English schema for "权限列表". Run automation/sql/012_rename_columns_to_cn_fixed_schema.sql first.')
                 cursor.execute(ddl)
 
     def seed_catalog(self) -> dict[str, Any]:
