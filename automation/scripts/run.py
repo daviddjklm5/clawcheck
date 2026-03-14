@@ -6,6 +6,7 @@ import getpass
 import json
 import os
 import sys
+import time
 from datetime import date, datetime
 from pathlib import Path
 
@@ -359,6 +360,15 @@ def main() -> int:
         logger.info("Persisted %s active roster rows into PostgreSQL table 在职花名册表", inserted_count)
         return payload
 
+    def normalize_timestamp_text(value: object) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, datetime):
+            return value.strftime("%Y-%m-%d %H:%M:%S")
+        if isinstance(value, date):
+            return value.isoformat()
+        return str(value).strip()
+
     try:
         if args.action == "roster" and args.input_file.strip():
             logger.info("Roster import-only mode. input_file=%s", args.input_file)
@@ -514,17 +524,33 @@ def main() -> int:
                         retries=settings.runtime.retries,
                         wait_sec=settings.runtime.retry_wait_sec,
                     )
+                    store = PostgresPermissionStore(settings.db)
+                    document_sync_states: dict[str, dict[str, object]] = {}
+                    if PostgresPermissionStore.is_configured(settings.db):
+                        try:
+                            document_sync_states = store.fetch_document_sync_states(target_document_nos)
+                            logger.info(
+                                "Loaded existing sync states for %s/%s target document(s)",
+                                len(document_sync_states),
+                                len(target_document_nos),
+                            )
+                        except Exception as exc:  # noqa: BLE001
+                            logger.warning("Failed to preload existing document sync states from PostgreSQL: %s", exc)
+
                     documents: list[dict[str, object]] = []
+                    skipped_documents: list[dict[str, str]] = []
                     failed_documents: list[dict[str, str]] = []
                     todo_list_ready = True
                     for index, target_document_no in enumerate(target_document_nos):
                         close_document_tab_after = index < len(target_document_nos) - 1
 
                         attempt_no = 0
+                        existing_state = document_sync_states.get(target_document_no)
 
                         def _collect_by_document_no(
                             target_document_no: str = target_document_no,
                             close_document_tab_after: bool = close_document_tab_after,
+                            existing_state: dict[str, object] | None = existing_state,
                         ) -> dict[str, object]:
                             nonlocal todo_list_ready, attempt_no
                             attempt_no += 1
@@ -537,21 +563,91 @@ def main() -> int:
                                 _reset_collect_session_to_todo_list()
                                 todo_list_ready = True
 
-                            document = collector.collect_document_from_todo(
-                                document_no=target_document_no,
-                                close_document_tab_after=close_document_tab_after,
+                            logger.info("Collecting document: %s", target_document_no)
+                            started_at = datetime.now()
+                            started_ts = time.monotonic()
+                            collector.open_document(target_document_no)
+
+                            probe: dict[str, object] | None = None
+                            if existing_state:
+                                probe = collector.collect_current_document_probe()
+                                live_latest_approval_time = normalize_timestamp_text(
+                                    probe.get("latest_approval_time")
+                                )
+                                stored_latest_approval_time = normalize_timestamp_text(
+                                    existing_state.get("latest_approval_time")
+                                )
+                                if live_latest_approval_time == stored_latest_approval_time:
+                                    logger.info(
+                                        "Skipping document %s because latest approval time is unchanged: %s",
+                                        target_document_no,
+                                        live_latest_approval_time or "<empty>",
+                                    )
+                                    if close_document_tab_after:
+                                        collector.close_current_document_tab(target_document_no)
+                                        page.wait_for_timeout(200)
+                                        collector.return_to_todo_list()
+                                        todo_list_ready = True
+                                    else:
+                                        collector.close_current_document_tab(target_document_no)
+                                        todo_list_ready = False
+                                    return {
+                                        "_skip": True,
+                                        "document_no": target_document_no,
+                                        "stored_latest_approval_time": stored_latest_approval_time,
+                                        "live_latest_approval_time": live_latest_approval_time,
+                                    }
+
+                            document = collector.collect_current_document(probe=probe)
+                            elapsed_seconds = round(time.monotonic() - started_ts, 3)
+                            finished_at = datetime.now()
+                            document["collection_started_at"] = started_at.isoformat(timespec="seconds")
+                            document["collection_finished_at"] = finished_at.isoformat(timespec="seconds")
+                            document["collection_elapsed_seconds"] = elapsed_seconds
+
+                            if existing_state:
+                                next_collection_count = int(existing_state.get("collection_count") or 1) + 1
+                                document["_write_mode"] = "recollect"
+                            else:
+                                next_collection_count = 1
+                                document["_write_mode"] = "insert"
+                            document["basic_info"]["collection_count"] = next_collection_count
+
+                            logger.info(
+                                "Collected document %s in %.3f seconds",
+                                target_document_no,
+                                elapsed_seconds,
                             )
-                            todo_list_ready = close_document_tab_after
+
+                            if close_document_tab_after:
+                                collector.close_current_document_tab(target_document_no)
+                                page.wait_for_timeout(200)
+                                collector.return_to_todo_list()
+                                todo_list_ready = True
+                            else:
+                                todo_list_ready = False
                             return document
 
                         try:
-                            documents.append(
-                                retry_call(
-                                    _collect_by_document_no,
-                                    retries=settings.runtime.retries,
-                                    wait_sec=settings.runtime.retry_wait_sec,
-                                )
+                            collected_document = retry_call(
+                                _collect_by_document_no,
+                                retries=settings.runtime.retries,
+                                wait_sec=settings.runtime.retry_wait_sec,
                             )
+                            if collected_document.get("_skip"):
+                                skipped_documents.append(
+                                    {
+                                        "document_no": str(collected_document.get("document_no") or target_document_no),
+                                        "stored_latest_approval_time": str(
+                                            collected_document.get("stored_latest_approval_time") or ""
+                                        ),
+                                        "live_latest_approval_time": str(
+                                            collected_document.get("live_latest_approval_time") or ""
+                                        ),
+                                    }
+                                )
+                            else:
+                                documents.append(collected_document)
                         except Exception as exc:  # noqa: BLE001
                             todo_list_ready = False
                             logger.error("Collect failed for document %s: %s", target_document_no, exc)
@@ -561,10 +657,9 @@ def main() -> int:
                                     "error": f"{type(exc).__name__}: {exc}",
                                 }
                             )
-                    if not documents:
+                    if not documents and not skipped_documents:
                         raise RuntimeError("No permission application documents were collected successfully")
 
-                    store = PostgresPermissionStore(settings.db)
                     documents = store.prepare_documents(documents)
                     unresolved_approver_names = sorted(
                         {
@@ -588,17 +683,40 @@ def main() -> int:
                     dump_path.parent.mkdir(parents=True, exist_ok=True)
                     dump_path.write_text(json.dumps(documents, ensure_ascii=False, indent=2), encoding="utf-8")
                     logger.info(
-                        "Collected %s/%s document(s). JSON dump: %s",
+                        "Collected %s/%s document(s), skipped %s. JSON dump: %s",
                         len(documents),
                         len(target_document_nos),
+                        len(skipped_documents),
                         dump_path,
                     )
 
                     if args.dry_run:
                         logger.info("Dry-run enabled; skipping PostgreSQL write")
-                    else:
+                    elif documents:
                         store.write_documents(documents)
                         logger.info("Persisted %s document(s) to PostgreSQL", len(documents))
+                    else:
+                        logger.info("No document required PostgreSQL write after sync-state comparison")
+
+                    if skipped_documents:
+                        logger.info("Skipped document count: %s", len(skipped_documents))
+                        skipped_dump_path = dump_path.with_name(f"{dump_path.stem}_skipped{dump_path.suffix}")
+                        skipped_dump_path.write_text(
+                            json.dumps(
+                                {
+                                    "skipped_documents": skipped_documents,
+                                    "summary": {
+                                        "requested_count": len(target_document_nos),
+                                        "success_count": len(documents),
+                                        "skipped_count": len(skipped_documents),
+                                    },
+                                },
+                                ensure_ascii=False,
+                                indent=2,
+                            ),
+                            encoding="utf-8",
+                        )
+                        logger.info("Skipped document dump: %s", skipped_dump_path)
 
                     if failed_documents:
                         logger.warning("Failed document count: %s", len(failed_documents))

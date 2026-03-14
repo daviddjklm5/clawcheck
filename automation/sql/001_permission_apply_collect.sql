@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS "申请单基本信息" (
     "职位" VARCHAR(128),
     "申请日期" TIMESTAMP NULL,
     "最新审批时间" TIMESTAMP NULL,
+    "采集次数" INTEGER NOT NULL DEFAULT 1,
     "记录创建时间" TIMESTAMP NOT NULL DEFAULT NOW(),
     "记录更新时间" TIMESTAMP NOT NULL DEFAULT NOW()
 );

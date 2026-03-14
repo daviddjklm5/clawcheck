@@ -90,9 +90,7 @@ class PermissionCollectFlow:
         return document
 
     def open_document(self, document_no: str) -> None:
-        subject_text = f"单据编号：{document_no}"
-        subject_link = self.page.locator("span.link-cell-content").filter(has_text=subject_text).first
-        subject_link.wait_for(state="visible", timeout=self.timeout_ms)
+        subject_link = self._wait_for_todo_document_link_ready(document_no)
         subject_link.click(force=True)
         self._wait_for_document_loaded(document_no)
         self._remember_current_document_tab(document_no)
@@ -103,16 +101,16 @@ class PermissionCollectFlow:
         tab.click(force=True)
         self._wait_for_todo_list_ready()
 
-    def collect_current_document(self) -> dict[str, Any]:
-        basic_info = self.extract_basic_info()
-        self._wait_for_permission_detail_grid_ready(basic_info.get("单据编号", ""))
+    def collect_current_document(self, probe: dict[str, Any] | None = None) -> dict[str, Any]:
+        probe = probe or self.collect_current_document_probe()
+        basic_info = dict(probe.get("basic_info", {}))
+        approval_records = list(probe.get("approval_records", []))
+        self._wait_for_permission_detail_grid_ready(basic_info.get("document_no", ""))
         permission_details = self.extract_grid_rows(DETAIL_HEADERS)
         role_organization_scopes = self.extract_role_organization_scopes(
-            basic_info.get("单据编号", ""),
+            basic_info.get("document_no", ""),
             permission_details,
         )
-        approval_records = normalize_approval_records(self.extract_approval_records())
-        latest_approval_time = derive_latest_approval_time(approval_records)
         organization_codes = sorted(
             {
                 code
@@ -122,23 +120,43 @@ class PermissionCollectFlow:
             }
         )
         return {
-            "basic_info": {
-                "document_no": basic_info.get("单据编号", ""),
-                "employee_no": basic_info.get("工号", ""),
-                "permission_target": basic_info.get("权限对象", ""),
-                "apply_reason": basic_info.get("申请理由", ""),
-                "document_status": basic_info.get("单据状态", ""),
-                "hr_org": basic_info.get("人事管理组织", ""),
-                "company_name": basic_info.get("公司", ""),
-                "department_name": basic_info.get("部门", ""),
-                "position_name": basic_info.get("职位", ""),
-                "apply_time": basic_info.get("申请日期", ""),
-                "latest_approval_time": latest_approval_time,
-            },
+            "basic_info": basic_info,
             "permission_details": permission_details,
             "approval_records": approval_records,
             "role_organization_scopes": role_organization_scopes,
             "organization_codes": organization_codes,
+        }
+
+    def collect_current_document_probe(self) -> dict[str, Any]:
+        raw_basic_info = self.extract_basic_info()
+        approval_records = normalize_approval_records(self.extract_approval_records())
+        latest_approval_time = derive_latest_approval_time(approval_records)
+        return {
+            "basic_info": self._build_basic_info_payload(
+                raw_basic_info,
+                latest_approval_time=latest_approval_time,
+            ),
+            "approval_records": approval_records,
+            "latest_approval_time": latest_approval_time,
+        }
+
+    @staticmethod
+    def _build_basic_info_payload(
+        basic_info: dict[str, str],
+        latest_approval_time: str,
+    ) -> dict[str, str]:
+        return {
+            "document_no": basic_info.get("单据编号", ""),
+            "employee_no": basic_info.get("工号", ""),
+            "permission_target": basic_info.get("权限对象", ""),
+            "apply_reason": basic_info.get("申请理由", ""),
+            "document_status": basic_info.get("单据状态", ""),
+            "hr_org": basic_info.get("人事管理组织", ""),
+            "company_name": basic_info.get("公司", ""),
+            "department_name": basic_info.get("部门", ""),
+            "position_name": basic_info.get("职位", ""),
+            "apply_time": basic_info.get("申请日期", ""),
+            "latest_approval_time": latest_approval_time,
         }
 
     def extract_basic_info(self) -> dict[str, str]:
@@ -183,6 +201,8 @@ class PermissionCollectFlow:
         grid = self._extract_best_grid(required_headers)
         headers = grid["headers"]
         rows = grid["rows"]
+        if tuple(required_headers) == tuple(TODO_HEADERS):
+            rows = self._extract_all_todo_grid_rows(grid)
         normalized_rows: list[dict[str, str]] = []
         for row in rows:
             row = self._normalize_row_cells(headers, row)
@@ -203,6 +223,69 @@ class PermissionCollectFlow:
                 }
             )
         return normalized_rows
+
+    def _extract_all_todo_grid_rows(self, grid: dict[str, Any]) -> list[list[str]]:
+        headers = list(grid.get("headers") or [])
+        selector = str(grid.get("selector") or "")
+        if not headers or not selector:
+            return list(grid.get("rows") or [])
+
+        expected_count = self._extract_todo_total_count()
+        collected_rows: dict[str, list[str]] = {}
+        stagnant_rounds = 0
+        last_seen_size = -1
+
+        self._set_grid_vertical_position(selector, 0)
+        for _ in range(300):
+            snapshot = self._get_grid_virtual_snapshot(selector, headers)
+            if not snapshot:
+                break
+
+            for row in snapshot.get("rows", []):
+                normalized_row = self._normalize_row_cells(headers, row)
+                mapped = {
+                    headers[idx]: normalized_row[idx] if idx < len(normalized_row) else ""
+                    for idx in range(len(headers))
+                }
+                row_key = (
+                    (mapped.get("单据编号") or "").strip()
+                    or (mapped.get("#") or "").strip()
+                    or "|".join(normalized_row)
+                )
+                if row_key:
+                    collected_rows[row_key] = normalized_row
+
+            if expected_count is not None and len(collected_rows) >= expected_count:
+                break
+
+            if len(collected_rows) == last_seen_size:
+                stagnant_rounds += 1
+            else:
+                stagnant_rounds = 0
+                last_seen_size = len(collected_rows)
+
+            scroll_height = int(snapshot.get("scrollHeight", 0) or 0)
+            client_height = int(snapshot.get("clientHeight", 0) or 0)
+            current_top = int(snapshot.get("scrollTop", 0) or 0)
+            next_top = min(current_top + max(client_height - 40, 200), max(scroll_height - client_height, 0))
+            if next_top <= current_top:
+                stagnant_rounds += 1
+            else:
+                self._set_grid_vertical_position(selector, next_top)
+
+            if stagnant_rounds >= 5:
+                break
+
+        if expected_count is not None and len(collected_rows) < expected_count:
+            self.logger.warning(
+                "Todo grid virtual scroll collection incomplete: expected=%s, collected=%s",
+                expected_count,
+                len(collected_rows),
+            )
+
+        ordered_rows = list(collected_rows.values())
+        ordered_rows.sort(key=lambda row: self._todo_row_sort_key(headers, row))
+        return ordered_rows
 
     def extract_role_organization_scopes(
         self,
@@ -325,6 +408,55 @@ class PermissionCollectFlow:
             f"Permission detail row not ready. grid_selector={grid_selector!r}, row_idx={row_idx}, line_no={line_no!r}"
         )
 
+    def _wait_for_todo_document_link_ready(self, document_no: str):
+        grid = self._extract_best_grid(TODO_HEADERS)
+        grid_selector = str(grid.get("selector") or "")
+        headers = list(grid.get("headers") or [])
+        if not grid_selector or not headers:
+            raise RuntimeError(f"Todo grid not ready for document lookup: {document_no}")
+
+        self._set_grid_vertical_position(grid_selector, 0)
+        deadline = time.monotonic() + (self.timeout_ms / 1000)
+        stagnant_rounds = 0
+        last_error = ""
+        subject_text = f"单据编号：{document_no}"
+
+        while time.monotonic() < deadline:
+            if self._focus_todo_row(grid_selector, document_no):
+                row_locator = self._get_target_todo_row_locator(grid_selector)
+                try:
+                    row_locator.wait_for(state="visible", timeout=1000)
+                except PlaywrightTimeoutError:
+                    last_error = "target_todo_row_not_visible"
+                else:
+                    cell_link = row_locator.locator("span.link-cell-content").filter(has_text=subject_text).first
+                    if cell_link.count() > 0:
+                        return cell_link
+                    last_error = "target_todo_link_not_rendered"
+
+            snapshot = self._get_grid_virtual_snapshot(grid_selector, headers)
+            if not snapshot:
+                last_error = "todo_grid_snapshot_missing"
+                self.page.wait_for_timeout(200)
+                continue
+
+            scroll_height = int(snapshot.get("scrollHeight", 0) or 0)
+            client_height = int(snapshot.get("clientHeight", 0) or 0)
+            current_top = int(snapshot.get("scrollTop", 0) or 0)
+            next_top = min(current_top + max(client_height - 40, 200), max(scroll_height - client_height, 0))
+            if next_top <= current_top:
+                stagnant_rounds += 1
+            else:
+                stagnant_rounds = 0
+                self._set_grid_vertical_position(grid_selector, next_top)
+
+            if stagnant_rounds >= 3:
+                break
+
+        raise PlaywrightTimeoutError(
+            f"Todo document link not ready. document_no={document_no!r}, last_error={last_error}"
+        )
+
     def _wait_for_detail_link_ready(
         self,
         document_no: str,
@@ -363,6 +495,50 @@ class PermissionCollectFlow:
 
     def _get_target_detail_row_locator(self, grid_selector: str):
         return self.page.locator(f'{grid_selector} tbody tr[data-clawcheck-target-row="true"]').first
+
+    def _get_target_todo_row_locator(self, grid_selector: str):
+        return self.page.locator(f'{grid_selector} tbody tr[data-clawcheck-target-todo-row="true"]').first
+
+    def _focus_todo_row(self, grid_selector: str, document_no: str) -> bool:
+        focus_result = self.page.evaluate(
+            r"""(payload) => {
+                const { selector, documentNo } = payload;
+                const normalize = (value) => (value || '').replace(/\s+/g, ' ').trim();
+                const targetDocumentNo = normalize(documentNo);
+                const grid = document.querySelector(selector);
+                if (!grid) return false;
+
+                const clearMarkers = () => {
+                    grid.querySelectorAll('tbody tr[data-clawcheck-target-todo-row="true"]').forEach((row) => {
+                        row.removeAttribute('data-clawcheck-target-todo-row');
+                    });
+                };
+                const getRenderedRows = () => [...grid.querySelectorAll('tbody tr')];
+                const matchesDocumentNo = (row) => {
+                    const rowText = normalize(row.innerText || '');
+                    if (rowText.includes(targetDocumentNo)) return true;
+                    const cells = [...row.querySelectorAll('td')]
+                        .map((cell) => normalize(cell.innerText))
+                        .filter(Boolean);
+                    return cells.some((cellText) => cellText === targetDocumentNo || cellText.includes(targetDocumentNo));
+                };
+                const markTargetRow = () => {
+                    const row = getRenderedRows().find(matchesDocumentNo);
+                    if (!row) return false;
+                    row.setAttribute('data-clawcheck-target-todo-row', 'true');
+                    row.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+                    return true;
+                };
+
+                clearMarkers();
+                return markTargetRow();
+            }""",
+            {
+                "selector": grid_selector,
+                "documentNo": document_no,
+            },
+        )
+        return bool(focus_result)
 
     def _focus_detail_row(self, grid_selector: str, row_idx: int, line_no: str | int) -> bool:
         focus_result = self.page.evaluate(
@@ -444,6 +620,77 @@ class PermissionCollectFlow:
             {"selector": grid_selector, "ratio": ratio},
         )
         self.page.wait_for_timeout(150)
+
+    def _get_grid_virtual_snapshot(
+        self,
+        grid_selector: str,
+        headers: Sequence[str],
+    ) -> dict[str, Any] | None:
+        return self.page.evaluate(
+            r"""(payload) => {
+                const { selector, headers } = payload;
+                const normalize = (value) => (value || '').replace(/\s+/g, ' ').trim();
+                const grid = document.querySelector(selector);
+                if (!grid) return null;
+                const body = grid.querySelector('.kd-table-body.kd-horizontal-scroll-container')
+                    || grid.querySelector('.kd-table-body');
+                const rows = [...grid.querySelectorAll('tbody tr')].map((tr) =>
+                    [...tr.querySelectorAll('td')].map((td) => normalize(td.innerText))
+                );
+                return {
+                    headers,
+                    rows,
+                    scrollTop: body ? body.scrollTop : 0,
+                    scrollHeight: body ? body.scrollHeight : 0,
+                    clientHeight: body ? body.clientHeight : 0,
+                };
+            }""",
+            {
+                "selector": grid_selector,
+                "headers": list(headers),
+            },
+        )
+
+    def _set_grid_vertical_position(self, grid_selector: str, scroll_top: int) -> None:
+        self.page.evaluate(
+            r"""(payload) => {
+                const { selector, scrollTop } = payload;
+                const grid = document.querySelector(selector);
+                if (!grid) return;
+                const body = grid.querySelector('.kd-table-body.kd-horizontal-scroll-container')
+                    || grid.querySelector('.kd-table-body');
+                if (body) {
+                    body.scrollTop = scrollTop;
+                }
+            }""",
+            {
+                "selector": grid_selector,
+                "scrollTop": int(scroll_top),
+            },
+        )
+        self.page.wait_for_timeout(150)
+
+    def _extract_todo_total_count(self) -> int | None:
+        total_count = self.page.evaluate(
+            r"""() => {
+                const normalize = (value) => (value || '').replace(/\s+/g, ' ').trim();
+                const candidates = [
+                    document.querySelector('#gridview'),
+                    document.querySelector('body'),
+                ].filter(Boolean);
+                for (const candidate of candidates) {
+                    const text = normalize(candidate.innerText || '');
+                    const match = text.match(/共\s*(\d+)\s*条/);
+                    if (match) {
+                        return Number(match[1]);
+                    }
+                }
+                return null;
+            }"""
+        )
+        if total_count is None:
+            return None
+        return int(total_count)
 
     def extract_approval_records(self) -> list[dict[str, str]]:
         approval_tab = self.page.locator("#tabap .kd-cq-tabs-tab").filter(has_text="审批记录").first
@@ -1010,3 +1257,17 @@ class PermissionCollectFlow:
         if expected_count is None or expected_count == "":
             return "查看详情"
         return f"查看详情({int(expected_count)})"
+
+    @staticmethod
+    def _todo_row_sort_key(headers: Sequence[str], row: Sequence[str]) -> tuple[int, str]:
+        normalized_row = PermissionCollectFlow._normalize_row_cells(headers, row)
+        mapped = {
+            headers[idx]: normalized_row[idx] if idx < len(normalized_row) else ""
+            for idx in range(len(headers))
+        }
+        line_text = (mapped.get("#") or "").strip()
+        try:
+            line_no = int(line_text)
+        except ValueError:
+            line_no = 10**9
+        return (line_no, (mapped.get("单据编号") or "").strip())

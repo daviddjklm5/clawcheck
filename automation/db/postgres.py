@@ -36,6 +36,7 @@ BASIC_INFO_COLUMNS = {
     "position_name": "职位",
     "apply_time": "申请日期",
     "latest_approval_time": "最新审批时间",
+    "collection_count": "采集次数",
     "created_at": "记录创建时间",
     "updated_at": "记录更新时间",
 }
@@ -203,6 +204,7 @@ class PostgresPermissionStore(_PostgresStoreBase):
     ]
     schema_upgrade_sql_files = [
         Path(__file__).resolve().parents[1] / "sql" / "016_permission_apply_collect_approval_record_latest_time.sql",
+        Path(__file__).resolve().parents[1] / "sql" / "017_permission_apply_collect_recollect_strategy.sql",
     ]
     role_org_scope_migration_sql = (
         Path(__file__).resolve().parents[1] / "sql" / "014_apply_form_org_scope_role_org_refactor.sql"
@@ -351,6 +353,53 @@ class PostgresPermissionStore(_PostgresStoreBase):
                 for document in normalized_documents:
                     self._write_document(cursor, document)
 
+    @staticmethod
+    def _normalize_timestamp_text(value: Any) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, datetime):
+            return value.strftime("%Y-%m-%d %H:%M:%S")
+        if isinstance(value, date):
+            return value.isoformat()
+        return str(value).strip()
+
+    def fetch_document_sync_states(self, document_nos: Iterable[str]) -> dict[str, dict[str, Any]]:
+        normalized_document_nos = sorted(
+            {
+                str(document_no).strip()
+                for document_no in document_nos
+                if isinstance(document_no, str) and document_no.strip()
+            }
+        )
+        if not normalized_document_nos:
+            return {}
+
+        self.ensure_table()
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    f"""
+                    SELECT
+                        {self._quote_identifier(BASIC_INFO_COLUMNS["document_no"])},
+                        {self._quote_identifier(BASIC_INFO_COLUMNS["latest_approval_time"])},
+                        COALESCE({self._quote_identifier(BASIC_INFO_COLUMNS["collection_count"])}, 1)
+                    FROM {BASIC_INFO_TABLE}
+                    WHERE {self._quote_identifier(BASIC_INFO_COLUMNS["document_no"])} = ANY(%s)
+                    """,
+                    (normalized_document_nos,),
+                )
+                rows = cursor.fetchall()
+
+        return {
+            str(row[0]).strip(): {
+                "document_no": str(row[0]).strip(),
+                "latest_approval_time": self._normalize_timestamp_text(row[1]),
+                "collection_count": int(row[2]) if row[2] is not None else 1,
+            }
+            for row in rows
+            if row and isinstance(row[0], str) and row[0].strip()
+        }
+
     def _fetch_unique_roster_employee_no_by_names(self, cursor, approver_names: Iterable[str]) -> dict[str, str]:
         name_list = sorted(
             {
@@ -397,6 +446,15 @@ class PostgresPermissionStore(_PostgresStoreBase):
     def _write_document(self, cursor, document: dict[str, Any]) -> None:
         basic = document["basic_info"]
         document_no = basic["document_no"]
+        collection_count = self._to_int_or_none(basic.get("collection_count")) or 1
+        write_mode = str(document.get("_write_mode") or "").strip()
+
+        if write_mode == "recollect":
+            cursor.execute(
+                f'DELETE FROM {BASIC_INFO_TABLE} WHERE {self._quote_identifier(BASIC_INFO_COLUMNS["document_no"])} = %s',
+                (document_no,),
+            )
+
         basic_insert_columns = [
             BASIC_INFO_COLUMNS["document_no"],
             BASIC_INFO_COLUMNS["employee_no"],
@@ -409,6 +467,7 @@ class PostgresPermissionStore(_PostgresStoreBase):
             BASIC_INFO_COLUMNS["position_name"],
             BASIC_INFO_COLUMNS["apply_time"],
             BASIC_INFO_COLUMNS["latest_approval_time"],
+            BASIC_INFO_COLUMNS["collection_count"],
             BASIC_INFO_COLUMNS["created_at"],
             BASIC_INFO_COLUMNS["updated_at"],
         ]
@@ -429,6 +488,7 @@ class PostgresPermissionStore(_PostgresStoreBase):
                 %(position_name)s,
                 %(apply_time)s,
                 %(latest_approval_time)s,
+                %(collection_count)s,
                 NOW(),
                 NOW()
             )
@@ -443,12 +503,14 @@ class PostgresPermissionStore(_PostgresStoreBase):
                 {self._quote_identifier(BASIC_INFO_COLUMNS["position_name"])} = EXCLUDED.{self._quote_identifier(BASIC_INFO_COLUMNS["position_name"])},
                 {self._quote_identifier(BASIC_INFO_COLUMNS["apply_time"])} = EXCLUDED.{self._quote_identifier(BASIC_INFO_COLUMNS["apply_time"])},
                 {self._quote_identifier(BASIC_INFO_COLUMNS["latest_approval_time"])} = EXCLUDED.{self._quote_identifier(BASIC_INFO_COLUMNS["latest_approval_time"])},
+                {self._quote_identifier(BASIC_INFO_COLUMNS["collection_count"])} = EXCLUDED.{self._quote_identifier(BASIC_INFO_COLUMNS["collection_count"])},
                 {self._quote_identifier(BASIC_INFO_COLUMNS["updated_at"])} = NOW()
             """,
             {
                 **basic,
                 "apply_time": self._null_if_blank(basic.get("apply_time")),
                 "latest_approval_time": self._null_if_blank(basic.get("latest_approval_time")),
+                "collection_count": collection_count,
             },
         )
 
