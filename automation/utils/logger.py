@@ -28,6 +28,7 @@ def setup_logger(logs_dir: Path) -> logging.Logger:
     logger.addHandler(sh)
     logger.addHandler(fh)
     logger.propagate = False
+    setattr(logger, "log_file_path", str(logfile))
 
     logger.info("Log file: %s", logfile)
     return logger
