@@ -15,6 +15,12 @@ except ModuleNotFoundError:  # pragma: no cover
     psycopg = None
 
 
+BASIC_INFO_TABLE = '"申请单基本信息"'
+PERMISSION_APPLY_DETAIL_TABLE = '"申请单权限列表"'
+APPROVAL_RECORD_TABLE = '"申请单审批记录"'
+ORGANIZATION_CODE_TABLE = "organization_code"
+
+
 class _PostgresStoreBase:
     def __init__(self, settings: DatabaseSettings) -> None:
         self.settings = settings
@@ -82,8 +88,8 @@ class PostgresPermissionStore(_PostgresStoreBase):
         document_no = basic["document_no"]
 
         cursor.execute(
-            """
-            INSERT INTO basic_info (
+            f"""
+            INSERT INTO {BASIC_INFO_TABLE} (
                 document_no,
                 employee_no,
                 permission_target,
@@ -135,15 +141,15 @@ class PostgresPermissionStore(_PostgresStoreBase):
             },
         )
 
-        cursor.execute("DELETE FROM permission_apply_detail WHERE document_no = %s", (document_no,))
-        cursor.execute("DELETE FROM approval_record WHERE document_no = %s", (document_no,))
-        cursor.execute("DELETE FROM organization_code WHERE document_no = %s", (document_no,))
+        cursor.execute(f"DELETE FROM {PERMISSION_APPLY_DETAIL_TABLE} WHERE document_no = %s", (document_no,))
+        cursor.execute(f"DELETE FROM {APPROVAL_RECORD_TABLE} WHERE document_no = %s", (document_no,))
+        cursor.execute(f"DELETE FROM {ORGANIZATION_CODE_TABLE} WHERE document_no = %s", (document_no,))
 
         detail_rows = document.get("permission_details", [])
         if detail_rows:
             cursor.executemany(
-                """
-                INSERT INTO permission_apply_detail (
+                f"""
+                INSERT INTO {PERMISSION_APPLY_DETAIL_TABLE} (
                     document_no,
                     line_no,
                     apply_type,
@@ -197,8 +203,8 @@ class PostgresPermissionStore(_PostgresStoreBase):
         approval_rows = document.get("approval_records", [])
         if approval_rows:
             cursor.executemany(
-                """
-                INSERT INTO approval_record (
+                f"""
+                INSERT INTO {APPROVAL_RECORD_TABLE} (
                     document_no,
                     record_seq,
                     node_name,
@@ -236,8 +242,8 @@ class PostgresPermissionStore(_PostgresStoreBase):
         org_codes = sorted({code for code in document.get("organization_codes", []) if code})
         if org_codes:
             cursor.executemany(
-                """
-                INSERT INTO organization_code (document_no, org_code, created_at)
+                f"""
+                INSERT INTO {ORGANIZATION_CODE_TABLE} (document_no, org_code, created_at)
                 VALUES (%s, %s, NOW())
                 ON CONFLICT (document_no, org_code) DO NOTHING
                 """,

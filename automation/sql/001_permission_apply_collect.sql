@@ -1,4 +1,4 @@
-CREATE TABLE IF NOT EXISTS basic_info (
+CREATE TABLE IF NOT EXISTS "申请单基本信息" (
     document_no VARCHAR(64) PRIMARY KEY,
     employee_no VARCHAR(64) NOT NULL,
     permission_target VARCHAR(128) NOT NULL,
@@ -15,9 +15,9 @@ CREATE TABLE IF NOT EXISTS basic_info (
     updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE IF NOT EXISTS permission_apply_detail (
+CREATE TABLE IF NOT EXISTS "申请单权限列表" (
     id BIGSERIAL PRIMARY KEY,
-    document_no VARCHAR(64) NOT NULL REFERENCES basic_info(document_no) ON DELETE CASCADE,
+    document_no VARCHAR(64) NOT NULL REFERENCES "申请单基本信息"(document_no) ON DELETE CASCADE,
     line_no VARCHAR(32),
     apply_type VARCHAR(128),
     role_name VARCHAR(255),
@@ -35,12 +35,12 @@ CREATE TABLE IF NOT EXISTS permission_apply_detail (
     raw_row JSONB,
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    CONSTRAINT uq_permission_apply_detail UNIQUE (document_no, line_no)
+    CONSTRAINT uq_apply_form_permission_list UNIQUE (document_no, line_no)
 );
 
-CREATE TABLE IF NOT EXISTS approval_record (
+CREATE TABLE IF NOT EXISTS "申请单审批记录" (
     id BIGSERIAL PRIMARY KEY,
-    document_no VARCHAR(64) NOT NULL REFERENCES basic_info(document_no) ON DELETE CASCADE,
+    document_no VARCHAR(64) NOT NULL REFERENCES "申请单基本信息"(document_no) ON DELETE CASCADE,
     record_seq INTEGER,
     node_name VARCHAR(128),
     approver_name VARCHAR(128),
@@ -54,12 +54,12 @@ CREATE TABLE IF NOT EXISTS approval_record (
 
 CREATE TABLE IF NOT EXISTS organization_code (
     id BIGSERIAL PRIMARY KEY,
-    document_no VARCHAR(64) NOT NULL REFERENCES basic_info(document_no) ON DELETE CASCADE,
+    document_no VARCHAR(64) NOT NULL REFERENCES "申请单基本信息"(document_no) ON DELETE CASCADE,
     org_code VARCHAR(64) NOT NULL,
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
     CONSTRAINT uq_organization_code UNIQUE (document_no, org_code)
 );
 
-CREATE INDEX IF NOT EXISTS idx_permission_apply_detail_document_no ON permission_apply_detail(document_no);
-CREATE INDEX IF NOT EXISTS idx_approval_record_document_no ON approval_record(document_no);
+CREATE INDEX IF NOT EXISTS idx_apply_form_permission_list_document_no ON "申请单权限列表"(document_no);
+CREATE INDEX IF NOT EXISTS idx_apply_form_approval_record_document_no ON "申请单审批记录"(document_no);
 CREATE INDEX IF NOT EXISTS idx_organization_code_document_no ON organization_code(document_no);

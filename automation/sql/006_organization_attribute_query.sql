@@ -274,6 +274,7 @@ CREATE OR REPLACE FUNCTION fn_map_org_auth_level(
     p_org_level TEXT,
     p_physical_level TEXT,
     p_org_full_name TEXT,
+    p_org_unit_name TEXT,
     p_process_level_category TEXT
 )
 RETURNS TEXT
@@ -284,6 +285,7 @@ AS $$
 DECLARE
     normalized_org_code TEXT := NULLIF(BTRIM(p_org_code), '');
     normalized_org_full_name TEXT := NULLIF(BTRIM(p_org_full_name), '');
+    normalized_org_unit_name TEXT := NULLIF(BTRIM(p_org_unit_name), '');
     normalized_process_level_category TEXT := NULLIF(BTRIM(p_process_level_category), '');
     physical_level_num NUMERIC := CASE
         WHEN NULLIF(BTRIM(p_physical_level), '') ~ '^[0-9]+([.][0-9]+)?$' THEN NULLIF(BTRIM(p_physical_level), '')::NUMERIC
@@ -318,6 +320,11 @@ BEGIN
         RETURN '二级授权';
     END IF;
 
+    IF COALESCE(normalized_org_unit_name, '') LIKE '（作废）%'
+       AND physical_level_num = 2 THEN
+        RETURN '二级授权';
+    END IF;
+
     IF normalized_process_level_category = '业务单元本部' THEN
         RETURN '二级授权';
     END IF;
@@ -340,6 +347,7 @@ CREATE OR REPLACE FUNCTION fn_map_org_auth_level_rule(
     p_org_level TEXT,
     p_physical_level TEXT,
     p_org_full_name TEXT,
+    p_org_unit_name TEXT,
     p_process_level_category TEXT
 )
 RETURNS TEXT
@@ -350,6 +358,7 @@ AS $$
 DECLARE
     normalized_org_code TEXT := NULLIF(BTRIM(p_org_code), '');
     normalized_org_full_name TEXT := NULLIF(BTRIM(p_org_full_name), '');
+    normalized_org_unit_name TEXT := NULLIF(BTRIM(p_org_unit_name), '');
     normalized_process_level_category TEXT := NULLIF(BTRIM(p_process_level_category), '');
     physical_level_num NUMERIC := CASE
         WHEN NULLIF(BTRIM(p_physical_level), '') ~ '^[0-9]+([.][0-9]+)?$' THEN NULLIF(BTRIM(p_physical_level), '')::NUMERIC
@@ -382,6 +391,11 @@ BEGIN
         '50921744'
     ) THEN
         RETURN 'org_code:l2_specified';
+    END IF;
+
+    IF COALESCE(normalized_org_unit_name, '') LIKE '（作废）%'
+       AND physical_level_num = 2 THEN
+        RETURN 'org_unit_name:startswith_（作废）_and_physical_level:eq_2';
     END IF;
 
     IF normalized_process_level_category = '业务单元本部' THEN
@@ -621,6 +635,7 @@ BEGIN
                 o.org_level,
                 o.physical_level,
                 o.org_full_name,
+                fn_map_org_unit_name(o.org_full_name),
                 fn_map_process_level_category(
                     COALESCE(fn_map_process_level_name_override(o.org_full_name), rpl.process_level_name_resolved),
                     o.company_name,
@@ -632,6 +647,7 @@ BEGIN
                 o.org_level,
                 o.physical_level,
                 o.org_full_name,
+                fn_map_org_unit_name(o.org_full_name),
                 fn_map_process_level_category(
                     COALESCE(fn_map_process_level_name_override(o.org_full_name), rpl.process_level_name_resolved),
                     o.company_name,
