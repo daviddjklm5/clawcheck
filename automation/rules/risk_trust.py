@@ -257,7 +257,6 @@ class RiskTrustEvaluator:
         return {
             "applicant_hr_type": self._normalized_text(applicant.get("hr_type")),
             "applicant_process_level_category": self._normalized_text(applicant.get("process_level_category")),
-            "document_all_apply_types_cancel_role": bool(facts.get("document_all_apply_types_cancel_role")),
             "current_round_all_approvers_equal_submitter": bool(approval.get("current_round_all_approvers_equal_submitter")),
             "has_warzone_hr_in_history": bool(approval.get("has_warzone_hr_in_history")),
             "has_warzone_hr_in_current_round": bool(approval.get("has_warzone_hr_in_current_round")),
@@ -283,12 +282,11 @@ class RiskTrustEvaluator:
             if self._normalized_text(node_name) != "<NULL>"
         }
         approval_records = list(bundle.get("approval_records", []))
+        applicant_employee_no = self._normalized_text(basic_info.get("employee_no"))
         last_submit_index = -1
-        last_submitter_employee_no = self._normalized_text(basic_info.get("employee_no"))
         for idx, row in enumerate(approval_records):
             if self._normalized_text(row.get("approval_action")) == "提交":
                 last_submit_index = idx
-                last_submitter_employee_no = self._normalized_text(row.get("approver_employee_no"))
         current_round_records = approval_records[last_submit_index:] if last_submit_index >= 0 else approval_records
 
         def _non_ignored_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -304,7 +302,7 @@ class RiskTrustEvaluator:
             filtered: list[dict[str, Any]] = []
             for row in _non_ignored_rows(rows):
                 approver_employee_no = self._normalized_text(row.get("approver_employee_no"))
-                if approver_employee_no == "<NULL>" or approver_employee_no == last_submitter_employee_no:
+                if approver_employee_no == "<NULL>" or approver_employee_no == applicant_employee_no:
                     continue
                 filtered.append(row)
             return filtered
@@ -314,7 +312,7 @@ class RiskTrustEvaluator:
         current_round_valid_rows = _valid_approval_rows(current_round_records)
 
         current_round_all_approvers_equal_submitter = bool(current_round_non_ignored) and all(
-            self._normalized_text(row.get("approver_employee_no")) == last_submitter_employee_no
+            self._normalized_text(row.get("approver_employee_no")) == applicant_employee_no
             for row in current_round_non_ignored
             if self._normalized_text(row.get("approver_employee_no")) != "<NULL>"
         )
@@ -340,7 +338,6 @@ class RiskTrustEvaluator:
             details.append(
                 {
                     "line_no": detail_row.get("line_no"),
-                    "apply_type": detail_row.get("apply_type"),
                     "role_code": detail_row.get("role_code"),
                     "role_name": detail_row.get("role_name"),
                     "permission_level": detail_row.get("permission_level"),
@@ -349,14 +346,9 @@ class RiskTrustEvaluator:
                     "targets": targets,
                 }
             )
-        document_all_apply_types_cancel_role = bool(details) and all(
-            self._normalized_text(detail.get("apply_type")) == "取消角色"
-            for detail in details
-        )
 
         return {
             "document_no": basic_info.get("document_no"),
-            "document_all_apply_types_cancel_role": document_all_apply_types_cancel_role,
             "basic_info": basic_info,
             "applicant": {
                 "employee_no": basic_info.get("employee_no"),
@@ -366,7 +358,6 @@ class RiskTrustEvaluator:
             },
             "approval": {
                 "last_submit_time": current_round_records[0].get("approval_time") if current_round_records else None,
-                "last_submitter_employee_no": None if last_submitter_employee_no == "<NULL>" else last_submitter_employee_no,
                 "ignored_node_names": sorted(ignored_node_names),
                 "excluded_node_names": [
                     self._normalized_text(row.get("node_name"))

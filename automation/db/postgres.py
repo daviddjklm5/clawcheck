@@ -1433,6 +1433,328 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
             with connection.cursor() as cursor:
                 cursor.execute(ddl)
 
+    @staticmethod
+    def _format_datetime_value(value: Any) -> str:
+        if value is None:
+            return "-"
+        if isinstance(value, datetime):
+            return value.strftime("%Y-%m-%d %H:%M:%S")
+        if isinstance(value, date):
+            return value.strftime("%Y-%m-%d")
+        return str(value)
+
+    @staticmethod
+    def _format_score_value(value: Any) -> float | None:
+        if value is None:
+            return None
+        return float(value)
+
+    @staticmethod
+    def _format_bool_label(value: Any) -> str:
+        return "是" if bool(value) else "否"
+
+    @staticmethod
+    def _suggested_action_label(value: str | None) -> str:
+        mapping = {
+            "reject": "建议拒绝",
+            "manual_review": "建议人工复核",
+            "warning": "建议关注",
+            "trust": "建议通过",
+        }
+        normalized = (value or "").strip()
+        return mapping.get(normalized, normalized or "-")
+
+    def fetch_existing_assessment_batches(self, batch_nos: Iterable[str]) -> set[str]:
+        normalized_batch_nos = sorted(
+            {
+                batch_no
+                for value in batch_nos
+                if (batch_no := self._strip_text(value)) is not None
+            }
+        )
+        if not normalized_batch_nos:
+            return set()
+
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    f"""
+                    SELECT {self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["assessment_batch_no"])}
+                    FROM {RISK_TRUST_ASSESSMENT_TABLE}
+                    WHERE {self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["assessment_batch_no"])} = ANY(%s)
+                    GROUP BY {self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["assessment_batch_no"])}
+                    """,
+                    (normalized_batch_nos,),
+                )
+                return {
+                    batch_no
+                    for row in cursor.fetchall()
+                    if (batch_no := self._strip_text(row[0])) is not None
+                }
+
+    def fetch_process_dashboard(self) -> dict[str, Any]:
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                latest_batch_no = self._fetch_latest_assessment_batch_no(cursor)
+                if latest_batch_no is None:
+                    return {
+                        "stats": [
+                            {
+                                "label": "待处理单据",
+                                "value": "0",
+                                "hint": "当前尚未写入任何风险信任评估结果。",
+                                "tone": "info",
+                            },
+                            {
+                                "label": "最新评估批次",
+                                "value": "-",
+                                "hint": "执行 `python automation/scripts/run.py audit` 后会显示最新批次。",
+                                "tone": "default",
+                            },
+                        ],
+                        "latestBatch": None,
+                        "distributionSections": [],
+                        "documents": [],
+                    }
+
+                batch_summary = self._fetch_process_batch_summary(cursor, latest_batch_no)
+                summary_rows = self._fetch_process_summary_rows(cursor, latest_batch_no)
+                distribution_sections = self._fetch_process_distribution_sections(cursor, latest_batch_no)
+
+        reject_count = next(
+            (item["count"] for item in distribution_sections[0]["items"] if item["label"] == "拒绝"),
+            0,
+        ) if distribution_sections else 0
+        manual_review_count = next(
+            (item["count"] for item in distribution_sections[0]["items"] if item["label"] == "人工干预"),
+            0,
+        ) if distribution_sections else 0
+        latest_batch = {
+            "batchNo": latest_batch_no,
+            **batch_summary,
+        }
+
+        return {
+            "stats": [
+                {
+                    "label": "待处理单据",
+                    "value": str(batch_summary["documentCount"]),
+                    "hint": "来自最新已落库评估批次的单据数。",
+                    "tone": "warning" if batch_summary["documentCount"] else "info",
+                },
+                {
+                    "label": "拒绝",
+                    "value": str(reject_count),
+                    "hint": "最新批次中总结论为“拒绝”的单据数。",
+                    "tone": "danger" if reject_count else "success",
+                },
+                {
+                    "label": "人工干预",
+                    "value": str(manual_review_count),
+                    "hint": "需要人工复核的单据数。",
+                    "tone": "warning" if manual_review_count else "success",
+                },
+                {
+                    "label": "最新评估批次",
+                    "value": latest_batch_no,
+                    "hint": f"评估版本 {batch_summary['assessmentVersion']}，评估时间 {batch_summary['assessedAt']}。",
+                    "tone": "default",
+                },
+            ],
+            "latestBatch": latest_batch,
+            "distributionSections": distribution_sections,
+            "documents": [
+                {
+                    "id": row["document_no"],
+                    "documentNo": row["document_no"],
+                    "applicantName": row["applicant_name"] or "-",
+                    "applicantNo": row["employee_no"] or "-",
+                    "permissionTarget": row["permission_target"] or "-",
+                    "department": row["department_name"] or "-",
+                    "documentStatus": row["document_status"] or "-",
+                    "finalScore": row["final_score"],
+                    "summaryConclusion": row["summary_conclusion"] or "-",
+                    "suggestedAction": row["suggested_action"] or "",
+                    "suggestedActionLabel": self._suggested_action_label(row["suggested_action"]),
+                    "lowScoreDetailCount": int(row["low_score_detail_count"] or 0),
+                    "assessedAt": self._format_datetime_value(row["assessed_at"]),
+                    "latestBatchNo": row["assessment_batch_no"] or "-",
+                }
+                for row in summary_rows
+            ],
+        }
+
+    def fetch_process_document_detail(
+        self,
+        document_no: str,
+        assessment_batch_no: str | None = None,
+    ) -> dict[str, Any] | None:
+        normalized_document_no = self._strip_text(document_no)
+        if normalized_document_no is None:
+            return None
+
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                batch_no = self._strip_text(assessment_batch_no) or self._fetch_latest_assessment_batch_no(cursor)
+                if batch_no is None:
+                    return None
+                summary_rows = self._fetch_process_summary_rows(
+                    cursor,
+                    batch_no,
+                    document_no=normalized_document_no,
+                )
+                if not summary_rows:
+                    return None
+                summary_row = summary_rows[0]
+                role_rows = self._fetch_process_role_rows(cursor, [normalized_document_no])
+                approval_rows = self._fetch_approval_rows(cursor, [normalized_document_no])
+                org_scope_rows = self._fetch_process_org_scope_display_rows(cursor, [normalized_document_no])
+                low_score_rows = self._fetch_process_low_score_rows(
+                    cursor,
+                    batch_no,
+                    [normalized_document_no],
+                )
+
+        notes: list[str] = []
+        if summary_row["assessment_explain"]:
+            notes.append(f"评估说明：{summary_row['assessment_explain']}")
+        if summary_row["low_score_detail_count"]:
+            notes.append(
+                f"当前共有 {int(summary_row['low_score_detail_count'])} 条低分明细，建议优先查看“低分明细”页签。"
+            )
+        if summary_row["low_score_detail_conclusion"]:
+            notes.append(f"低分结论汇总：{summary_row['low_score_detail_conclusion']}")
+        if summary_row["suggested_action"] == "reject":
+            notes.append("当前建议动作为拒绝，需结合原始单据与审批链复核后再处理。")
+        elif summary_row["suggested_action"] == "manual_review":
+            notes.append("当前建议动作为人工复核，暂不建议直接页面回写审批。")
+
+        return {
+            "documentNo": summary_row["document_no"],
+            "overviewFields": [
+                {"label": "单据编号", "value": summary_row["document_no"] or "-", "hint": "当前选中单据"},
+                {
+                    "label": "申请人",
+                    "value": f"{summary_row['applicant_name'] or '-'} / {summary_row['employee_no'] or '-'}",
+                    "hint": "申请人姓名通过 `人员属性查询` 关联。",
+                },
+                {
+                    "label": "权限对象",
+                    "value": summary_row["permission_target"] or "-",
+                    "hint": "来自 `申请单基本信息.权限对象`。",
+                },
+                {
+                    "label": "单据状态",
+                    "value": summary_row["document_status"] or "-",
+                    "hint": "当前待办单据状态。",
+                },
+                {
+                    "label": "部门",
+                    "value": summary_row["department_name"] or "-",
+                    "hint": "申请人当前部门。",
+                },
+                {
+                    "label": "申请日期",
+                    "value": self._format_datetime_value(summary_row["apply_time"]),
+                    "hint": "若源页面缺失则显示 `-`。",
+                },
+                {
+                    "label": "最新审批时间",
+                    "value": self._format_datetime_value(summary_row["latest_approval_time"]),
+                    "hint": "用于判断审批轨迹是否已更新。",
+                },
+                {
+                    "label": "申请人HR类型",
+                    "value": summary_row["applicant_hr_type"] or "-",
+                    "hint": "来自 `人员属性查询`。",
+                },
+                {
+                    "label": "申请人组织流程层级分类",
+                    "value": summary_row["applicant_process_level_category"] or "-",
+                    "hint": "来自 `组织属性查询`。",
+                },
+                {
+                    "label": "最终信任分",
+                    "value": f"{summary_row['final_score']:.1f}" if summary_row["final_score"] is not None else "-",
+                    "hint": "整单按最低分汇总。",
+                },
+                {
+                    "label": "总结论",
+                    "value": summary_row["summary_conclusion"] or "-",
+                    "hint": f"建议动作：{self._suggested_action_label(summary_row['suggested_action'])}",
+                },
+                {
+                    "label": "最低命中维度",
+                    "value": summary_row["lowest_hit_dimension"] or "-",
+                    "hint": "当前整单最低分来源。",
+                },
+                {
+                    "label": "低分明细条数",
+                    "value": str(int(summary_row["low_score_detail_count"] or 0)),
+                    "hint": "分值小于等于 1.0 的明细条数。",
+                },
+                {
+                    "label": "评估批次号",
+                    "value": summary_row["assessment_batch_no"] or "-",
+                    "hint": f"版本 {summary_row['assessment_version'] or '-'}。",
+                },
+                {
+                    "label": "评估时间",
+                    "value": self._format_datetime_value(summary_row["assessed_at"]),
+                    "hint": "结果写入批次时间。",
+                },
+            ],
+            "roles": [
+                {
+                    "id": row["id"],
+                    "roleCode": row["role_code"] or "-",
+                    "roleName": row["role_name"] or "-",
+                    "applyType": row["apply_type"] or "-",
+                    "orgScopeCount": int(row["org_scope_count"] or 0),
+                    "skipOrgScopeCheck": self._format_bool_label(row["skip_org_scope_check"]),
+                }
+                for row in role_rows
+            ],
+            "approvals": [
+                {
+                    "id": f"{row['document_no']}:{row['record_seq']}",
+                    "nodeName": row["node_name"] or "-",
+                    "approver": row["approver_name"] or (row["approver_employee_no"] or "-"),
+                    "action": row["approval_action"] or "-",
+                    "finishedAt": self._format_datetime_value(row["approval_time"]),
+                    "comment": row["approval_opinion"] or "-",
+                }
+                for row in approval_rows
+            ],
+            "orgScopes": [
+                {
+                    "id": row["id"],
+                    "roleCode": row["role_code"] or "-",
+                    "roleName": row["role_name"] or "-",
+                    "organizationCode": row["org_code"] or "-",
+                    "organizationName": row["organization_name"] or "-",
+                    "skipOrgScopeCheck": self._format_bool_label(row["skip_org_scope_check"]),
+                }
+                for row in org_scope_rows
+            ],
+            "riskDetails": [
+                {
+                    "id": row["id"],
+                    "dimensionName": row["dimension_name"] or "-",
+                    "ruleId": row["rule_id"] or "-",
+                    "ruleSummary": row["rule_summary"] or "-",
+                    "roleCode": row["role_code"] or "-",
+                    "roleName": row["role_name"] or "-",
+                    "orgCode": row["org_code"] or "-",
+                    "score": row["score"],
+                    "detailConclusion": row["detail_conclusion"] or "-",
+                    "interventionAction": row["intervention_action"] or "-",
+                }
+                for row in low_score_rows
+            ],
+            "notes": notes,
+        }
+
     def fetch_document_bundles(
         self,
         document_no: str | None = None,
@@ -1849,6 +2171,406 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
             for row in rows
             if self._strip_text(row[0]) is not None
         }
+
+    def _fetch_latest_assessment_batch_no(self, cursor) -> str | None:
+        cursor.execute(
+            f"""
+            SELECT {self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["assessment_batch_no"])}
+            FROM {RISK_TRUST_ASSESSMENT_TABLE}
+            ORDER BY {self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["assessed_at"])} DESC,
+                     {self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["id"])} DESC
+            LIMIT 1
+            """
+        )
+        row = cursor.fetchone()
+        if not row:
+            return None
+        return self._strip_text(row[0])
+
+    def _fetch_process_batch_summary(self, cursor, assessment_batch_no: str) -> dict[str, Any]:
+        cursor.execute(
+            f"""
+            SELECT
+                MAX({self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["assessment_version"])}),
+                COUNT(*),
+                COALESCE(SUM({self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["low_score_detail_count"])}), 0),
+                MAX({self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["assessed_at"])})
+            FROM {RISK_TRUST_ASSESSMENT_TABLE}
+            WHERE {self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["assessment_batch_no"])} = %s
+            """,
+            (assessment_batch_no,),
+        )
+        row = cursor.fetchone()
+        cursor.execute(
+            f"""
+            SELECT COUNT(*)
+            FROM {RISK_TRUST_ASSESSMENT_DETAIL_TABLE}
+            WHERE {self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["assessment_batch_no"])} = %s
+            """,
+            (assessment_batch_no,),
+        )
+        detail_count = cursor.fetchone()[0]
+        return {
+            "assessmentVersion": self._strip_text(row[0]) or "-",
+            "documentCount": int(row[1] or 0),
+            "lowScoreDetailCount": int(row[2] or 0),
+            "detailCount": int(detail_count or 0),
+            "assessedAt": self._format_datetime_value(row[3]),
+        }
+
+    def _fetch_process_summary_rows(
+        self,
+        cursor,
+        assessment_batch_no: str,
+        document_no: str | None = None,
+    ) -> list[dict[str, Any]]:
+        sql = f"""
+            SELECT
+                assessment.{self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["document_no"])},
+                basic.{self._quote_identifier(BASIC_INFO_COLUMNS["employee_no"])},
+                person.{self._quote_identifier(PERSON_ATTRIBUTES_COLUMNS["employee_name"])},
+                basic.{self._quote_identifier(BASIC_INFO_COLUMNS["permission_target"])},
+                basic.{self._quote_identifier(BASIC_INFO_COLUMNS["document_status"])},
+                basic.{self._quote_identifier(BASIC_INFO_COLUMNS["company_name"])},
+                basic.{self._quote_identifier(BASIC_INFO_COLUMNS["department_name"])},
+                basic.{self._quote_identifier(BASIC_INFO_COLUMNS["position_name"])},
+                basic.{self._quote_identifier(BASIC_INFO_COLUMNS["apply_time"])},
+                basic.{self._quote_identifier(BASIC_INFO_COLUMNS["latest_approval_time"])},
+                assessment.{self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["assessment_batch_no"])},
+                assessment.{self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["assessment_version"])},
+                assessment.{self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["applicant_hr_type"])},
+                assessment.{self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["applicant_process_level_category"])},
+                assessment.{self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["final_score"])},
+                assessment.{self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["summary_conclusion"])},
+                assessment.{self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["suggested_action"])},
+                assessment.{self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["lowest_hit_dimension"])},
+                assessment.{self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["lowest_hit_role_code"])},
+                assessment.{self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["lowest_hit_org_code"])},
+                assessment.{self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["hit_manual_review"])},
+                assessment.{self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["has_low_score_details"])},
+                assessment.{self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["low_score_detail_count"])},
+                assessment.{self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["low_score_detail_conclusion"])},
+                assessment.{self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["assessment_explain"])},
+                assessment.{self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["assessed_at"])}
+            FROM {RISK_TRUST_ASSESSMENT_TABLE} AS assessment
+            INNER JOIN {BASIC_INFO_TABLE} AS basic
+                ON basic.{self._quote_identifier(BASIC_INFO_COLUMNS["document_no"])} =
+                   assessment.{self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["document_no"])}
+            LEFT JOIN {PERSON_ATTRIBUTES_TABLE} AS person
+                ON person.{self._quote_identifier(PERSON_ATTRIBUTES_COLUMNS["employee_no"])} =
+                   basic.{self._quote_identifier(BASIC_INFO_COLUMNS["employee_no"])}
+            WHERE assessment.{self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["assessment_batch_no"])} = %s
+        """
+        params: list[Any] = [assessment_batch_no]
+        if document_no is not None:
+            sql += (
+                f" AND assessment.{self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS['document_no'])} = %s"
+            )
+            params.append(document_no)
+        sql += f"""
+            ORDER BY assessment.{self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["final_score"])} ASC,
+                     assessment.{self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["low_score_detail_count"])} DESC,
+                     basic.{self._quote_identifier(BASIC_INFO_COLUMNS["latest_approval_time"])} DESC NULLS LAST,
+                     basic.{self._quote_identifier(BASIC_INFO_COLUMNS["document_no"])}
+        """
+        cursor.execute(sql, params)
+        rows = cursor.fetchall()
+        return [
+            {
+                "document_no": self._strip_text(row[0]),
+                "employee_no": self._strip_text(row[1]),
+                "applicant_name": self._strip_text(row[2]),
+                "permission_target": self._strip_text(row[3]),
+                "document_status": self._strip_text(row[4]),
+                "company_name": self._strip_text(row[5]),
+                "department_name": self._strip_text(row[6]),
+                "position_name": self._strip_text(row[7]),
+                "apply_time": row[8],
+                "latest_approval_time": row[9],
+                "assessment_batch_no": self._strip_text(row[10]),
+                "assessment_version": self._strip_text(row[11]),
+                "applicant_hr_type": self._strip_text(row[12]),
+                "applicant_process_level_category": self._strip_text(row[13]),
+                "final_score": self._format_score_value(row[14]),
+                "summary_conclusion": self._strip_text(row[15]),
+                "suggested_action": self._strip_text(row[16]),
+                "lowest_hit_dimension": self._strip_text(row[17]),
+                "lowest_hit_role_code": self._strip_text(row[18]),
+                "lowest_hit_org_code": self._strip_text(row[19]),
+                "hit_manual_review": bool(row[20]),
+                "has_low_score_details": bool(row[21]),
+                "low_score_detail_count": row[22],
+                "low_score_detail_conclusion": self._strip_text(row[23]),
+                "assessment_explain": self._strip_text(row[24]),
+                "assessed_at": row[25],
+            }
+            for row in rows
+            if self._strip_text(row[0]) is not None
+        ]
+
+    def _fetch_process_role_rows(self, cursor, document_nos: Iterable[str]) -> list[dict[str, Any]]:
+        normalized_document_nos = [document_no for document_no in document_nos if document_no]
+        if not normalized_document_nos:
+            return []
+        cursor.execute(
+            f"""
+            SELECT
+                detail.{self._quote_identifier(PERMISSION_DETAIL_COLUMNS["document_no"])},
+                detail.{self._quote_identifier(PERMISSION_DETAIL_COLUMNS["id"])},
+                detail.{self._quote_identifier(PERMISSION_DETAIL_COLUMNS["role_code"])},
+                detail.{self._quote_identifier(PERMISSION_DETAIL_COLUMNS["role_name"])},
+                detail.{self._quote_identifier(PERMISSION_DETAIL_COLUMNS["apply_type"])},
+                detail.{self._quote_identifier(PERMISSION_DETAIL_COLUMNS["org_scope_count"])},
+                catalog.{self._quote_identifier(PERMISSION_CATALOG_COLUMNS["skip_org_scope_check"])}
+            FROM {PERMISSION_APPLY_DETAIL_TABLE} AS detail
+            LEFT JOIN "权限列表" AS catalog
+                ON catalog.{self._quote_identifier(PERMISSION_CATALOG_COLUMNS["role_code"])} =
+                   detail.{self._quote_identifier(PERMISSION_DETAIL_COLUMNS["role_code"])}
+            WHERE detail.{self._quote_identifier(PERMISSION_DETAIL_COLUMNS["document_no"])} = ANY(%s)
+            ORDER BY detail.{self._quote_identifier(PERMISSION_DETAIL_COLUMNS["document_no"])},
+                     detail.{self._quote_identifier(PERMISSION_DETAIL_COLUMNS["line_no"])}
+            """,
+            (normalized_document_nos,),
+        )
+        rows = cursor.fetchall()
+        return [
+            {
+                "document_no": self._strip_text(row[0]),
+                "id": f"{self._strip_text(row[0])}:{self._strip_text(row[1]) or index}",
+                "role_code": self._strip_text(row[2]),
+                "role_name": self._strip_text(row[3]),
+                "apply_type": self._strip_text(row[4]),
+                "org_scope_count": row[5],
+                "skip_org_scope_check": bool(row[6]),
+            }
+            for index, row in enumerate(rows, start=1)
+            if self._strip_text(row[0]) is not None
+        ]
+
+    def _fetch_process_org_scope_display_rows(self, cursor, document_nos: Iterable[str]) -> list[dict[str, Any]]:
+        normalized_document_nos = [document_no for document_no in document_nos if document_no]
+        if not normalized_document_nos:
+            return []
+        cursor.execute(
+            f"""
+            SELECT
+                scope.{self._quote_identifier(APPLY_FORM_ORG_SCOPE_COLUMNS["document_no"])},
+                scope.{self._quote_identifier(APPLY_FORM_ORG_SCOPE_COLUMNS["role_code"])},
+                scope.{self._quote_identifier(APPLY_FORM_ORG_SCOPE_COLUMNS["role_name"])},
+                scope.{self._quote_identifier(APPLY_FORM_ORG_SCOPE_COLUMNS["org_code"])},
+                catalog.{self._quote_identifier(PERMISSION_CATALOG_COLUMNS["skip_org_scope_check"])},
+                org.{self._quote_identifier(ORG_ATTRIBUTE_COLUMNS["org_unit_name"])}
+            FROM {APPLY_FORM_ORG_SCOPE_TABLE} AS scope
+            LEFT JOIN "权限列表" AS catalog
+                ON catalog.{self._quote_identifier(PERMISSION_CATALOG_COLUMNS["role_code"])} =
+                   scope.{self._quote_identifier(APPLY_FORM_ORG_SCOPE_COLUMNS["role_code"])}
+            LEFT JOIN "组织属性查询" AS org
+                ON org.{self._quote_identifier(ORG_ATTRIBUTE_COLUMNS["org_code"])} =
+                   scope.{self._quote_identifier(APPLY_FORM_ORG_SCOPE_COLUMNS["org_code"])}
+            WHERE scope.{self._quote_identifier(APPLY_FORM_ORG_SCOPE_COLUMNS["document_no"])} = ANY(%s)
+            ORDER BY scope.{self._quote_identifier(APPLY_FORM_ORG_SCOPE_COLUMNS["document_no"])},
+                     scope.{self._quote_identifier(APPLY_FORM_ORG_SCOPE_COLUMNS["role_code"])},
+                     scope.{self._quote_identifier(APPLY_FORM_ORG_SCOPE_COLUMNS["org_code"])}
+            """,
+            (normalized_document_nos,),
+        )
+        rows = cursor.fetchall()
+        return [
+            {
+                "document_no": self._strip_text(row[0]),
+                "id": f"{self._strip_text(row[0])}:{self._strip_text(row[1]) or '-'}:{self._strip_text(row[3]) or '<NONE>'}",
+                "role_code": self._strip_text(row[1]),
+                "role_name": self._strip_text(row[2]),
+                "org_code": self._strip_text(row[3]),
+                "skip_org_scope_check": bool(row[4]),
+                "organization_name": self._strip_text(row[5]),
+            }
+            for row in rows
+            if self._strip_text(row[0]) is not None and self._strip_text(row[1]) is not None
+        ]
+
+    def _fetch_process_low_score_rows(
+        self,
+        cursor,
+        assessment_batch_no: str,
+        document_nos: Iterable[str],
+    ) -> list[dict[str, Any]]:
+        normalized_document_nos = [document_no for document_no in document_nos if document_no]
+        if not normalized_document_nos:
+            return []
+        cursor.execute(
+            f"""
+            SELECT
+                {self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["document_no"])},
+                {self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["role_code"])},
+                {self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["role_name"])},
+                {self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["org_code"])},
+                {self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["dimension_name"])},
+                {self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["rule_id"])},
+                {self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["rule_summary"])},
+                {self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["score"])},
+                {self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["detail_conclusion"])},
+                {self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["intervention_action"])}
+            FROM {RISK_TRUST_ASSESSMENT_DETAIL_TABLE}
+            WHERE {self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["assessment_batch_no"])} = %s
+              AND {self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["document_no"])} = ANY(%s)
+              AND {self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["is_low_score"])} = TRUE
+            ORDER BY {self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["document_no"])},
+                     {self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["score"])} ASC,
+                     {self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["dimension_name"])},
+                     {self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["role_code"])} NULLS FIRST,
+                     {self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["org_code"])} NULLS FIRST,
+                     {self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["rule_id"])}
+            """,
+            (assessment_batch_no, normalized_document_nos),
+        )
+        rows = cursor.fetchall()
+        return [
+            {
+                "document_no": self._strip_text(row[0]),
+                "id": (
+                    f"{self._strip_text(row[0])}:{self._strip_text(row[4]) or '-'}:"
+                    f"{self._strip_text(row[5]) or '-'}:{self._strip_text(row[1]) or '-'}:"
+                    f"{self._strip_text(row[3]) or '<NONE>'}:{index}"
+                ),
+                "role_code": self._strip_text(row[1]),
+                "role_name": self._strip_text(row[2]),
+                "org_code": self._strip_text(row[3]),
+                "dimension_name": self._strip_text(row[4]),
+                "rule_id": self._strip_text(row[5]),
+                "rule_summary": self._strip_text(row[6]),
+                "score": self._format_score_value(row[7]),
+                "detail_conclusion": self._strip_text(row[8]),
+                "intervention_action": self._strip_text(row[9]),
+            }
+            for index, row in enumerate(rows, start=1)
+            if self._strip_text(row[0]) is not None
+        ]
+
+    def _fetch_process_distribution_sections(self, cursor, assessment_batch_no: str) -> list[dict[str, Any]]:
+        sections: list[dict[str, Any]] = []
+
+        cursor.execute(
+            f"""
+            SELECT
+                {self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["summary_conclusion"])},
+                COUNT(*)
+            FROM {RISK_TRUST_ASSESSMENT_TABLE}
+            WHERE {self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["assessment_batch_no"])} = %s
+            GROUP BY {self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["summary_conclusion"])}
+            ORDER BY COUNT(*) DESC, {self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["summary_conclusion"])}
+            """,
+            (assessment_batch_no,),
+        )
+        conclusion_rows = cursor.fetchall()
+        sections.append(
+            {
+                "id": "summary-conclusion",
+                "title": "总结论分布",
+                "subtitle": "基于最新评估批次的单据级总结论统计。",
+                "items": [
+                    {
+                        "id": f"summary-conclusion-{index}",
+                        "label": self._strip_text(row[0]) or "-",
+                        "count": int(row[1] or 0),
+                    }
+                    for index, row in enumerate(conclusion_rows, start=1)
+                ],
+            }
+        )
+
+        cursor.execute(
+            f"""
+            SELECT
+                {self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["final_score"])},
+                COUNT(*)
+            FROM {RISK_TRUST_ASSESSMENT_TABLE}
+            WHERE {self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["assessment_batch_no"])} = %s
+            GROUP BY {self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["final_score"])}
+            ORDER BY {self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["final_score"])}
+            """,
+            (assessment_batch_no,),
+        )
+        score_rows = cursor.fetchall()
+        sections.append(
+            {
+                "id": "score-distribution",
+                "title": "最终信任分分布",
+                "subtitle": "按单据最终信任分汇总。",
+                "items": [
+                    {
+                        "id": f"score-distribution-{index}",
+                        "label": f"{float(row[0]):.1f}",
+                        "count": int(row[1] or 0),
+                    }
+                    for index, row in enumerate(score_rows, start=1)
+                ],
+            }
+        )
+
+        cursor.execute(
+            f"""
+            SELECT
+                {self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["dimension_name"])},
+                COUNT(*)
+            FROM {RISK_TRUST_ASSESSMENT_DETAIL_TABLE}
+            WHERE {self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["assessment_batch_no"])} = %s
+              AND {self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["is_low_score"])} = TRUE
+            GROUP BY {self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["dimension_name"])}
+            ORDER BY COUNT(*) DESC, {self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["dimension_name"])}
+            LIMIT 10
+            """,
+            (assessment_batch_no,),
+        )
+        dimension_rows = cursor.fetchall()
+        sections.append(
+            {
+                "id": "low-score-dimensions",
+                "title": "低分维度分布",
+                "subtitle": "只统计低分明细，用于快速定位批次主要风险来源。",
+                "items": [
+                    {
+                        "id": f"low-score-dimensions-{index}",
+                        "label": self._strip_text(row[0]) or "-",
+                        "count": int(row[1] or 0),
+                    }
+                    for index, row in enumerate(dimension_rows, start=1)
+                ],
+            }
+        )
+
+        cursor.execute(
+            f"""
+            SELECT
+                {self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["rule_id"])},
+                COUNT(*)
+            FROM {RISK_TRUST_ASSESSMENT_DETAIL_TABLE}
+            WHERE {self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["assessment_batch_no"])} = %s
+              AND {self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["is_low_score"])} = TRUE
+            GROUP BY {self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["rule_id"])}
+            ORDER BY COUNT(*) DESC, {self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["rule_id"])}
+            LIMIT 10
+            """,
+            (assessment_batch_no,),
+        )
+        rule_rows = cursor.fetchall()
+        sections.append(
+            {
+                "id": "low-score-rules",
+                "title": "低分规则 Top 10",
+                "subtitle": "便于快速定位当前批次命中最多的低分规则。",
+                "items": [
+                    {
+                        "id": f"low-score-rules-{index}",
+                        "label": self._strip_text(row[0]) or "-",
+                        "count": int(row[1] or 0),
+                    }
+                    for index, row in enumerate(rule_rows, start=1)
+                ],
+            }
+        )
+
+        return sections
 
     def _insert_assessment_summary_rows(self, cursor, rows: list[dict[str, Any]]) -> None:
         insert_columns = [

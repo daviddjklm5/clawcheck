@@ -79,28 +79,14 @@ dimensions:
       - "审批链判断以最后一次提交后的有效审批轮为准"
       - "节点名称命中 ignored_approval_node_names 的环节及审批人不参与审批链评分"
     rules:
-      - id: "APPROVAL_CANCEL_ROLE_ALL_EQUAL_SUBMITTER"
-        when:
-          document_all_apply_types_cancel_role: true
-          current_round_all_approvers_equal_submitter: true
-        score: 0.0
-        summary: "取消角色申请中，全部审批人与最后一次提交人相同"
-        low_score_detail: "取消角色申请存在同人提交同人审批，审批链异常"
-      - id: "APPROVAL_CANCEL_ROLE_NOT_ALL_EQUAL_SUBMITTER"
-        when:
-          document_all_apply_types_cancel_role: true
-        score: 2.5
-        summary: "取消角色申请中，存在非最后一次提交人审批"
       - id: "APPROVAL_ALL_EQUAL_SUBMITTER"
         when:
-          document_all_apply_types_cancel_role: false
           current_round_all_approvers_equal_submitter: true
         score: 0.0
         summary: "从最后一次提交开始，所有有效审批人与提交人相同"
         low_score_detail: "审批链异常，当前轮审批人未形成有效复核"
       - id: "APPROVAL_LOCAL_WITHOUT_WARZONE_HISTORY"
         when:
-          document_all_apply_types_cancel_role: false
           applicant_process_level_category_in:
             - "属地组织"
             - "<NULL>"
@@ -110,7 +96,6 @@ dimensions:
         low_score_detail: "缺少战区人行部门审批，建议拒绝或补齐审批链"
       - id: "APPROVAL_LOCAL_WITHOUT_WARZONE_CURRENT_ROUND"
         when:
-          document_all_apply_types_cancel_role: false
           applicant_process_level_category_in:
             - "属地组织"
             - "<NULL>"

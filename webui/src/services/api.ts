@@ -1,6 +1,7 @@
 import type {
   CollectDashboard,
   MasterDataDashboard,
+  ProcessDetail,
   ProcessDashboard,
   RuntimeSettingsSummary,
 } from "../types/dashboard";
@@ -15,7 +16,11 @@ async function request<T>(path: string): Promise<T> {
   });
 
   if (!response.ok) {
-    throw new Error(`API request failed: ${response.status} ${response.statusText}`);
+    const error = new Error(`API request failed: ${response.status} ${response.statusText}`) as Error & {
+      status?: number;
+    };
+    error.status = response.status;
+    throw error;
   }
 
   return (await response.json()) as T;
@@ -30,6 +35,9 @@ export const dashboardApi = {
   },
   getProcessDashboard(): Promise<ProcessDashboard> {
     return request<ProcessDashboard>("/documents/process-dashboard");
+  },
+  getProcessDocumentDetail(documentNo: string): Promise<ProcessDetail> {
+    return request<ProcessDetail>(`/documents/process-dashboard/${encodeURIComponent(documentNo)}`);
   },
   getRuntimeSettings(): Promise<RuntimeSettingsSummary> {
     return request<RuntimeSettingsSummary>("/settings/runtime");

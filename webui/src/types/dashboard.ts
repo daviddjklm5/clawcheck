@@ -77,12 +77,17 @@ export interface ProcessDocumentRow {
   id: string;
   documentNo: string;
   applicantName: string;
+  applicantNo: string;
+  permissionTarget: string;
   department: string;
   documentStatus: string;
-  riskLevel: string;
-  trustLevel: string;
-  recommendation: string;
-  submittedAt: string;
+  finalScore: number;
+  summaryConclusion: string;
+  suggestedAction: string;
+  suggestedActionLabel: string;
+  lowScoreDetailCount: number;
+  assessedAt: string;
+  latestBatchNo: string;
 }
 
 export interface RoleRow {
@@ -114,16 +119,20 @@ export interface OrgScopeRow {
 
 export interface RiskDetailRow {
   id: string;
-  ruleCode: string;
-  ruleName: string;
-  result: string;
-  riskLevel: string;
-  trustLevel: string;
-  hitDetail: string;
+  dimensionName: string;
+  ruleId: string;
+  ruleSummary: string;
+  roleCode: string;
+  roleName: string;
+  orgCode: string;
+  score: number;
+  detailConclusion: string;
+  interventionAction: string;
 }
 
 export interface ProcessDetail {
-  basicInfo: DetailField[];
+  documentNo: string;
+  overviewFields: DetailField[];
   roles: RoleRow[];
   approvals: ApprovalRow[];
   orgScopes: OrgScopeRow[];
@@ -131,10 +140,46 @@ export interface ProcessDetail {
   notes: string[];
 }
 
+export interface DistributionItem {
+  id: string;
+  label: string;
+  count: number;
+}
+
+export interface DistributionSection {
+  id: string;
+  title: string;
+  subtitle: string;
+  items: DistributionItem[];
+}
+
+export interface ProcessBatchSummary {
+  batchNo: string;
+  assessmentVersion: string;
+  documentCount: number;
+  lowScoreDetailCount: number;
+  detailCount: number;
+  assessedAt: string;
+}
+
+export interface ProcessExecutionLogRow {
+  id: string;
+  batchNo: string;
+  assessmentVersion: string;
+  executedAt: string;
+  documentCount: number;
+  detailCount: number;
+  sampleDocumentNo: string;
+  sourceFile: string;
+  persistedToDatabase: boolean;
+}
+
 export interface ProcessDashboard {
   stats: StatItem[];
+  latestBatch: ProcessBatchSummary | null;
+  distributionSections: DistributionSection[];
+  executionLogs: ProcessExecutionLogRow[];
   documents: ProcessDocumentRow[];
-  detailsByDocumentNo: Record<string, ProcessDetail>;
 }
 
 export interface RuntimeSettingsSummary {
