@@ -3,3 +3,5 @@ psycopg[binary]==3.2.6
 PyYAML==6.0.2
 openpyxl==3.1.5
 xlrd==2.0.1
+fastapi==0.135.1
+uvicorn[standard]==0.41.0

@@ -119,7 +119,28 @@ Export an audit batch distribution workbook:
 python automation/scripts/export_audit_distribution_report.py --batch-no audit_20260315_112428
 ```
 
-## 4. Output
+## 4. Web UI skeleton
+Start the mock API:
+```bash
+cd automation
+source .venv/bin/activate
+uvicorn automation.api.main:app --reload
+```
+
+Start the React UI:
+```bash
+cd webui
+npm install
+npm run dev
+```
+
+Optional API base override:
+```bash
+cd webui
+VITE_API_BASE_URL=http://127.0.0.1:8000/api npm run dev
+```
+
+## 5. Output
 - logs: `automation/logs/`
 - screenshots: `automation/screenshots/`
 - state: `automation/state/`
@@ -136,7 +157,7 @@ python automation/scripts/export_audit_distribution_report.py --batch-no audit_2
 - SQL: `automation/sql/019_person_attributes.sql`
 - SQL: `automation/sql/022_risk_trust_assessment.sql`
 
-## 5. Notes
+## 6. Notes
 - Default home entry for `001/003/004` related browser actions is `https://hr.onewo.com/ierp/?formId=home_page`.
 - Prod roster flow targets `https://hr.onewo.com/ierp/?formId=home_page`.
 - The permission collect import can still migrate legacy auxiliary tables `basic_info` / `permission_apply_detail` / `approval_record` into the Chinese schema before writing.

@@ -14,6 +14,9 @@ automation/state/*
 automation/downloads/*
 automation/config/credentials.local.yaml
 automation/config/credentials.prod.local.yaml
+webui/node_modules/
+webui/dist/
+*.tsbuildinfo
 
 # Keep folder structure
 automation/logs/.gitkeep
