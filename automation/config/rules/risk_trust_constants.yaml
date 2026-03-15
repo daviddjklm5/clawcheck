@@ -12,6 +12,9 @@ constants:
   applicant_hr_suspected_types:
     - "HY"
 
+  ignored_approval_node_names:
+    - "平台运营组对接人"
+
   remote_allowed_process_categories:
     - "人事远程交付中心"
 

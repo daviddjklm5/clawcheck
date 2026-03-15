@@ -13,6 +13,7 @@ defaults:
   role_org_score_policy: "lowest_score_wins"
   emit_low_score_details: true
   emit_all_low_score_details: true
+  approval_ignored_node_names_ref: "ignored_approval_node_names"
 
 output_contract:
   summary_required_fields:
@@ -74,6 +75,9 @@ dimensions:
 
   approval_chain:
     scope: "approval"
+    notes:
+      - "审批链判断以最后一次提交后的有效审批轮为准"
+      - "节点名称命中 ignored_approval_node_names 的环节及审批人不参与审批链评分"
     rules:
       - id: "APPROVAL_ALL_EQUAL_SUBMITTER"
         when:
