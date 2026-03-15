@@ -239,7 +239,7 @@ AS $$
         WHEN NULLIF(split_part(p_org_full_name, '_', 2), '') = '蝶城发展中心'
          AND NULLIF(split_part(p_org_full_name, '_', 3), '') = '人力资源与行政服务部'
          AND COALESCE(NULLIF(split_part(p_org_full_name, '_', 4), ''), '__EMPTY__') <> '研选家人力资源组'
-        THEN '业务单元本部'
+        THEN '蝶发人行部'
         WHEN NULLIF(split_part(p_org_full_name, '_', 3), '') = '人力资源与行政服务中心'
          AND NULLIF(split_part(p_org_full_name, '_', 4), '') IS NOT NULL
          AND NULLIF(split_part(p_org_full_name, '_', 4), '') <> 'BG人力资源行政服务中心'
@@ -325,7 +325,7 @@ BEGIN
         RETURN '二级授权';
     END IF;
 
-    IF normalized_process_level_category = '业务单元本部' THEN
+    IF normalized_process_level_category IN ('业务单元本部', '蝶发人行部') THEN
         RETURN '二级授权';
     END IF;
 
@@ -400,6 +400,10 @@ BEGIN
 
     IF normalized_process_level_category = '业务单元本部' THEN
         RETURN 'process_level_category:业务单元本部';
+    END IF;
+
+    IF normalized_process_level_category = '蝶发人行部' THEN
+        RETURN 'process_level_category:蝶发人行部';
     END IF;
 
     IF physical_level_num = 2 THEN
