@@ -224,6 +224,92 @@ class RiskTrustEvaluatorTest(unittest.TestCase):
         self.assertEqual(permission_detail["score"], 1.0)
         self.assertEqual(summary_rows[0]["final_score"], 1.0)
 
+    def test_cancel_role_request_only_checks_same_submitter_approval(self) -> None:
+        bundle = {
+            "basic_info": {"document_no": "RA-6", "employee_no": "00205176"},
+            "applicant_person_attributes": {"hr_type": "H3"},
+            "applicant_org_attributes": {"process_level_category": "属地组织", "org_unit_name": "组织A"},
+            "approval_records": [
+                {
+                    "node_name": "权限申请提交",
+                    "approver_employee_no": "00434594",
+                    "approval_action": "提交",
+                    "approval_time": "2026-03-15 10:00:00",
+                    "approver_org_attributes": {"process_level_category": "业务单元本部"},
+                },
+                {
+                    "node_name": "战区权限对接人",
+                    "approver_employee_no": "00129225",
+                    "approval_action": "同意",
+                    "approval_time": "2026-03-15 11:00:00",
+                    "approver_org_attributes": {"process_level_category": "业务单元本部"},
+                },
+            ],
+            "permission_details": [
+                {
+                    "document_no": "RA-6",
+                    "apply_type": "取消角色",
+                    "role_code": "C001",
+                    "role_name": "常规权限",
+                    "catalog_matched": True,
+                    "permission_level": "C类-常规",
+                    "skip_org_scope_check": True,
+                    "targets": [{"org_code": None, "org_auth_level": None, "org_unit_name": None}],
+                }
+            ],
+        }
+
+        summary_rows, detail_rows = self.evaluator.evaluate_documents([bundle], assessment_batch_no="audit_batch_6")
+
+        approval_detail = next(row for row in detail_rows if row["dimension_name"] == "审批人判断")
+        self.assertEqual(approval_detail["rule_id"], "APPROVAL_CANCEL_ROLE_NOT_ALL_EQUAL_SUBMITTER")
+        self.assertEqual(approval_detail["score"], 2.5)
+        self.assertEqual(summary_rows[0]["final_score"], 1.5)
+        self.assertEqual(summary_rows[0]["summary_conclusion"], "仅关注")
+
+    def test_cancel_role_request_all_same_submitter_is_zero(self) -> None:
+        bundle = {
+            "basic_info": {"document_no": "RA-7", "employee_no": "00205176"},
+            "applicant_person_attributes": {"hr_type": "H3"},
+            "applicant_org_attributes": {"process_level_category": "属地组织", "org_unit_name": "组织A"},
+            "approval_records": [
+                {
+                    "node_name": "权限申请提交",
+                    "approver_employee_no": "00434594",
+                    "approval_action": "提交",
+                    "approval_time": "2026-03-15 10:00:00",
+                    "approver_org_attributes": {"process_level_category": "业务单元本部"},
+                },
+                {
+                    "node_name": "部门负责人",
+                    "approver_employee_no": "00434594",
+                    "approval_action": "同意",
+                    "approval_time": "2026-03-15 11:00:00",
+                    "approver_org_attributes": {"process_level_category": "业务单元本部"},
+                },
+            ],
+            "permission_details": [
+                {
+                    "document_no": "RA-7",
+                    "apply_type": "取消角色",
+                    "role_code": "C001",
+                    "role_name": "常规权限",
+                    "catalog_matched": True,
+                    "permission_level": "C类-常规",
+                    "skip_org_scope_check": True,
+                    "targets": [{"org_code": None, "org_auth_level": None, "org_unit_name": None}],
+                }
+            ],
+        }
+
+        summary_rows, detail_rows = self.evaluator.evaluate_documents([bundle], assessment_batch_no="audit_batch_7")
+
+        approval_detail = next(row for row in detail_rows if row["dimension_name"] == "审批人判断")
+        self.assertEqual(approval_detail["rule_id"], "APPROVAL_CANCEL_ROLE_ALL_EQUAL_SUBMITTER")
+        self.assertEqual(approval_detail["score"], 0.0)
+        self.assertEqual(summary_rows[0]["final_score"], 0.0)
+        self.assertEqual(summary_rows[0]["summary_conclusion"], "拒绝")
+
 
 if __name__ == "__main__":
     unittest.main()
