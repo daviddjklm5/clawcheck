@@ -19,14 +19,14 @@ DEFAULT_CREDENTIALS_PATH = "automation/config/credentials.local.yaml"
 DEFAULT_SELECTORS_PATH = "automation/config/selectors.yaml"
 PROD_CONFIG_PATH = "automation/config/settings.prod.yaml"
 PROD_CREDENTIALS_PATH = "automation/config/credentials.prod.local.yaml"
-PROD_DEFAULT_ACTIONS = {"check", "login", "run", "collect", "roster", "orglist", "rolecatalog", "dbinit"}
+PROD_DEFAULT_ACTIONS = {"check", "login", "run", "collect", "roster", "orglist", "rolecatalog", "dbinit", "audit"}
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="iERP automation runner")
     parser.add_argument(
         "action",
-        choices=["check", "login", "run", "collect", "roster", "orglist", "rolecatalog", "dbinit"],
+        choices=["check", "login", "run", "collect", "roster", "orglist", "rolecatalog", "dbinit", "audit"],
         help="Action to execute",
     )
     parser.add_argument("--config", default=DEFAULT_CONFIG_PATH, help="Settings YAML path")
@@ -256,6 +256,47 @@ def main() -> int:
             return 0
         except Exception as exc:  # noqa: BLE001
             logger.exception("%s failed: %s", args.action, exc)
+            return 1
+
+    if args.action == "audit":
+        from automation.db.postgres import PostgresRiskTrustStore
+        from automation.rules import RiskTrustEvaluator, load_risk_trust_package
+
+        try:
+            config_dir = REPO_ROOT / "automation" / "config" / "rules"
+            package = load_risk_trust_package(config_dir)
+            store = PostgresRiskTrustStore(settings.db)
+            bundles = store.fetch_document_bundles(
+                document_no=args.document_no.strip() or None,
+                limit=args.limit,
+            )
+            assessment_batch_no = f"audit_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            evaluator = RiskTrustEvaluator(package)
+            summary_rows, detail_rows = evaluator.evaluate_documents(
+                bundles=bundles,
+                assessment_batch_no=assessment_batch_no,
+            )
+            payload = {
+                "assessment_batch_no": assessment_batch_no,
+                "assessment_version": package.version,
+                "document_count": len(summary_rows),
+                "detail_count": len(detail_rows),
+                "documents": summary_rows,
+            }
+            dump_path = resolve_path(args.dump_json) if args.dump_json else logs_dir / f"audit_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+            dump_path.parent.mkdir(parents=True, exist_ok=True)
+            dump_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+            logger.info("Audit completed. JSON dump: %s", dump_path)
+            if args.dry_run:
+                logger.info("Dry-run enabled; risk-trust assessment results were not written to PostgreSQL")
+            else:
+                store.write_assessment_results(summary_rows, detail_rows)
+                logger.info("Persisted %s assessment summaries and %s detail rows", len(summary_rows), len(detail_rows))
+            logger.info("Audit summary: %s", payload)
+            logger.info("Automation finished successfully")
+            return 0
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("audit failed: %s", exc)
             return 1
 
     try:

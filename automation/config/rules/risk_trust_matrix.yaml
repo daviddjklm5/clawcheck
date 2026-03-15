@@ -180,6 +180,7 @@ dimensions:
       - id: "PERMISSION_B1_NON_HR"
         when:
           permission_level_equals: "B1类-涉薪"
+          applicant_hr_type_not_in_ref: "applicant_hr_staff_types"
         score: 0.0
         summary: "非 HR 申请 B1 类权限"
         low_score_detail: "非 HR 申请 B1 类涉薪权限，建议拒绝"
@@ -192,6 +193,7 @@ dimensions:
       - id: "PERMISSION_B2_NON_HR"
         when:
           permission_level_equals: "B2类-涉档案绩效"
+          applicant_hr_type_not_in_ref: "applicant_hr_staff_types"
         score: 1.0
         summary: "非 HR 申请 B2 类权限"
         low_score_detail: "非 HR 申请 B2 类权限，需人工关注"
@@ -256,7 +258,7 @@ dimensions:
         intervention_action: "复核跨组织单位申请依据"
       - id: "TARGET_ORG_AUTH_LEVEL_MAP"
         when:
-          default: true
+          role_skip_org_scope_check: false
         score_map_ref: "organization_auth_level_scores"
         score_source_fact: "target_org_auth_level"
 

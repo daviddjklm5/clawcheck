@@ -13,6 +13,7 @@ from automation.utils.approval_record_helpers import (
     normalize_approval_records,
 )
 from automation.utils.config_loader import DatabaseSettings
+from automation.rules.role_facts import build_detail_role_facts
 
 try:
     import psycopg
@@ -119,6 +120,59 @@ PERSON_ATTRIBUTES_COLUMNS = {
     "hr_judgement_reason": "HR判定原因",
     "created_at": "记录创建时间",
     "updated_at": "记录更新时间",
+}
+
+ORG_ATTRIBUTE_COLUMNS = {
+    "org_code": "行政组织编码",
+    "process_level_category": "组织流程层级分类",
+    "org_auth_level": "组织授权级别",
+    "org_unit_name": "组织单位",
+    "war_zone": "所属战区",
+}
+
+RISK_TRUST_ASSESSMENT_COLUMNS = {
+    "id": "评估ID",
+    "document_no": "单据编号",
+    "assessment_batch_no": "评估批次号",
+    "assessment_version": "评估版本",
+    "applicant_hr_type": "申请人HR类型",
+    "applicant_process_level_category": "申请人组织流程层级分类",
+    "final_score": "最终信任分",
+    "summary_conclusion": "总结论",
+    "suggested_action": "建议动作",
+    "lowest_hit_dimension": "最低命中维度",
+    "lowest_hit_role_code": "最低命中角色编码",
+    "lowest_hit_org_code": "最低命中组织编码",
+    "hit_manual_review": "是否命中人工干预",
+    "has_low_score_details": "是否存在低分明细",
+    "low_score_detail_count": "低分明细条数",
+    "low_score_detail_conclusion": "低分明细结论",
+    "assessment_explain": "评估说明",
+    "input_snapshot": "输入快照",
+    "assessed_at": "评估时间",
+    "created_at": "记录创建时间",
+    "updated_at": "记录更新时间",
+}
+
+RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS = {
+    "id": "评估明细ID",
+    "document_no": "单据编号",
+    "assessment_batch_no": "评估批次号",
+    "assessment_version": "评估版本",
+    "role_code": "角色编码",
+    "role_name": "角色名称",
+    "org_code": "组织编码",
+    "dimension_name": "维度名称",
+    "rule_id": "命中规则编码",
+    "rule_summary": "命中规则说明",
+    "score": "维度得分",
+    "detail_conclusion": "明细结论",
+    "is_low_score": "是否低分明细",
+    "intervention_action": "建议干预动作",
+    "evidence_summary": "证据摘要",
+    "evidence_snapshot": "证据快照",
+    "assessed_at": "评估时间",
+    "created_at": "记录创建时间",
 }
 
 APPLICANT_HR_PATH_KEYWORDS = ("人力", "人事", "组织发展中心", "组织人才中心")
@@ -1378,6 +1432,525 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
         with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(ddl)
+
+    def fetch_document_bundles(
+        self,
+        document_no: str | None = None,
+        limit: int = 0,
+    ) -> list[dict[str, Any]]:
+        normalized_document_no = self._strip_text(document_no)
+        query_limit = max(limit, 0)
+
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                basic_rows = self._fetch_basic_info_rows(cursor, normalized_document_no, query_limit)
+                if not basic_rows:
+                    return []
+
+                document_nos = [row["document_no"] for row in basic_rows]
+                detail_rows = self._fetch_permission_detail_rows(cursor, document_nos)
+                approval_rows = self._fetch_approval_rows(cursor, document_nos)
+                org_scope_rows = self._fetch_org_scope_rows(cursor, document_nos)
+
+                applicant_employee_nos = [row["employee_no"] for row in basic_rows]
+                approver_employee_nos = [row["approver_employee_no"] for row in approval_rows]
+                person_attributes_by_employee_no = self._fetch_person_attributes_map(
+                    cursor,
+                    [*applicant_employee_nos, *approver_employee_nos],
+                )
+
+                role_catalog_by_role_code = self._fetch_permission_catalog_rows(
+                    cursor,
+                    [row["role_code"] for row in detail_rows],
+                )
+
+                org_codes_to_fetch: list[str] = []
+                for row in basic_rows:
+                    applicant_profile = person_attributes_by_employee_no.get(row["employee_no"], {})
+                    org_codes_to_fetch.append(self._strip_text(applicant_profile.get("department_id")) or "")
+                for row in approval_rows:
+                    approver_profile = person_attributes_by_employee_no.get(row["approver_employee_no"], {})
+                    org_codes_to_fetch.append(self._strip_text(approver_profile.get("department_id")) or "")
+                for row in org_scope_rows:
+                    org_codes_to_fetch.append(row["org_code"] or "")
+
+                org_attributes_by_org_code = self._fetch_org_attributes_map(cursor, org_codes_to_fetch)
+
+        detail_rows_by_document: dict[str, list[dict[str, Any]]] = {}
+        for row in detail_rows:
+            detail_rows_by_document.setdefault(row["document_no"], []).append(row)
+
+        approval_rows_by_document: dict[str, list[dict[str, Any]]] = {}
+        for row in approval_rows:
+            approver_profile = person_attributes_by_employee_no.get(row["approver_employee_no"], {})
+            approver_org = org_attributes_by_org_code.get(self._strip_text(approver_profile.get("department_id")) or "")
+            approval_rows_by_document.setdefault(row["document_no"], []).append(
+                {
+                    **row,
+                    "approver_person_attributes": approver_profile,
+                    "approver_org_attributes": approver_org,
+                }
+            )
+
+        org_scope_rows_by_document_role: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        for row in org_scope_rows:
+            org_scope_rows_by_document_role.setdefault((row["document_no"], row["role_code"]), []).append(row)
+
+        bundles: list[dict[str, Any]] = []
+        for basic_row in basic_rows:
+            applicant_profile = person_attributes_by_employee_no.get(basic_row["employee_no"], {})
+            applicant_org = org_attributes_by_org_code.get(self._strip_text(applicant_profile.get("department_id")) or "")
+
+            document_detail_rows: list[dict[str, Any]] = []
+            for detail_row in detail_rows_by_document.get(basic_row["document_no"], []):
+                catalog_row = role_catalog_by_role_code.get(detail_row["role_code"])
+                role_facts = build_detail_role_facts(detail_row, catalog_row)
+                targets: list[dict[str, Any]] = []
+                for target_row in org_scope_rows_by_document_role.get((basic_row["document_no"], detail_row["role_code"]), []):
+                    org_attributes = org_attributes_by_org_code.get(target_row["org_code"] or "", {})
+                    targets.append(
+                        {
+                            "org_code": target_row["org_code"],
+                            "org_auth_level": org_attributes.get("org_auth_level"),
+                            "org_unit_name": org_attributes.get("org_unit_name"),
+                            "org_attributes": org_attributes,
+                        }
+                    )
+                document_detail_rows.append(
+                    {
+                        **detail_row,
+                        "catalog_matched": role_facts["catalog_matched"],
+                        "permission_level": role_facts["permission_level"],
+                        "skip_org_scope_check": role_facts["skip_org_scope_check"],
+                        "targets": targets,
+                    }
+                )
+
+            bundles.append(
+                {
+                    "basic_info": basic_row,
+                    "applicant_person_attributes": applicant_profile,
+                    "applicant_org_attributes": applicant_org,
+                    "permission_details": document_detail_rows,
+                    "approval_records": approval_rows_by_document.get(basic_row["document_no"], []),
+                }
+            )
+        return bundles
+
+    def write_assessment_results(
+        self,
+        summary_rows: Iterable[dict[str, Any]],
+        detail_rows: Iterable[dict[str, Any]],
+    ) -> None:
+        normalized_summary_rows = list(summary_rows)
+        normalized_detail_rows = list(detail_rows)
+        if not normalized_summary_rows:
+            return
+
+        self.ensure_table()
+        document_nos = sorted(
+            {
+                str(row["document_no"]).strip()
+                for row in normalized_summary_rows
+                if isinstance(row.get("document_no"), str) and row["document_no"].strip()
+            }
+        )
+        batch_no = str(normalized_summary_rows[0]["assessment_batch_no"]).strip()
+        version = str(normalized_summary_rows[0]["assessment_version"]).strip()
+
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    f"""
+                    DELETE FROM {RISK_TRUST_ASSESSMENT_DETAIL_TABLE}
+                    WHERE {self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["document_no"])} = ANY(%s)
+                      AND {self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["assessment_batch_no"])} = %s
+                      AND {self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["assessment_version"])} = %s
+                    """,
+                    (document_nos, batch_no, version),
+                )
+                cursor.execute(
+                    f"""
+                    DELETE FROM {RISK_TRUST_ASSESSMENT_TABLE}
+                    WHERE {self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["document_no"])} = ANY(%s)
+                      AND {self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["assessment_batch_no"])} = %s
+                      AND {self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["assessment_version"])} = %s
+                    """,
+                    (document_nos, batch_no, version),
+                )
+                self._insert_assessment_summary_rows(cursor, normalized_summary_rows)
+                self._insert_assessment_detail_rows(cursor, normalized_detail_rows)
+
+    def _fetch_basic_info_rows(self, cursor, document_no: str | None, limit: int) -> list[dict[str, Any]]:
+        sql = f"""
+            SELECT
+                {self._quote_identifier(BASIC_INFO_COLUMNS["document_no"])},
+                {self._quote_identifier(BASIC_INFO_COLUMNS["employee_no"])},
+                {self._quote_identifier(BASIC_INFO_COLUMNS["permission_target"])},
+                {self._quote_identifier(BASIC_INFO_COLUMNS["apply_reason"])},
+                {self._quote_identifier(BASIC_INFO_COLUMNS["document_status"])},
+                {self._quote_identifier(BASIC_INFO_COLUMNS["hr_org"])},
+                {self._quote_identifier(BASIC_INFO_COLUMNS["company_name"])},
+                {self._quote_identifier(BASIC_INFO_COLUMNS["department_name"])},
+                {self._quote_identifier(BASIC_INFO_COLUMNS["position_name"])},
+                {self._quote_identifier(BASIC_INFO_COLUMNS["apply_time"])},
+                {self._quote_identifier(BASIC_INFO_COLUMNS["latest_approval_time"])},
+                {self._quote_identifier(BASIC_INFO_COLUMNS["collection_count"])}
+            FROM {BASIC_INFO_TABLE}
+        """
+        params: list[Any] = []
+        if document_no is not None:
+            sql += f" WHERE {self._quote_identifier(BASIC_INFO_COLUMNS['document_no'])} = %s"
+            params.append(document_no)
+        sql += (
+            f" ORDER BY {self._quote_identifier(BASIC_INFO_COLUMNS['latest_approval_time'])} DESC NULLS LAST,"
+            f" {self._quote_identifier(BASIC_INFO_COLUMNS['apply_time'])} DESC NULLS LAST,"
+            f" {self._quote_identifier(BASIC_INFO_COLUMNS['document_no'])}"
+        )
+        if limit > 0:
+            sql += " LIMIT %s"
+            params.append(limit)
+        cursor.execute(sql, params)
+        rows = cursor.fetchall()
+        return [
+            {
+                "document_no": self._strip_text(row[0]),
+                "employee_no": self._strip_text(row[1]),
+                "permission_target": self._strip_text(row[2]),
+                "apply_reason": self._strip_text(row[3]),
+                "document_status": self._strip_text(row[4]),
+                "hr_org": self._strip_text(row[5]),
+                "company_name": self._strip_text(row[6]),
+                "department_name": self._strip_text(row[7]),
+                "position_name": self._strip_text(row[8]),
+                "apply_time": row[9],
+                "latest_approval_time": row[10],
+                "collection_count": row[11],
+            }
+            for row in rows
+            if self._strip_text(row[0]) is not None
+        ]
+
+    def _fetch_permission_detail_rows(self, cursor, document_nos: Iterable[str]) -> list[dict[str, Any]]:
+        normalized_document_nos = [document_no for document_no in document_nos if document_no]
+        if not normalized_document_nos:
+            return []
+        cursor.execute(
+            f"""
+            SELECT
+                {self._quote_identifier(PERMISSION_DETAIL_COLUMNS["document_no"])},
+                {self._quote_identifier(PERMISSION_DETAIL_COLUMNS["line_no"])},
+                {self._quote_identifier(PERMISSION_DETAIL_COLUMNS["apply_type"])},
+                {self._quote_identifier(PERMISSION_DETAIL_COLUMNS["role_name"])},
+                {self._quote_identifier(PERMISSION_DETAIL_COLUMNS["role_desc"])},
+                {self._quote_identifier(PERMISSION_DETAIL_COLUMNS["role_code"])},
+                {self._quote_identifier(PERMISSION_DETAIL_COLUMNS["social_security_unit"])},
+                {self._quote_identifier(PERMISSION_DETAIL_COLUMNS["org_scope_count"])}
+            FROM {PERMISSION_APPLY_DETAIL_TABLE}
+            WHERE {self._quote_identifier(PERMISSION_DETAIL_COLUMNS["document_no"])} = ANY(%s)
+            ORDER BY {self._quote_identifier(PERMISSION_DETAIL_COLUMNS["document_no"])},
+                     {self._quote_identifier(PERMISSION_DETAIL_COLUMNS["line_no"])}
+            """,
+            (normalized_document_nos,),
+        )
+        rows = cursor.fetchall()
+        return [
+            {
+                "document_no": self._strip_text(row[0]),
+                "line_no": self._strip_text(row[1]),
+                "apply_type": self._strip_text(row[2]),
+                "role_name": self._strip_text(row[3]),
+                "role_desc": self._strip_text(row[4]),
+                "role_code": self._strip_text(row[5]),
+                "social_security_unit": self._strip_text(row[6]),
+                "org_scope_count": row[7],
+            }
+            for row in rows
+            if self._strip_text(row[0]) is not None
+        ]
+
+    def _fetch_approval_rows(self, cursor, document_nos: Iterable[str]) -> list[dict[str, Any]]:
+        normalized_document_nos = [document_no for document_no in document_nos if document_no]
+        if not normalized_document_nos:
+            return []
+        cursor.execute(
+            f"""
+            SELECT
+                {self._quote_identifier(APPROVAL_RECORD_COLUMNS["document_no"])},
+                {self._quote_identifier(APPROVAL_RECORD_COLUMNS["record_seq"])},
+                {self._quote_identifier(APPROVAL_RECORD_COLUMNS["node_name"])},
+                {self._quote_identifier(APPROVAL_RECORD_COLUMNS["approver_name"])},
+                {self._quote_identifier(APPROVAL_RECORD_COLUMNS["approver_employee_no"])},
+                {self._quote_identifier(APPROVAL_RECORD_COLUMNS["approver_org_or_position"])},
+                {self._quote_identifier(APPROVAL_RECORD_COLUMNS["approval_action"])},
+                {self._quote_identifier(APPROVAL_RECORD_COLUMNS["approval_opinion"])},
+                {self._quote_identifier(APPROVAL_RECORD_COLUMNS["approval_time"])},
+                {self._quote_identifier(APPROVAL_RECORD_COLUMNS["raw_text"])}
+            FROM {APPROVAL_RECORD_TABLE}
+            WHERE {self._quote_identifier(APPROVAL_RECORD_COLUMNS["document_no"])} = ANY(%s)
+            ORDER BY {self._quote_identifier(APPROVAL_RECORD_COLUMNS["document_no"])},
+                     {self._quote_identifier(APPROVAL_RECORD_COLUMNS["record_seq"])}
+            """,
+            (normalized_document_nos,),
+        )
+        rows = cursor.fetchall()
+        return [
+            {
+                "document_no": self._strip_text(row[0]),
+                "record_seq": row[1],
+                "node_name": self._strip_text(row[2]),
+                "approver_name": self._strip_text(row[3]),
+                "approver_employee_no": self._strip_text(row[4]),
+                "approver_org_or_position": self._strip_text(row[5]),
+                "approval_action": self._strip_text(row[6]),
+                "approval_opinion": self._strip_text(row[7]),
+                "approval_time": row[8],
+                "raw_text": self._strip_text(row[9]),
+            }
+            for row in rows
+            if self._strip_text(row[0]) is not None
+        ]
+
+    def _fetch_org_scope_rows(self, cursor, document_nos: Iterable[str]) -> list[dict[str, Any]]:
+        normalized_document_nos = [document_no for document_no in document_nos if document_no]
+        if not normalized_document_nos:
+            return []
+        cursor.execute(
+            f"""
+            SELECT
+                {self._quote_identifier(APPLY_FORM_ORG_SCOPE_COLUMNS["document_no"])},
+                {self._quote_identifier(APPLY_FORM_ORG_SCOPE_COLUMNS["role_code"])},
+                {self._quote_identifier(APPLY_FORM_ORG_SCOPE_COLUMNS["role_name"])},
+                {self._quote_identifier(APPLY_FORM_ORG_SCOPE_COLUMNS["org_code"])}
+            FROM {APPLY_FORM_ORG_SCOPE_TABLE}
+            WHERE {self._quote_identifier(APPLY_FORM_ORG_SCOPE_COLUMNS["document_no"])} = ANY(%s)
+            ORDER BY {self._quote_identifier(APPLY_FORM_ORG_SCOPE_COLUMNS["document_no"])},
+                     {self._quote_identifier(APPLY_FORM_ORG_SCOPE_COLUMNS["role_code"])},
+                     {self._quote_identifier(APPLY_FORM_ORG_SCOPE_COLUMNS["org_code"])}
+            """,
+            (normalized_document_nos,),
+        )
+        rows = cursor.fetchall()
+        return [
+            {
+                "document_no": self._strip_text(row[0]),
+                "role_code": self._strip_text(row[1]),
+                "role_name": self._strip_text(row[2]),
+                "org_code": self._strip_text(row[3]),
+            }
+            for row in rows
+            if self._strip_text(row[0]) is not None and self._strip_text(row[1]) is not None
+        ]
+
+    def _fetch_person_attributes_map(self, cursor, employee_nos: Iterable[str]) -> dict[str, dict[str, Any]]:
+        normalized_employee_nos = sorted(
+            {
+                employee_no
+                for value in employee_nos
+                if (employee_no := self._strip_text(value)) is not None
+            }
+        )
+        if not normalized_employee_nos:
+            return {}
+        cursor.execute(
+            f"""
+            SELECT
+                {self._quote_identifier(PERSON_ATTRIBUTES_COLUMNS["employee_no"])},
+                {self._quote_identifier(PERSON_ATTRIBUTES_COLUMNS["employee_name"])},
+                {self._quote_identifier(PERSON_ATTRIBUTES_COLUMNS["department_id"])},
+                {self._quote_identifier(PERSON_ATTRIBUTES_COLUMNS["hr_type"])},
+                {self._quote_identifier(PERSON_ATTRIBUTES_COLUMNS["roster_match_status"])},
+                {self._quote_identifier(PERSON_ATTRIBUTES_COLUMNS["hr_judgement_reason"])}
+            FROM {PERSON_ATTRIBUTES_TABLE}
+            WHERE {self._quote_identifier(PERSON_ATTRIBUTES_COLUMNS["employee_no"])} = ANY(%s)
+            """,
+            (normalized_employee_nos,),
+        )
+        rows = cursor.fetchall()
+        return {
+            self._strip_text(row[0]) or "": {
+                "employee_no": self._strip_text(row[0]),
+                "employee_name": self._strip_text(row[1]),
+                "department_id": self._strip_text(row[2]),
+                "hr_type": self._strip_text(row[3]),
+                "roster_match_status": self._strip_text(row[4]),
+                "hr_judgement_reason": self._strip_text(row[5]),
+            }
+            for row in rows
+            if self._strip_text(row[0]) is not None
+        }
+
+    def _fetch_permission_catalog_rows(self, cursor, role_codes: Iterable[str]) -> dict[str, dict[str, Any]]:
+        normalized_role_codes = sorted(
+            {
+                role_code
+                for value in role_codes
+                if (role_code := self._strip_text(value)) is not None
+            }
+        )
+        if not normalized_role_codes:
+            return {}
+        cursor.execute(
+            f"""
+            SELECT
+                {self._quote_identifier(PERMISSION_CATALOG_COLUMNS["role_code"])},
+                {self._quote_identifier(PERMISSION_CATALOG_COLUMNS["role_name"])},
+                {self._quote_identifier(PERMISSION_CATALOG_COLUMNS["permission_level"])},
+                {self._quote_identifier(PERMISSION_CATALOG_COLUMNS["skip_org_scope_check"])}
+            FROM "权限列表"
+            WHERE {self._quote_identifier(PERMISSION_CATALOG_COLUMNS["role_code"])} = ANY(%s)
+            """,
+            (normalized_role_codes,),
+        )
+        rows = cursor.fetchall()
+        return {
+            self._strip_text(row[0]) or "": {
+                "role_code": self._strip_text(row[0]),
+                "role_name": self._strip_text(row[1]),
+                "permission_level": self._strip_text(row[2]),
+                "skip_org_scope_check": bool(row[3]),
+            }
+            for row in rows
+            if self._strip_text(row[0]) is not None
+        }
+
+    def _fetch_org_attributes_map(self, cursor, org_codes: Iterable[str]) -> dict[str, dict[str, Any]]:
+        normalized_org_codes = sorted(
+            {
+                org_code
+                for value in org_codes
+                if (org_code := self._strip_text(value)) is not None
+            }
+        )
+        if not normalized_org_codes:
+            return {}
+        cursor.execute(
+            f"""
+            SELECT
+                {self._quote_identifier(ORG_ATTRIBUTE_COLUMNS["org_code"])},
+                {self._quote_identifier(ORG_ATTRIBUTE_COLUMNS["process_level_category"])},
+                {self._quote_identifier(ORG_ATTRIBUTE_COLUMNS["org_auth_level"])},
+                {self._quote_identifier(ORG_ATTRIBUTE_COLUMNS["org_unit_name"])},
+                {self._quote_identifier(ORG_ATTRIBUTE_COLUMNS["war_zone"])}
+            FROM "组织属性查询"
+            WHERE {self._quote_identifier(ORG_ATTRIBUTE_COLUMNS["org_code"])} = ANY(%s)
+            """,
+            (normalized_org_codes,),
+        )
+        rows = cursor.fetchall()
+        return {
+            self._strip_text(row[0]) or "": {
+                "org_code": self._strip_text(row[0]),
+                "process_level_category": self._strip_text(row[1]),
+                "org_auth_level": self._strip_text(row[2]),
+                "org_unit_name": self._strip_text(row[3]),
+                "war_zone": self._strip_text(row[4]),
+            }
+            for row in rows
+            if self._strip_text(row[0]) is not None
+        }
+
+    def _insert_assessment_summary_rows(self, cursor, rows: list[dict[str, Any]]) -> None:
+        insert_columns = [
+            RISK_TRUST_ASSESSMENT_COLUMNS["document_no"],
+            RISK_TRUST_ASSESSMENT_COLUMNS["assessment_batch_no"],
+            RISK_TRUST_ASSESSMENT_COLUMNS["assessment_version"],
+            RISK_TRUST_ASSESSMENT_COLUMNS["applicant_hr_type"],
+            RISK_TRUST_ASSESSMENT_COLUMNS["applicant_process_level_category"],
+            RISK_TRUST_ASSESSMENT_COLUMNS["final_score"],
+            RISK_TRUST_ASSESSMENT_COLUMNS["summary_conclusion"],
+            RISK_TRUST_ASSESSMENT_COLUMNS["suggested_action"],
+            RISK_TRUST_ASSESSMENT_COLUMNS["lowest_hit_dimension"],
+            RISK_TRUST_ASSESSMENT_COLUMNS["lowest_hit_role_code"],
+            RISK_TRUST_ASSESSMENT_COLUMNS["lowest_hit_org_code"],
+            RISK_TRUST_ASSESSMENT_COLUMNS["hit_manual_review"],
+            RISK_TRUST_ASSESSMENT_COLUMNS["has_low_score_details"],
+            RISK_TRUST_ASSESSMENT_COLUMNS["low_score_detail_count"],
+            RISK_TRUST_ASSESSMENT_COLUMNS["low_score_detail_conclusion"],
+            RISK_TRUST_ASSESSMENT_COLUMNS["assessment_explain"],
+            RISK_TRUST_ASSESSMENT_COLUMNS["input_snapshot"],
+            RISK_TRUST_ASSESSMENT_COLUMNS["assessed_at"],
+            RISK_TRUST_ASSESSMENT_COLUMNS["created_at"],
+            RISK_TRUST_ASSESSMENT_COLUMNS["updated_at"],
+        ]
+        cursor.executemany(
+            f"""
+            INSERT INTO {RISK_TRUST_ASSESSMENT_TABLE} (
+                {self._quoted_columns(insert_columns)}
+            ) VALUES (
+                %(document_no)s,
+                %(assessment_batch_no)s,
+                %(assessment_version)s,
+                %(applicant_hr_type)s,
+                %(applicant_process_level_category)s,
+                %(final_score)s,
+                %(summary_conclusion)s,
+                %(suggested_action)s,
+                %(lowest_hit_dimension)s,
+                %(lowest_hit_role_code)s,
+                %(lowest_hit_org_code)s,
+                %(hit_manual_review)s,
+                %(has_low_score_details)s,
+                %(low_score_detail_count)s,
+                %(low_score_detail_conclusion)s,
+                %(assessment_explain)s,
+                %(input_snapshot)s::jsonb,
+                NOW(),
+                NOW(),
+                NOW()
+            )
+            """,
+            rows,
+        )
+
+    def _insert_assessment_detail_rows(self, cursor, rows: list[dict[str, Any]]) -> None:
+        if not rows:
+            return
+        insert_columns = [
+            RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["document_no"],
+            RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["assessment_batch_no"],
+            RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["assessment_version"],
+            RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["role_code"],
+            RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["role_name"],
+            RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["org_code"],
+            RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["dimension_name"],
+            RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["rule_id"],
+            RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["rule_summary"],
+            RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["score"],
+            RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["detail_conclusion"],
+            RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["is_low_score"],
+            RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["intervention_action"],
+            RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["evidence_summary"],
+            RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["evidence_snapshot"],
+            RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["assessed_at"],
+            RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["created_at"],
+        ]
+        cursor.executemany(
+            f"""
+            INSERT INTO {RISK_TRUST_ASSESSMENT_DETAIL_TABLE} (
+                {self._quoted_columns(insert_columns)}
+            ) VALUES (
+                %(document_no)s,
+                %(assessment_batch_no)s,
+                %(assessment_version)s,
+                %(role_code)s,
+                %(role_name)s,
+                %(org_code)s,
+                %(dimension_name)s,
+                %(rule_id)s,
+                %(rule_summary)s,
+                %(score)s,
+                %(detail_conclusion)s,
+                %(is_low_score)s,
+                %(intervention_action)s,
+                %(evidence_summary)s,
+                %(evidence_snapshot)s::jsonb,
+                NOW(),
+                NOW()
+            )
+            """,
+            rows,
+        )
 
 
 class PostgresActiveRosterStore(_PostgresStoreBase):

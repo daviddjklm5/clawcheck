@@ -18,7 +18,7 @@ playwright install chromium
 - Audit rules: `automation/config/rules/`
 
 Default runtime target:
-- `check/login/run/collect/roster/orglist` use prod config by default when `--config` / `--credentials` are not passed.
+- `check/login/run/collect/roster/orglist/rolecatalog/dbinit/audit` use prod config by default when `--config` / `--credentials` are not passed.
 - UAT remains available via explicit `--config automation/config/settings.yaml --credentials automation/config/credentials.local.yaml`.
 
 ## 3. Commands
@@ -102,6 +102,16 @@ Initialize all 12 tables/functions on a new database:
 python automation/scripts/run.py dbinit \
   --config automation/config/settings.prod.yaml \
   --credentials automation/config/credentials.prod.local.yaml
+```
+
+Run risk-trust audit and write assessment results:
+```bash
+python automation/scripts/run.py audit --limit 20
+```
+
+Dry-run the audit and dump JSON only:
+```bash
+python automation/scripts/run.py audit --document-no RA-20260315-00000001 --dry-run
 ```
 
 ## 4. Output
