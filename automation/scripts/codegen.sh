@@ -4,7 +4,7 @@ set -euo pipefail
 URL="${1:-https://hr.onewo.com/ierp/?formId=home_page}"
 
 if ! command -v playwright >/dev/null 2>&1; then
-  echo "playwright CLI not found. Install with: pip install -r automation/requirements.txt"
+  echo "playwright CLI not found. Install with: .venv/bin/python -m pip install -r automation/requirements.txt"
   exit 1
 fi
 

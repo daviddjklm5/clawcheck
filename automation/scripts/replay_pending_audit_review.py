@@ -80,15 +80,19 @@ def normalize_bundle(bundle: dict[str, Any]) -> dict[str, Any]:
                         [
                             {
                                 "org_code": target.get("org_code"),
+                                "org_name": target.get("org_name"),
                                 "org_auth_level": target.get("org_auth_level"),
                                 "org_unit_name": target.get("org_unit_name"),
+                                "physical_level": target.get("physical_level"),
                             }
                             for target in row.get("targets", [])
                         ],
                         key=lambda item: (
                             str(item.get("org_code") or ""),
+                            str(item.get("org_name") or ""),
                             str(item.get("org_auth_level") or ""),
                             str(item.get("org_unit_name") or ""),
+                            str(item.get("physical_level") or ""),
                         ),
                     ),
                 }
@@ -155,6 +159,8 @@ def analyze_round(
     detail_rows: list[dict[str, Any]],
     round_no: int,
 ) -> dict[str, Any]:
+    from automation.reporting.low_score_feedback import build_low_score_feedback
+
     bundles_by_document = {
         str(bundle.get("basic_info", {}).get("document_no") or ""): normalize_bundle(bundle)
         for bundle in bundles
@@ -188,6 +194,39 @@ def analyze_round(
         document_no: {
             "summary": summary_by_document[document_no],
             "details": detail_rows_by_document.get(document_no, []),
+            "feedback": build_low_score_feedback(
+                summary_row={
+                    "summary_conclusion": summary_by_document[document_no].get("summary_conclusion"),
+                    "applicant_hr_type": summary_by_document[document_no].get("applicant_hr_type"),
+                    "level1_function_name": bundles_by_document[document_no]["applicant_person_attributes"].get("level1_function_name"),
+                    "applicant_position_name": bundles_by_document[document_no]["applicant_person_attributes"].get("position_name"),
+                    "position_name": bundles_by_document[document_no]["basic_info"].get("position_name"),
+                    "applicant_org_unit_name": bundles_by_document[document_no]["applicant_org_attributes"].get("org_unit_name"),
+                },
+                role_rows=[
+                    {
+                        "line_no": row.get("line_no"),
+                        "role_code": row.get("role_code"),
+                        "role_name": row.get("role_name"),
+                        "permission_level": row.get("permission_level"),
+                    }
+                    for row in bundles_by_document[document_no]["permission_details"]
+                ],
+                org_scope_rows=[
+                    {
+                        "role_code": row.get("role_code"),
+                        "role_name": row.get("role_name"),
+                        "org_code": target.get("org_code"),
+                        "organization_name": target.get("org_name"),
+                        "org_unit_name": target.get("org_unit_name"),
+                        "physical_level": target.get("physical_level"),
+                    }
+                    for row in bundles_by_document[document_no]["permission_details"]
+                    for target in row.get("targets", [])
+                    if target.get("org_code")
+                ],
+                low_score_rows=detail_rows_by_document.get(document_no, []),
+            ),
         }
         for document_no in document_nos
     }
@@ -325,6 +364,7 @@ def build_review_summary(round_result: dict[str, Any]) -> dict[str, Any]:
                 "lowest_hit_dimension": summary.get("lowest_hit_dimension"),
                 "low_score_detail_count": int(summary.get("low_score_detail_count") or 0),
                 "primary_rule_id": primary_rule,
+                "feedback_summary": " ".join(documents[document_no].get("feedback", {}).get("feedbackLines", [])[:2]),
             }
         )
 
@@ -442,6 +482,7 @@ def render_markdown(
             f"- `{item['document_no']}` / `{item['applicant_name'] or '-'}` / `{item['permission_target'] or '-'}`："
             f"最终分 `{item['final_score']:.1f}`，总结论 `{item['summary_conclusion']}`，"
             f"低分明细 `{item['low_score_detail_count']}` 条，主低分规则 `{item['primary_rule_id']}`"
+            + (f"，聚合反馈：{item['feedback_summary']}" if item.get("feedback_summary") else "")
         )
 
     return "\n".join(lines) + "\n"

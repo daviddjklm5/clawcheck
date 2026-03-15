@@ -13,6 +13,10 @@ from automation.utils.approval_record_helpers import (
     normalize_approval_records,
 )
 from automation.utils.config_loader import DatabaseSettings
+from automation.reporting.low_score_feedback import (
+    build_low_score_feedback,
+    display_summary_conclusion,
+)
 from automation.rules.role_facts import build_detail_role_facts
 
 try:
@@ -28,6 +32,8 @@ APPLY_FORM_ORG_SCOPE_TABLE = '"申请表组织范围"'
 PERSON_ATTRIBUTES_TABLE = '"人员属性查询"'
 RISK_TRUST_ASSESSMENT_TABLE = '"申请单风险信任评估"'
 RISK_TRUST_ASSESSMENT_DETAIL_TABLE = '"申请单风险信任评估明细"'
+RISK_TRUST_LOW_SCORE_ENRICHED_VIEW = '"申请单低分明细富化视图"'
+RISK_TRUST_LOW_SCORE_FEEDBACK_GROUP_VIEW = '"申请单低分反馈预聚合视图"'
 
 BASIC_INFO_COLUMNS = {
     "document_no": "单据编号",
@@ -124,9 +130,11 @@ PERSON_ATTRIBUTES_COLUMNS = {
 
 ORG_ATTRIBUTE_COLUMNS = {
     "org_code": "行政组织编码",
+    "org_name": "行政组织名称",
     "process_level_category": "组织流程层级分类",
     "org_auth_level": "组织授权级别",
     "org_unit_name": "组织单位",
+    "physical_level": "物理层级",
     "war_zone": "所属战区",
 }
 
@@ -215,7 +223,7 @@ class _PostgresStoreBase:
     def ensure_available(self) -> None:
         if psycopg is None:
             raise ModuleNotFoundError(
-                "Missing dependency: psycopg. Run `pip install -r automation/requirements.txt`."
+                "Missing dependency: psycopg. Run `.venv/bin/python -m pip install -r automation/requirements.txt`."
             )
         if not self.is_configured(self.settings):
             raise ValueError(
@@ -1426,12 +1434,17 @@ class PostgresPersonAttributesStore(_PostgresStoreBase):
 
 class PostgresRiskTrustStore(_PostgresStoreBase):
     schema_sql = Path(__file__).resolve().parents[1] / "sql" / "022_risk_trust_assessment.sql"
+    schema_upgrade_sql_files = [
+        Path(__file__).resolve().parents[1] / "sql" / "023_low_score_feedback_preagg.sql",
+    ]
 
     def ensure_table(self) -> None:
         ddl = self.schema_sql.read_text(encoding="utf-8")
         with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(ddl)
+                for migration_sql_file in self.schema_upgrade_sql_files:
+                    cursor.execute(migration_sql_file.read_text(encoding="utf-8"))
 
     @staticmethod
     def _format_datetime_value(value: Any) -> str:
@@ -1459,10 +1472,35 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
             "reject": "建议拒绝",
             "manual_review": "建议人工复核",
             "warning": "建议关注",
-            "trust": "建议通过",
+            "allow": "建议通过",
         }
         normalized = (value or "").strip()
         return mapping.get(normalized, normalized or "-")
+
+    @staticmethod
+    def _applicant_identity_label(
+        *,
+        hr_type: str | None,
+        position_name: str | None,
+        level1_function_name: str | None,
+    ) -> str:
+        normalized_hr_type = (hr_type or "").strip()
+        if normalized_hr_type in {"H1", "H2", "H3"}:
+            identity = "申请人为HR岗位"
+        elif normalized_hr_type == "HY":
+            identity = "申请人为疑似HR岗位"
+        elif normalized_hr_type:
+            identity = "申请人为非HR岗位"
+        else:
+            identity = "申请人身份待确认"
+        parts: list[str] = []
+        if (normalized_position := (position_name or "").strip()):
+            parts.append(f"职位：{normalized_position}")
+        if (normalized_function := (level1_function_name or "").strip()):
+            parts.append(f"一级职能：{normalized_function}")
+        if not parts:
+            return identity
+        return f"{identity}（{'，'.join(parts)}）"
 
     def fetch_existing_assessment_batches(self, batch_nos: Iterable[str]) -> set[str]:
         normalized_batch_nos = sorted(
@@ -1493,6 +1531,7 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                 }
 
     def fetch_process_dashboard(self) -> dict[str, Any]:
+        self.ensure_table()
         with self.connect() as connection:
             with connection.cursor() as cursor:
                 latest_batch_no = self._fetch_latest_assessment_batch_no(cursor)
@@ -1549,9 +1588,9 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                     "tone": "danger" if reject_count else "success",
                 },
                 {
-                    "label": "人工干预",
+                    "label": display_summary_conclusion("人工干预"),
                     "value": str(manual_review_count),
-                    "hint": "需要人工复核的单据数。",
+                    "hint": "需要加强审核的单据数。",
                     "tone": "warning" if manual_review_count else "success",
                 },
                 {
@@ -1574,6 +1613,7 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                     "documentStatus": row["document_status"] or "-",
                     "finalScore": row["final_score"],
                     "summaryConclusion": row["summary_conclusion"] or "-",
+                    "summaryConclusionLabel": display_summary_conclusion(row["summary_conclusion"]),
                     "suggestedAction": row["suggested_action"] or "",
                     "suggestedActionLabel": self._suggested_action_label(row["suggested_action"]),
                     "lowScoreDetailCount": int(row["low_score_detail_count"] or 0),
@@ -1593,6 +1633,7 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
         if normalized_document_no is None:
             return None
 
+        self.ensure_table()
         with self.connect() as connection:
             with connection.cursor() as cursor:
                 batch_no = self._strip_text(assessment_batch_no) or self._fetch_latest_assessment_batch_no(cursor)
@@ -1614,20 +1655,27 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                     batch_no,
                     [normalized_document_no],
                 )
+                feedback_group_rows = self._fetch_process_feedback_group_rows(
+                    cursor,
+                    batch_no,
+                    [normalized_document_no],
+                )
 
+        feedback_overview = build_low_score_feedback(
+            summary_row=summary_row,
+            feedback_group_rows=feedback_group_rows,
+        )
         notes: list[str] = []
         if summary_row["assessment_explain"]:
             notes.append(f"评估说明：{summary_row['assessment_explain']}")
-        if summary_row["low_score_detail_count"]:
+        if feedback_overview["feedbackLines"]:
             notes.append(
-                f"当前共有 {int(summary_row['low_score_detail_count'])} 条低分明细，建议优先查看“低分明细”页签。"
+                f"默认已按 104 方案聚合为 {len(feedback_overview['feedbackLines'])} 类风险摘要，原始低分明细留在“原始低分明细”页签。"
             )
-        if summary_row["low_score_detail_conclusion"]:
-            notes.append(f"低分结论汇总：{summary_row['low_score_detail_conclusion']}")
         if summary_row["suggested_action"] == "reject":
             notes.append("当前建议动作为拒绝，需结合原始单据与审批链复核后再处理。")
         elif summary_row["suggested_action"] == "manual_review":
-            notes.append("当前建议动作为人工复核，暂不建议直接页面回写审批。")
+            notes.append("当前建议动作为人工复核，默认展示文案已映射为“加强审核”。")
 
         return {
             "documentNo": summary_row["document_no"],
@@ -1659,14 +1707,19 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                     "hint": "若源页面缺失则显示 `-`。",
                 },
                 {
+                    "label": "申请人身份",
+                    "value": summary_row["applicant_identity_label"] or "-",
+                    "hint": "按 104 方案以自然语言展示申请人身份，不直接输出 H1/HX 等内部编码。",
+                },
+                {
+                    "label": "申请人组织单位",
+                    "value": summary_row["applicant_org_unit_name"] or "-",
+                    "hint": "来自 `组织属性查询.组织单位`。",
+                },
+                {
                     "label": "最新审批时间",
                     "value": self._format_datetime_value(summary_row["latest_approval_time"]),
                     "hint": "用于判断审批轨迹是否已更新。",
-                },
-                {
-                    "label": "申请人HR类型",
-                    "value": summary_row["applicant_hr_type"] or "-",
-                    "hint": "来自 `人员属性查询`。",
                 },
                 {
                     "label": "申请人组织流程层级分类",
@@ -1680,7 +1733,7 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                 },
                 {
                     "label": "总结论",
-                    "value": summary_row["summary_conclusion"] or "-",
+                    "value": display_summary_conclusion(summary_row["summary_conclusion"]),
                     "hint": f"建议动作：{self._suggested_action_label(summary_row['suggested_action'])}",
                 },
                 {
@@ -1691,7 +1744,7 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                 {
                     "label": "低分明细条数",
                     "value": str(int(summary_row["low_score_detail_count"] or 0)),
-                    "hint": "分值小于等于 1.0 的明细条数。",
+                    "hint": "原始 `<= 1.0` 低分明细条数，不等于风险点数量。",
                 },
                 {
                     "label": "评估批次号",
@@ -1707,8 +1760,10 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
             "roles": [
                 {
                     "id": row["id"],
+                    "lineNo": row["line_no"] or "-",
                     "roleCode": row["role_code"] or "-",
                     "roleName": row["role_name"] or "-",
+                    "permissionLevel": row["permission_level"] or "-",
                     "applyType": row["apply_type"] or "-",
                     "orgScopeCount": int(row["org_scope_count"] or 0),
                     "skipOrgScopeCheck": self._format_bool_label(row["skip_org_scope_check"]),
@@ -1733,6 +1788,8 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                     "roleName": row["role_name"] or "-",
                     "organizationCode": row["org_code"] or "-",
                     "organizationName": row["organization_name"] or "-",
+                    "orgUnitName": row["org_unit_name"] or "-",
+                    "physicalLevel": row["physical_level"] or "-",
                     "skipOrgScopeCheck": self._format_bool_label(row["skip_org_scope_check"]),
                 }
                 for row in org_scope_rows
@@ -1752,6 +1809,7 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                 }
                 for row in low_score_rows
             ],
+            "feedbackOverview": feedback_overview,
             "notes": notes,
         }
 
@@ -1833,8 +1891,10 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                     targets.append(
                         {
                             "org_code": target_row["org_code"],
+                            "org_name": org_attributes.get("org_name"),
                             "org_auth_level": org_attributes.get("org_auth_level"),
                             "org_unit_name": org_attributes.get("org_unit_name"),
+                            "physical_level": org_attributes.get("physical_level"),
                             "org_attributes": org_attributes,
                         }
                     )
@@ -2150,9 +2210,11 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
             f"""
             SELECT
                 {self._quote_identifier(ORG_ATTRIBUTE_COLUMNS["org_code"])},
+                {self._quote_identifier(ORG_ATTRIBUTE_COLUMNS["org_name"])},
                 {self._quote_identifier(ORG_ATTRIBUTE_COLUMNS["process_level_category"])},
                 {self._quote_identifier(ORG_ATTRIBUTE_COLUMNS["org_auth_level"])},
                 {self._quote_identifier(ORG_ATTRIBUTE_COLUMNS["org_unit_name"])},
+                {self._quote_identifier(ORG_ATTRIBUTE_COLUMNS["physical_level"])},
                 {self._quote_identifier(ORG_ATTRIBUTE_COLUMNS["war_zone"])}
             FROM "组织属性查询"
             WHERE {self._quote_identifier(ORG_ATTRIBUTE_COLUMNS["org_code"])} = ANY(%s)
@@ -2163,10 +2225,12 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
         return {
             self._strip_text(row[0]) or "": {
                 "org_code": self._strip_text(row[0]),
-                "process_level_category": self._strip_text(row[1]),
-                "org_auth_level": self._strip_text(row[2]),
-                "org_unit_name": self._strip_text(row[3]),
-                "war_zone": self._strip_text(row[4]),
+                "org_name": self._strip_text(row[1]),
+                "process_level_category": self._strip_text(row[2]),
+                "org_auth_level": self._strip_text(row[3]),
+                "org_unit_name": self._strip_text(row[4]),
+                "physical_level": self._strip_text(row[5]),
+                "war_zone": self._strip_text(row[6]),
             }
             for row in rows
             if self._strip_text(row[0]) is not None
@@ -2229,6 +2293,8 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                 assessment.{self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["document_no"])},
                 basic.{self._quote_identifier(BASIC_INFO_COLUMNS["employee_no"])},
                 person.{self._quote_identifier(PERSON_ATTRIBUTES_COLUMNS["employee_name"])},
+                person.{self._quote_identifier(PERSON_ATTRIBUTES_COLUMNS["level1_function_name"])},
+                person.{self._quote_identifier(PERSON_ATTRIBUTES_COLUMNS["position_name"])},
                 basic.{self._quote_identifier(BASIC_INFO_COLUMNS["permission_target"])},
                 basic.{self._quote_identifier(BASIC_INFO_COLUMNS["document_status"])},
                 basic.{self._quote_identifier(BASIC_INFO_COLUMNS["company_name"])},
@@ -2236,6 +2302,7 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                 basic.{self._quote_identifier(BASIC_INFO_COLUMNS["position_name"])},
                 basic.{self._quote_identifier(BASIC_INFO_COLUMNS["apply_time"])},
                 basic.{self._quote_identifier(BASIC_INFO_COLUMNS["latest_approval_time"])},
+                applicant_org.{self._quote_identifier(ORG_ATTRIBUTE_COLUMNS["org_unit_name"])},
                 assessment.{self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["assessment_batch_no"])},
                 assessment.{self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["assessment_version"])},
                 assessment.{self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["applicant_hr_type"])},
@@ -2259,6 +2326,9 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
             LEFT JOIN {PERSON_ATTRIBUTES_TABLE} AS person
                 ON person.{self._quote_identifier(PERSON_ATTRIBUTES_COLUMNS["employee_no"])} =
                    basic.{self._quote_identifier(BASIC_INFO_COLUMNS["employee_no"])}
+            LEFT JOIN "组织属性查询" AS applicant_org
+                ON applicant_org.{self._quote_identifier(ORG_ATTRIBUTE_COLUMNS["org_code"])} =
+                   person.{self._quote_identifier(PERSON_ATTRIBUTES_COLUMNS["department_id"])}
             WHERE assessment.{self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["assessment_batch_no"])} = %s
         """
         params: list[Any] = [assessment_batch_no]
@@ -2280,29 +2350,37 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                 "document_no": self._strip_text(row[0]),
                 "employee_no": self._strip_text(row[1]),
                 "applicant_name": self._strip_text(row[2]),
-                "permission_target": self._strip_text(row[3]),
-                "document_status": self._strip_text(row[4]),
-                "company_name": self._strip_text(row[5]),
-                "department_name": self._strip_text(row[6]),
-                "position_name": self._strip_text(row[7]),
-                "apply_time": row[8],
-                "latest_approval_time": row[9],
-                "assessment_batch_no": self._strip_text(row[10]),
-                "assessment_version": self._strip_text(row[11]),
-                "applicant_hr_type": self._strip_text(row[12]),
-                "applicant_process_level_category": self._strip_text(row[13]),
-                "final_score": self._format_score_value(row[14]),
-                "summary_conclusion": self._strip_text(row[15]),
-                "suggested_action": self._strip_text(row[16]),
-                "lowest_hit_dimension": self._strip_text(row[17]),
-                "lowest_hit_role_code": self._strip_text(row[18]),
-                "lowest_hit_org_code": self._strip_text(row[19]),
-                "hit_manual_review": bool(row[20]),
-                "has_low_score_details": bool(row[21]),
-                "low_score_detail_count": row[22],
-                "low_score_detail_conclusion": self._strip_text(row[23]),
-                "assessment_explain": self._strip_text(row[24]),
-                "assessed_at": row[25],
+                "level1_function_name": self._strip_text(row[3]),
+                "applicant_position_name": self._strip_text(row[4]),
+                "permission_target": self._strip_text(row[5]),
+                "document_status": self._strip_text(row[6]),
+                "company_name": self._strip_text(row[7]),
+                "department_name": self._strip_text(row[8]),
+                "position_name": self._strip_text(row[9]),
+                "apply_time": row[10],
+                "latest_approval_time": row[11],
+                "applicant_org_unit_name": self._strip_text(row[12]),
+                "assessment_batch_no": self._strip_text(row[13]),
+                "assessment_version": self._strip_text(row[14]),
+                "applicant_hr_type": self._strip_text(row[15]),
+                "applicant_process_level_category": self._strip_text(row[16]),
+                "final_score": self._format_score_value(row[17]),
+                "summary_conclusion": self._strip_text(row[18]),
+                "suggested_action": self._strip_text(row[19]),
+                "lowest_hit_dimension": self._strip_text(row[20]),
+                "lowest_hit_role_code": self._strip_text(row[21]),
+                "lowest_hit_org_code": self._strip_text(row[22]),
+                "hit_manual_review": bool(row[23]),
+                "has_low_score_details": bool(row[24]),
+                "low_score_detail_count": row[25],
+                "low_score_detail_conclusion": self._strip_text(row[26]),
+                "assessment_explain": self._strip_text(row[27]),
+                "assessed_at": row[28],
+                "applicant_identity_label": self._applicant_identity_label(
+                    hr_type=self._strip_text(row[15]),
+                    position_name=self._strip_text(row[4]) or self._strip_text(row[9]),
+                    level1_function_name=self._strip_text(row[3]),
+                ),
             }
             for row in rows
             if self._strip_text(row[0]) is not None
@@ -2317,11 +2395,13 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
             SELECT
                 detail.{self._quote_identifier(PERMISSION_DETAIL_COLUMNS["document_no"])},
                 detail.{self._quote_identifier(PERMISSION_DETAIL_COLUMNS["id"])},
+                detail.{self._quote_identifier(PERMISSION_DETAIL_COLUMNS["line_no"])},
                 detail.{self._quote_identifier(PERMISSION_DETAIL_COLUMNS["role_code"])},
                 detail.{self._quote_identifier(PERMISSION_DETAIL_COLUMNS["role_name"])},
                 detail.{self._quote_identifier(PERMISSION_DETAIL_COLUMNS["apply_type"])},
                 detail.{self._quote_identifier(PERMISSION_DETAIL_COLUMNS["org_scope_count"])},
-                catalog.{self._quote_identifier(PERMISSION_CATALOG_COLUMNS["skip_org_scope_check"])}
+                catalog.{self._quote_identifier(PERMISSION_CATALOG_COLUMNS["skip_org_scope_check"])},
+                catalog.{self._quote_identifier(PERMISSION_CATALOG_COLUMNS["permission_level"])}
             FROM {PERMISSION_APPLY_DETAIL_TABLE} AS detail
             LEFT JOIN "权限列表" AS catalog
                 ON catalog.{self._quote_identifier(PERMISSION_CATALOG_COLUMNS["role_code"])} =
@@ -2337,11 +2417,13 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
             {
                 "document_no": self._strip_text(row[0]),
                 "id": f"{self._strip_text(row[0])}:{self._strip_text(row[1]) or index}",
-                "role_code": self._strip_text(row[2]),
-                "role_name": self._strip_text(row[3]),
-                "apply_type": self._strip_text(row[4]),
-                "org_scope_count": row[5],
-                "skip_org_scope_check": bool(row[6]),
+                "line_no": self._strip_text(row[2]),
+                "role_code": self._strip_text(row[3]),
+                "role_name": self._strip_text(row[4]),
+                "apply_type": self._strip_text(row[5]),
+                "org_scope_count": row[6],
+                "skip_org_scope_check": bool(row[7]),
+                "permission_level": self._strip_text(row[8]),
             }
             for index, row in enumerate(rows, start=1)
             if self._strip_text(row[0]) is not None
@@ -2359,7 +2441,9 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                 scope.{self._quote_identifier(APPLY_FORM_ORG_SCOPE_COLUMNS["role_name"])},
                 scope.{self._quote_identifier(APPLY_FORM_ORG_SCOPE_COLUMNS["org_code"])},
                 catalog.{self._quote_identifier(PERMISSION_CATALOG_COLUMNS["skip_org_scope_check"])},
-                org.{self._quote_identifier(ORG_ATTRIBUTE_COLUMNS["org_unit_name"])}
+                org.{self._quote_identifier(ORG_ATTRIBUTE_COLUMNS["org_name"])},
+                org.{self._quote_identifier(ORG_ATTRIBUTE_COLUMNS["org_unit_name"])},
+                org.{self._quote_identifier(ORG_ATTRIBUTE_COLUMNS["physical_level"])}
             FROM {APPLY_FORM_ORG_SCOPE_TABLE} AS scope
             LEFT JOIN "权限列表" AS catalog
                 ON catalog.{self._quote_identifier(PERMISSION_CATALOG_COLUMNS["role_code"])} =
@@ -2384,6 +2468,8 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                 "org_code": self._strip_text(row[3]),
                 "skip_org_scope_check": bool(row[4]),
                 "organization_name": self._strip_text(row[5]),
+                "org_unit_name": self._strip_text(row[6]),
+                "physical_level": self._strip_text(row[7]),
             }
             for row in rows
             if self._strip_text(row[0]) is not None and self._strip_text(row[1]) is not None
@@ -2410,7 +2496,8 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                 {self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["rule_summary"])},
                 {self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["score"])},
                 {self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["detail_conclusion"])},
-                {self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["intervention_action"])}
+                {self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["intervention_action"])},
+                {self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["evidence_summary"])}
             FROM {RISK_TRUST_ASSESSMENT_DETAIL_TABLE}
             WHERE {self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["assessment_batch_no"])} = %s
               AND {self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["document_no"])} = ANY(%s)
@@ -2442,10 +2529,107 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                 "score": self._format_score_value(row[7]),
                 "detail_conclusion": self._strip_text(row[8]),
                 "intervention_action": self._strip_text(row[9]),
+                "evidence_summary": self._strip_text(row[10]),
             }
             for index, row in enumerate(rows, start=1)
             if self._strip_text(row[0]) is not None
         ]
+
+    def _fetch_process_feedback_group_rows(
+        self,
+        cursor,
+        assessment_batch_no: str,
+        document_nos: Iterable[str],
+    ) -> list[dict[str, Any]]:
+        normalized_document_nos = [document_no for document_no in document_nos if document_no]
+        if not normalized_document_nos:
+            return []
+        cursor.execute(
+            f"""
+            SELECT
+                "分组键",
+                "单据编号",
+                "维度名称",
+                "命中规则编码",
+                "维度得分",
+                "低分原因文案",
+                "建议干预动作",
+                "申请人组织单位",
+                "目标组织单位",
+                "原始低分明细数",
+                "影响组织数",
+                "影响角色数",
+                "角色列表",
+                "组织列表"
+            FROM {RISK_TRUST_LOW_SCORE_FEEDBACK_GROUP_VIEW}
+            WHERE "评估批次号" = %s
+              AND "单据编号" = ANY(%s)
+            ORDER BY "单据编号", "维度得分" ASC, "维度名称", "命中规则编码", "目标组织单位"
+            """,
+            (assessment_batch_no, normalized_document_nos),
+        )
+        rows = cursor.fetchall()
+        return [
+            {
+                "group_key": self._strip_text(row[0]),
+                "document_no": self._strip_text(row[1]),
+                "dimension_name": self._strip_text(row[2]),
+                "rule_id": self._strip_text(row[3]),
+                "score": self._format_score_value(row[4]),
+                "evidence_summary": self._strip_text(row[5]),
+                "intervention_action": self._strip_text(row[6]),
+                "applicant_org_unit_name": self._strip_text(row[7]),
+                "target_org_unit_name": self._strip_text(row[8]),
+                "raw_detail_count": int(row[9] or 0),
+                "affected_org_count": int(row[10] or 0),
+                "affected_role_count": int(row[11] or 0),
+                "role_meta": list(row[12] or []),
+                "org_meta": list(row[13] or []),
+            }
+            for row in rows
+            if self._strip_text(row[1]) is not None
+        ]
+
+    def fetch_document_feedback_overviews(
+        self,
+        *,
+        assessment_batch_no: str,
+        document_nos: Iterable[str],
+    ) -> dict[str, dict[str, Any]]:
+        normalized_document_nos = [
+            document_no
+            for value in document_nos
+            if (document_no := self._strip_text(value)) is not None
+        ]
+        if not normalized_document_nos:
+            return {}
+
+        self.ensure_table()
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                summary_rows = self._fetch_process_summary_rows(cursor, assessment_batch_no)
+                summary_by_document = {
+                    row["document_no"]: row
+                    for row in summary_rows
+                    if row["document_no"] in normalized_document_nos
+                }
+                feedback_group_rows = self._fetch_process_feedback_group_rows(
+                    cursor,
+                    assessment_batch_no,
+                    normalized_document_nos,
+                )
+
+        grouped_rows_by_document: dict[str, list[dict[str, Any]]] = {}
+        for row in feedback_group_rows:
+            grouped_rows_by_document.setdefault(row["document_no"], []).append(row)
+
+        return {
+            document_no: build_low_score_feedback(
+                summary_row=summary_by_document.get(document_no, {"summary_conclusion": None}),
+                feedback_group_rows=grouped_rows_by_document.get(document_no, []),
+            )
+            for document_no in normalized_document_nos
+        }
 
     def _fetch_process_distribution_sections(self, cursor, assessment_batch_no: str) -> list[dict[str, Any]]:
         sections: list[dict[str, Any]] = []

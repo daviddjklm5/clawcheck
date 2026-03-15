@@ -213,6 +213,7 @@ def render_audit_distribution_workbook(
     detail_rows: list[dict[str, Any]],
     approval_rows: list[dict[str, Any]],
     ignored_node_names: list[str],
+    document_feedback_rows: list[dict[str, Any]] | None = None,
     output_path: Path,
 ) -> Path:
     workbook = Workbook()
@@ -258,6 +259,7 @@ def render_audit_distribution_workbook(
         [
             "单据编号",
             "最终信任分",
+            "展示结论",
             "总结论",
             "建议动作",
             "最低命中维度",
@@ -271,6 +273,7 @@ def render_audit_distribution_workbook(
             [
                 _text(row.get("document_no")),
                 _score_text(row.get("final_score")),
+                _text(row.get("summary_conclusion_label")),
                 _text(row.get("summary_conclusion")),
                 _text(row.get("suggested_action")),
                 _text(row.get("lowest_hit_dimension")),
@@ -286,6 +289,34 @@ def render_audit_distribution_workbook(
             )
         ],
     )
+    if document_feedback_rows:
+        _append_table_sheet(
+            workbook,
+            "104聚合反馈",
+            [
+                "单据编号",
+                "展示结论",
+                "风险类型数",
+                "影响组织单位数",
+                "影响组织数",
+                "影响角色数",
+                "原始低分明细数",
+                "聚合反馈摘要",
+            ],
+            [
+                [
+                    _text(row.get("document_no")),
+                    _text(row.get("summary_conclusion_label")),
+                    _text(row.get("risk_type_count")),
+                    _text(row.get("affected_org_unit_count")),
+                    _text(row.get("affected_org_count")),
+                    _text(row.get("affected_role_count")),
+                    _text(row.get("raw_low_score_detail_count")),
+                    _text(row.get("feedback_summary")),
+                ]
+                for row in sorted(document_feedback_rows, key=lambda item: _text(item.get("document_no")))
+            ],
+        )
     _append_table_sheet(
         workbook,
         "维度分布",

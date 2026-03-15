@@ -77,7 +77,9 @@ def _load_xlsx_rows(path: Path) -> list[list[str]]:
     try:
         from openpyxl import load_workbook
     except ModuleNotFoundError as exc:  # pragma: no cover
-        raise ModuleNotFoundError("Missing dependency: openpyxl. Run `pip install -r automation/requirements.txt`.") from exc
+        raise ModuleNotFoundError(
+            "Missing dependency: openpyxl. Run `.venv/bin/python -m pip install -r automation/requirements.txt`."
+        ) from exc
 
     workbook = load_workbook(path, read_only=True, data_only=True)
     try:
@@ -106,7 +108,9 @@ def _load_xls_rows(path: Path) -> list[list[str]]:
     try:
         import xlrd
     except ModuleNotFoundError as exc:  # pragma: no cover
-        raise ModuleNotFoundError("Missing dependency: xlrd. Run `pip install -r automation/requirements.txt`.") from exc
+        raise ModuleNotFoundError(
+            "Missing dependency: xlrd. Run `.venv/bin/python -m pip install -r automation/requirements.txt`."
+        ) from exc
 
     book = xlrd.open_workbook(path)
     sheet = next((book.sheet_by_index(idx) for idx in range(book.nsheets) if book.sheet_by_index(idx).nrows > 0), book.sheet_by_index(0))

@@ -2,11 +2,21 @@
 
 ## 1. Install
 ```bash
-cd automation
+cd /home/shangmeilin/clawcheck
 python3 -m venv .venv
+.venv/bin/python -m pip install -r automation/requirements.txt
+.venv/bin/python -m playwright install chromium
+```
+
+Recommended runtime convention:
+- Use the repository root `.venv` as the only Python environment for this project.
+- Run Python scripts from the repository root with `.venv/bin/python ...`.
+- If the system `python3` is PEP 668 managed, do not install packages into `/usr/bin/python3`.
+
+Optional shell activation:
+```bash
+cd /home/shangmeilin/clawcheck
 source .venv/bin/activate
-pip install -r requirements.txt
-playwright install chromium
 ```
 
 ## 2. Config
@@ -22,35 +32,37 @@ Default runtime target:
 - UAT remains available via explicit `--config automation/config/settings.yaml --credentials automation/config/credentials.local.yaml`.
 
 ## 3. Commands
+All commands below assume the current directory is the repository root `/home/shangmeilin/clawcheck`.
+
 Health check:
 ```bash
-python automation/scripts/run.py check --headed
+.venv/bin/python automation/scripts/run.py check --headed
 ```
 
 Login and save auth state:
 ```bash
-python automation/scripts/run.py login --headed
-python automation/scripts/run.py login --config automation/config/settings.yaml --credentials automation/config/credentials.local.yaml --headed
+.venv/bin/python automation/scripts/run.py login --headed
+.venv/bin/python automation/scripts/run.py login --config automation/config/settings.yaml --credentials automation/config/credentials.local.yaml --headed
 ```
 
 Permission collection:
 ```bash
-python automation/scripts/run.py collect --limit 3 --dry-run --headed
+.venv/bin/python automation/scripts/run.py collect --limit 3 --dry-run --headed
 ```
 
 Workflow run:
 ```bash
-python automation/scripts/run.py run --headed
+.venv/bin/python automation/scripts/run.py run --headed
 ```
 
 Active roster download + import:
 ```bash
-python automation/scripts/run.py roster --headed
+.venv/bin/python automation/scripts/run.py roster --headed
 ```
 
 Recommended explicit prod command:
 ```bash
-python automation/scripts/run.py roster \
+.venv/bin/python automation/scripts/run.py roster \
   --config automation/config/settings.prod.yaml \
   --credentials automation/config/credentials.prod.local.yaml \
   --headed
@@ -58,7 +70,7 @@ python automation/scripts/run.py roster \
 
 Import an existing roster file only:
 ```bash
-python automation/scripts/run.py roster \
+.venv/bin/python automation/scripts/run.py roster \
   --config automation/config/settings.prod.yaml \
   --credentials automation/config/credentials.prod.local.yaml \
   --input-file automation/downloads/example.xlsx \
@@ -67,76 +79,75 @@ python automation/scripts/run.py roster \
 
 Query only, without export/import:
 ```bash
-python automation/scripts/run.py roster --skip-export --skip-import --headed
+.venv/bin/python automation/scripts/run.py roster --skip-export --skip-import --headed
 ```
 
 Organization list download + import:
 ```bash
-python automation/scripts/run.py orglist --headed
+.venv/bin/python automation/scripts/run.py orglist --headed
 ```
 
 Recommended explicit prod command:
 ```bash
-python automation/scripts/run.py orglist   --config automation/config/settings.prod.yaml   --credentials automation/config/credentials.prod.local.yaml   --headed
+.venv/bin/python automation/scripts/run.py orglist   --config automation/config/settings.prod.yaml   --credentials automation/config/credentials.prod.local.yaml   --headed
 ```
 
 Import an existing organization list file only:
 ```bash
-python automation/scripts/run.py orglist   --config automation/config/settings.prod.yaml   --credentials automation/config/credentials.prod.local.yaml   --input-file automation/downloads/example_orglist.xlsx   --headless
+.venv/bin/python automation/scripts/run.py orglist   --config automation/config/settings.prod.yaml   --credentials automation/config/credentials.prod.local.yaml   --input-file automation/downloads/example_orglist.xlsx   --headless
 ```
 
 Query only, without export/import:
 ```bash
-python automation/scripts/run.py orglist --skip-export --skip-import --headed
+.venv/bin/python automation/scripts/run.py orglist --skip-export --skip-import --headed
 ```
 
 Initialize permission catalog:
 ```bash
-python automation/scripts/run.py rolecatalog \
+.venv/bin/python automation/scripts/run.py rolecatalog \
   --config automation/config/settings.prod.yaml \
   --credentials automation/config/credentials.prod.local.yaml
 ```
 
 Initialize all 12 tables/functions on a new database:
 ```bash
-python automation/scripts/run.py dbinit \
+.venv/bin/python automation/scripts/run.py dbinit \
   --config automation/config/settings.prod.yaml \
   --credentials automation/config/credentials.prod.local.yaml
 ```
 
 Run risk-trust audit and write assessment results:
 ```bash
-python automation/scripts/run.py audit --limit 20
+.venv/bin/python automation/scripts/run.py audit --limit 20
 ```
 
 Dry-run the audit and dump JSON only:
 ```bash
-python automation/scripts/run.py audit --document-no RA-20260315-00000001 --dry-run
+.venv/bin/python automation/scripts/run.py audit --document-no RA-20260315-00000001 --dry-run
 ```
 
 Export an audit batch distribution workbook:
 ```bash
-python automation/scripts/export_audit_distribution_report.py --batch-no audit_20260315_112428
+.venv/bin/python automation/scripts/export_audit_distribution_report.py --batch-no audit_20260315_112428
 ```
 
 ## 4. Web UI skeleton
 Start the mock API:
 ```bash
-cd automation
-source .venv/bin/activate
-uvicorn automation.api.main:app --reload
+cd /home/shangmeilin/clawcheck
+.venv/bin/uvicorn automation.api.main:app --reload
 ```
 
 Start the React UI:
 ```bash
-cd webui
+cd /home/shangmeilin/clawcheck/webui
 npm install
 npm run dev
 ```
 
 Optional API base override:
 ```bash
-cd webui
+cd /home/shangmeilin/clawcheck/webui
 VITE_API_BASE_URL=http://127.0.0.1:8000/api npm run dev
 ```
 

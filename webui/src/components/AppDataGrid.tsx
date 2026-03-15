@@ -40,6 +40,8 @@ export function AppDataGrid<R extends GridValidRowModel>({
   pageSizeOptions,
   ...props
 }: AppDataGridProps<R>) {
+  const paginationMode = props.paginationMode ?? "client";
+  const normalizedProps = paginationMode === "server" ? props : { ...props, rowCount: undefined };
   const mergedSx = [
     {
       border: 0,
@@ -64,7 +66,7 @@ export function AppDataGrid<R extends GridValidRowModel>({
   return (
     <SectionCard title={title} subtitle={subtitle} action={actions}>
       <DataGrid
-        {...props}
+        {...normalizedProps}
         pagination
         hideFooterSelectedRowCount
         disableRowSelectionOnClick

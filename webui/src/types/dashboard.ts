@@ -83,6 +83,7 @@ export interface ProcessDocumentRow {
   documentStatus: string;
   finalScore: number;
   summaryConclusion: string;
+  summaryConclusionLabel: string;
   suggestedAction: string;
   suggestedActionLabel: string;
   lowScoreDetailCount: number;
@@ -92,8 +93,10 @@ export interface ProcessDocumentRow {
 
 export interface RoleRow {
   id: string;
+  lineNo: string;
   roleCode: string;
   roleName: string;
+  permissionLevel: string;
   applyType: string;
   orgScopeCount: number;
   skipOrgScopeCheck: string;
@@ -114,6 +117,8 @@ export interface OrgScopeRow {
   roleName: string;
   organizationCode: string;
   organizationName: string;
+  orgUnitName: string;
+  physicalLevel: string;
   skipOrgScopeCheck: string;
 }
 
@@ -130,9 +135,29 @@ export interface RiskDetailRow {
   interventionAction: string;
 }
 
+export interface FeedbackGroupRow {
+  id: string;
+  category: string;
+  title: string;
+  summary: string;
+  hint: string;
+  rawDetailCount: number;
+  affectedOrgUnitCount: number;
+  affectedOrgCount: number;
+  affectedRoleCount: number;
+}
+
+export interface FeedbackOverview {
+  summaryConclusionLabel: string;
+  feedbackStats: StatItem[];
+  feedbackGroups: FeedbackGroupRow[];
+  feedbackLines: string[];
+}
+
 export interface ProcessDetail {
   documentNo: string;
   overviewFields: DetailField[];
+  feedbackOverview: FeedbackOverview;
   roles: RoleRow[];
   approvals: ApprovalRow[];
   orgScopes: OrgScopeRow[];

@@ -304,8 +304,8 @@ def main() -> int:
     except ModuleNotFoundError:
         print(
             "Missing dependency: playwright. Run:\n"
-            "1) pip install -r automation/requirements.txt\n"
-            "2) playwright install chromium"
+            "1) .venv/bin/python -m pip install -r automation/requirements.txt\n"
+            "2) .venv/bin/python -m playwright install chromium"
         )
         return 2
 

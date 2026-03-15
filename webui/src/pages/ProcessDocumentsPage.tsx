@@ -41,6 +41,7 @@ const documentStatusTone: Record<string, Tone> = {
 const conclusionTone: Record<string, Tone> = {
   拒绝: "danger",
   人工干预: "warning",
+  加强审核: "warning",
   仅关注: "info",
   可信任: "success",
 };
@@ -49,8 +50,15 @@ const actionTone: Record<string, Tone> = {
   reject: "danger",
   manual_review: "warning",
   warning: "info",
-  trust: "success",
+  allow: "success",
 };
+
+function getDisplaySummaryConclusion(value: string | null | undefined): string {
+  if (!value) {
+    return "-";
+  }
+  return value === "人工干预" ? "加强审核" : value;
+}
 
 function formatScoreLabel(score: number | null | undefined): string {
   if (typeof score !== "number" || Number.isNaN(score)) {
@@ -109,6 +117,7 @@ function isProcessDetailResponse(value: unknown): value is ProcessDetail {
   return (
     typeof candidate.documentNo === "string" &&
     Array.isArray(candidate.overviewFields) &&
+    Boolean(candidate.feedbackOverview) &&
     Array.isArray(candidate.roles) &&
     Array.isArray(candidate.approvals) &&
     Array.isArray(candidate.orgScopes) &&
@@ -148,8 +157,8 @@ const documentColumns: GridColDef<ProcessDocumentRow>[] = [
     minWidth: 120,
     renderCell: (params) => (
       <StatusTag
-        label={String(params.value ?? "")}
-        tone={conclusionTone[String(params.value)] ?? "default"}
+        label={String(params.row.summaryConclusionLabel ?? params.value ?? "")}
+        tone={conclusionTone[String(params.row.summaryConclusionLabel ?? params.value)] ?? "default"}
       />
     ),
   },
@@ -166,16 +175,18 @@ const documentColumns: GridColDef<ProcessDocumentRow>[] = [
   },
   {
     field: "lowScoreDetailCount",
-    headerName: "低分条数",
-    minWidth: 100,
+    headerName: "原始低分明细数",
+    minWidth: 140,
     type: "number",
   },
   { field: "assessedAt", headerName: "评估时间", minWidth: 170 },
 ];
 
 const roleColumns: GridColDef<RoleRow>[] = [
+  { field: "lineNo", headerName: "明细行号", minWidth: 100 },
   { field: "roleCode", headerName: "角色编码", minWidth: 130 },
   { field: "roleName", headerName: "角色名称", minWidth: 220, flex: 1.2 },
+  { field: "permissionLevel", headerName: "权限级别", minWidth: 130 },
   { field: "applyType", headerName: "申请类型", minWidth: 110 },
   { field: "orgScopeCount", headerName: "组织范围数", minWidth: 110, type: "number" },
   { field: "skipOrgScopeCheck", headerName: "跳过组织范围", minWidth: 130 },
@@ -194,6 +205,8 @@ const orgScopeColumns: GridColDef<OrgScopeRow>[] = [
   { field: "roleName", headerName: "角色名称", minWidth: 200, flex: 1.1 },
   { field: "organizationCode", headerName: "组织编码", minWidth: 120 },
   { field: "organizationName", headerName: "组织名称", minWidth: 180, flex: 1.1 },
+  { field: "orgUnitName", headerName: "组织单位", minWidth: 150 },
+  { field: "physicalLevel", headerName: "物理层级", minWidth: 110 },
   { field: "skipOrgScopeCheck", headerName: "跳过组织范围", minWidth: 130 },
 ];
 
@@ -233,8 +246,8 @@ const executionLogColumns: GridColDef<ProcessExecutionLogRow>[] = [
 ];
 
 const detailTabs: Array<{ value: DetailTab; label: string }> = [
-  { value: "overview", label: "风险总览" },
-  { value: "lowScoreDetails", label: "低分明细" },
+  { value: "overview", label: "聚合反馈" },
+  { value: "lowScoreDetails", label: "原始低分明细" },
   { value: "roles", label: "申请角色" },
   { value: "orgScopes", label: "目标组织" },
   { value: "approvals", label: "审批记录" },
@@ -259,7 +272,7 @@ function DistributionSectionCard({ section }: { section: DistributionSection }) 
               backgroundColor: "rgba(255,255,255,0.68)",
             }}
           >
-            <Typography variant="body2">{item.label}</Typography>
+            <Typography variant="body2">{getDisplaySummaryConclusion(item.label)}</Typography>
             <StatusTag label={`${item.count} 条`} tone={getDistributionTone(section.id, item.label)} />
           </Box>
         ))}
@@ -283,6 +296,9 @@ export function ProcessDocumentsPage() {
   const dashboardDistributionSections = dashboard?.distributionSections ?? [];
   const dashboardExecutionLogs = dashboard?.executionLogs ?? [];
   const detailOverviewFields = detail?.overviewFields ?? [];
+  const detailFeedbackOverview = detail?.feedbackOverview ?? null;
+  const detailFeedbackStats = detailFeedbackOverview?.feedbackStats ?? [];
+  const detailFeedbackGroups = detailFeedbackOverview?.feedbackGroups ?? [];
   const detailNotes = detail?.notes ?? [];
   const detailRiskDetails = detail?.riskDetails ?? [];
   const detailRoles = detail?.roles ?? [];
@@ -386,7 +402,7 @@ export function ProcessDocumentsPage() {
     <Stack spacing={3}>
       <Box>
         <Typography variant="body1">
-          当前处理单据页只接受 `200` 方案正式接口，直接读取 PostgreSQL 最新评估批次，展示单据级总结论、低分明细、批次分布与最近执行日志。
+          当前处理单据页直接读取 PostgreSQL 最新评估批次，默认按 `104` 方案展示聚合反馈摘要，并保留原始低分明细、批次分布与最近执行日志。
         </Typography>
       </Box>
 
@@ -413,7 +429,7 @@ export function ProcessDocumentsPage() {
       >
         <AppDataGrid<ProcessDocumentRow>
           title="待处理单据列表"
-          subtitle="主表展示最新批次的单据级总结论；点击后在右侧查看风险总览、低分明细与联查结果。"
+          subtitle="主表展示最新批次的单据级结论；点击后在右侧默认查看 104 聚合反馈，并可展开原始低分明细。"
           rows={dashboardDocuments}
           columns={documentColumns}
           loading={loading}
@@ -449,7 +465,7 @@ export function ProcessDocumentsPage() {
               {selectedDocumentNo ? `单据详情：${selectedDocumentNo}` : "单据详情"}
             </Typography>
             <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 2 }}>
-              右侧详情按 `200` 方案固定为风险总览、低分明细、申请角色、目标组织、审批记录五个页签。
+              右侧详情默认按 `104` 方案展示聚合反馈，并保留原始低分明细、申请角色、目标组织、审批记录四类联查信息。
             </Typography>
 
             <Tabs
@@ -498,14 +514,86 @@ export function ProcessDocumentsPage() {
           {detailLoading ? (
             <SectionCard title="加载中" subtitle="正在读取单据详情。">
               <Typography variant="body2" color="text.secondary">
-                正在从 PostgreSQL 读取该单据的低分明细、组织范围与审批记录。
+                正在从 PostgreSQL 读取该单据的聚合反馈、原始低分明细、组织范围与审批记录。
               </Typography>
             </SectionCard>
           ) : null}
 
           {detail && activeTab === "overview" ? (
-            <SectionCard title="风险总览" subtitle="单据级结论、低分汇总与评估说明。">
-              <KeyValueList items={detailOverviewFields} />
+            <SectionCard title="聚合反馈" subtitle="默认按 104 方案聚合展示风险摘要，避免把角色 x 组织展开条数误读为风险点数量。">
+              <Stack spacing={2}>
+                <Box
+                  sx={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 2,
+                    p: 1.5,
+                    border: "1px solid",
+                    borderColor: "divider",
+                    backgroundColor: "rgba(255,255,255,0.75)",
+                  }}
+                >
+                  <Box>
+                    <Typography variant="body2" color="text.secondary">
+                      当前展示结论
+                    </Typography>
+                    <Typography variant="h6" sx={{ mt: 0.75 }}>
+                      {detailFeedbackOverview?.summaryConclusionLabel ?? "-"}
+                    </Typography>
+                  </Box>
+                  <StatusTag
+                    label={detailFeedbackOverview?.summaryConclusionLabel ?? "-"}
+                    tone={conclusionTone[detailFeedbackOverview?.summaryConclusionLabel ?? "-"] ?? "default"}
+                  />
+                </Box>
+
+                <Box
+                  sx={{
+                    display: "grid",
+                    gridTemplateColumns: { xs: "1fr", sm: "repeat(2, minmax(0, 1fr))", xl: "repeat(5, minmax(0, 1fr))" },
+                    gap: 2,
+                  }}
+                >
+                  {detailFeedbackStats.map((item) => (
+                    <StatCard key={item.label} item={item} />
+                  ))}
+                </Box>
+
+                <Stack spacing={1.25}>
+                  {detailFeedbackGroups.map((group) => (
+                    <Box
+                      key={group.id}
+                      sx={{
+                        p: 1.75,
+                        border: "1px solid",
+                        borderColor: "divider",
+                        backgroundColor: "rgba(255,255,255,0.7)",
+                      }}
+                    >
+                      <Typography variant="subtitle2">{group.title}</Typography>
+                      <Typography variant="body2" sx={{ mt: 1, lineHeight: 1.75 }}>
+                        {group.summary}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: "block" }}>
+                        影响组织单位 {group.affectedOrgUnitCount} 个，影响组织 {group.affectedOrgCount} 个，
+                        影响角色 {group.affectedRoleCount} 个，原始低分明细 {group.rawDetailCount} 条。
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary" sx={{ mt: 0.75, display: "block" }}>
+                        {group.hint}
+                      </Typography>
+                    </Box>
+                  ))}
+                </Stack>
+              </Stack>
+
+              <Typography variant="subtitle2" sx={{ mt: 2.5 }}>
+                单据概览
+              </Typography>
+              <Box sx={{ mt: 1.5 }}>
+                <KeyValueList items={detailOverviewFields} />
+              </Box>
+
               <Typography variant="subtitle2" sx={{ mt: 2.5 }}>
                 处理提示
               </Typography>
@@ -521,8 +609,8 @@ export function ProcessDocumentsPage() {
 
           {detail && activeTab === "lowScoreDetails" ? (
             <AppDataGrid<RiskDetailRow>
-              title="低分明细"
-              subtitle="仅展示低分明细，便于快速查看当前单据的主要风险来源。"
+              title="原始低分明细"
+              subtitle="保留原始 `<= 1.0` 明细作为审计与回放证据；默认用户视角请查看“聚合反馈”。"
               rows={detailRiskDetails}
               columns={riskColumns}
               loading={detailLoading}
@@ -541,7 +629,7 @@ export function ProcessDocumentsPage() {
           {detail && activeTab === "roles" ? (
             <AppDataGrid<RoleRow>
               title="申请角色"
-              subtitle="按角色维度展示申请类型、组织范围数量与组织范围例外。"
+              subtitle="按角色维度展示明细行号、权限级别、申请类型与组织范围数量。"
               rows={detailRoles}
               columns={roleColumns}
               loading={detailLoading}
@@ -560,7 +648,7 @@ export function ProcessDocumentsPage() {
           {detail && activeTab === "orgScopes" ? (
             <AppDataGrid<OrgScopeRow>
               title="目标组织"
-              subtitle="结合 013 方案查看角色与组织展开结果。"
+              subtitle="结合 013 与 104 方案查看角色、组织、组织单位与物理层级。"
               rows={detailOrgScopes}
               columns={orgScopeColumns}
               loading={detailLoading}
@@ -614,9 +702,9 @@ export function ProcessDocumentsPage() {
                   { label: "单据数", value: String(dashboard.latestBatch.documentCount), hint: "本批次评估到的单据数。" },
                   { label: "明细数", value: String(dashboard.latestBatch.detailCount), hint: "总明细条数，包含非低分项。" },
                   {
-                    label: "低分明细数",
+                    label: "原始低分明细数",
                     value: String(dashboard.latestBatch.lowScoreDetailCount),
-                    hint: "所有单据低分明细条数汇总。",
+                    hint: "所有单据原始低分明细条数汇总，不等于风险类型数。",
                   },
                   { label: "评估时间", value: dashboard.latestBatch.assessedAt, hint: "最近一次成功写入该批次的时间。" },
                 ]}
@@ -642,6 +730,7 @@ export function ProcessDocumentsPage() {
           columns={executionLogColumns}
           loading={loading}
           rowCount={dashboardExecutionLogs.length}
+          pageSizeOptions={[6, 10, 20]}
           minHeight={540}
           initialState={{
             pagination: {

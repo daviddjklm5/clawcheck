@@ -172,6 +172,7 @@ def _fetch_approval_rows(cursor, document_nos: list[str]) -> list[dict[str, obje
 def main() -> int:
     args = parse_args()
     from automation.db.postgres import PostgresRiskTrustStore
+    from automation.reporting.low_score_feedback import display_summary_conclusion
     from automation.reporting import render_audit_distribution_workbook
     from automation.rules import load_risk_trust_package
     from automation.utils.logger import setup_logger
@@ -197,6 +198,42 @@ def main() -> int:
                 [str(row["document_no"]).strip() for row in summary_rows if row.get("document_no")],
             )
 
+    for row in summary_rows:
+        row["summary_conclusion_label"] = display_summary_conclusion(str(row.get("summary_conclusion") or "").strip() or None)
+
+    feedback_overviews = store.fetch_document_feedback_overviews(
+        assessment_batch_no=batch_no,
+        document_nos=[str(row["document_no"]).strip() for row in summary_rows if row.get("document_no")],
+    )
+    document_feedback_rows: list[dict[str, object]] = []
+    for row in summary_rows:
+        document_no = str(row.get("document_no") or "").strip()
+        if not document_no:
+            continue
+        feedback_overview = feedback_overviews.get(document_no, {})
+        feedback_stats = {
+            str(item.get("label") or ""): str(item.get("value") or "")
+            for item in feedback_overview.get("feedbackStats", [])
+            if isinstance(item, dict)
+        }
+        feedback_lines = [
+            str(item.get("summary") or "").strip()
+            for item in feedback_overview.get("feedbackGroups", [])
+            if isinstance(item, dict) and str(item.get("summary") or "").strip()
+        ]
+        document_feedback_rows.append(
+            {
+                "document_no": document_no,
+                "summary_conclusion_label": feedback_overview.get("summaryConclusionLabel"),
+                "risk_type_count": feedback_stats.get("风险类型数", "0"),
+                "affected_org_unit_count": feedback_stats.get("影响组织单位数", "0"),
+                "affected_org_count": feedback_stats.get("影响组织数", "0"),
+                "affected_role_count": feedback_stats.get("影响角色数", "0"),
+                "raw_low_score_detail_count": feedback_stats.get("原始低分明细数", "0"),
+                "feedback_summary": "\n".join(feedback_lines),
+            }
+        )
+
     assessment_version = str(summary_rows[0]["assessment_version"]).strip()
     output_path = (
         resolve_path(args.output)
@@ -210,6 +247,7 @@ def main() -> int:
         detail_rows=detail_rows,
         approval_rows=approval_rows,
         ignored_node_names=list(package.constants.get("ignored_approval_node_names", [])),
+        document_feedback_rows=document_feedback_rows,
         output_path=output_path,
     )
     logger.info("Audit distribution workbook exported: %s", output_path)
