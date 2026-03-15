@@ -1,15 +1,15 @@
 # 方案编号010：申请单申请人HR与疑似HR识别方案文档
 
 ## 1. 方案目标
-基于 `申请单基本信息` 中的申请人工号，从 `在职花名册表` 匹配员工主数据，并结合以下字段及外部组织属性口径判断申请人属于哪一类 HR 身份：
+基于最新 `在职花名册表` 全量快照，结合以下字段及外部组织属性口径生成 `人员属性查询`，并在申请单侧通过 `申请单基本信息.工号 -> 人员属性查询.工号` 关联判断申请人属于哪一类 HR 身份：
 
 - `一级职能名称`
 - `二级职能名称`
 - `职位名称`
 - `标准岗位名称`
 - `组织路径名称`
-- `组织属性查询.wanyu_city_sales_department`
-- `组织列表.hr_owner_employee_no`
+- `组织属性查询.万御城市营业部`
+- `组织列表.责任HR工号`
 
 本方案目标：
 - 建立一套可执行的 `H1 / H2 / H3 / HY / HX` 分类口径
@@ -74,7 +74,7 @@
 同时核对了当前申请单主表现状：
 - 当前数据库中的申请单主表为 `申请单基本信息`
 - 当前仅有 `1` 条申请单主表记录
-- 该记录的 `employee_no` 未匹配到当前花名册
+- 该记录的 `工号` 未匹配到当前花名册
 
 因此，本方案的判定口径主要依据**全量花名册分布分析**得出，而不是依据当前申请单样本。
 
@@ -94,7 +94,7 @@
 - 其中 `wanyu_city_sales_department` 非空人数：`34,256`
 
 与 `组织列表` 的关联情况如下：
-- 责任 HR 识别键：`申请单基本信息.employee_no / 在职花名册表.employee_no = 组织列表.hr_owner_employee_no`
+- 责任 HR 识别键：`在职花名册表.人员编号 = 组织列表.责任HR工号`
 - 建议使用 `组织列表` 最新 `import_batch_no` 提取责任 HR 集合
 - 当前最新批次去重后责任 HR 共 `586` 人，其中 `578` 人能匹配到当前花名册
 
@@ -102,7 +102,7 @@
 - `一级职能名称`、`二级职能名称`、`标准岗位名称` 完整度较高，可作为主要判定字段
 - `职位名称`、`组织路径名称` 基本全量可用
 - `department_id -> 组织属性查询.org_code` 的关联链路可直接落地，可支撑基于 `wanyu_city_sales_department` 的增强判断
-- `组织列表.hr_owner_employee_no` 可作为 `H3` 的责任 HR 判定来源
+- `组织列表.责任HR工号` 可作为 `H3` 的责任 HR 判定来源
 - `职务` 字段本次不纳入主判定逻辑
 
 ### 3.3 H1 强信号分析
@@ -227,8 +227,8 @@
 
 ### 4.1 第一步：按工号匹配花名册
 建议使用：
-- `申请单基本信息.employee_no`
-- 关联 `在职花名册表.employee_no`
+- `申请单基本信息.工号`
+- 关联 `人员属性查询.工号`
 
 匹配口径建议：
 - 两侧都做 `BTRIM`
@@ -245,7 +245,7 @@
   - `人事`
   - `组织发展中心`
   - `组织人才中心`
-- 本方案中的 `责任 HR 集合` 指 `组织列表` 最新批次中去重后的 `hr_owner_employee_no`
+- 本方案中的 `责任 HR 集合` 指 `组织列表` 最新批次中去重后的 `责任HR工号`
 
 规则优先级建议为：
 - `H1 -> H2 -> H3 -> HY -> HX`
@@ -346,7 +346,7 @@ H1 显式关键词口径采用保守规则，优先识别以下显式文本：
 1. 已匹配到花名册
 2. 不满足 H1
 3. 不满足 H2
-4. `employee_no` 命中 `组织列表` 最新批次责任 HR 集合
+4. `工号` 命中 `组织列表` 最新批次责任 HR 集合
 
 说明：
 - `H3` 代表“责任配置角色上的 HR”
@@ -454,64 +454,120 @@ H1 显式关键词口径采用保守规则，优先识别以下显式文本：
     - `org_path_keyword_hit_only`
     - `roster_not_found`
 
+### 6.1 当前落库物理表与字段
+按 `AGENTS.md` 中文物理字段规范，本方案派生结果不再耦合在 `申请单基本信息` 中，而是单独落到 `人员属性查询`。
+
+表职责与粒度：
+- `申请单基本信息`
+  - 仍只承载权限申请单主表字段
+  - 保留 `单据编号`、`工号`、`权限对象`、`申请理由`、`单据状态`、`人事管理组织`、`公司`、`部门`、`职位`、`申请日期`、`最新审批时间`、`采集次数` 等字段
+- `人员属性查询`
+  - 以最新 `在职花名册表` 为基础全量刷新
+  - 物理粒度为“人员粒度”
+  - 主键建议为 `工号`
+  - 申请单申请人使用 `申请单基本信息.工号` 关联本表获取 HR 类型及来源属性
+
+`人员属性查询` 建议至少落以下中文字段，逻辑口径与上文英文字段一一对应：
+
+| 逻辑字段 | 物理字段 |
+| --- | --- |
+| `employee_no` | `工号` |
+| `employee_name` | `姓名` |
+| `department_id` | `部门ID` |
+| `level1_function_name` | `一级职能名称` |
+| `level2_function_name` | `二级职能名称` |
+| `position_name` | `职位名称` |
+| `standard_position_name` | `标准岗位名称` |
+| `org_path_name` | `组织路径名称` |
+| `wanyu_city_sales_department` | `万御城市营业部` |
+| `responsible_hr_employee_no` | `责任HR工号` |
+| `responsible_hr_import_batch_no` | `责任HR导入批次号` |
+| `roster_query_date` | `花名册查询日期` |
+| `roster_import_batch_no` | `花名册导入批次号` |
+| `roster_match_status` | `花名册匹配状态` |
+| `hr_type` | `申请人HR类型` |
+| `is_responsible_hr` | `是否责任HR` |
+| `is_hr_staff` | `是否HR人员` |
+| `is_suspected_hr_staff` | `是否疑似HR人员` |
+| `hr_primary_evidence` | `HR主判定依据` |
+| `hr_primary_value` | `HR主判定值` |
+| `hr_subdomain` | `HR子域` |
+| `hr_judgement_reason` | `HR判定原因` |
+| `created_at` | `记录创建时间` |
+| `updated_at` | `记录更新时间` |
+
+说明：
+- 物理表字段使用中文
+- 逻辑编码值仍保留本方案中定义的稳定枚举值与原因码
+- 若后续规则引擎或查询层需要英文逻辑名，可在查询层或对象映射层转换，不新增英文业务物理列
+
 ## 7. SQL 实现建议
 
 ### 7.1 当前落地说明
-当前数据库中申请单主表已使用：
-- `申请单基本信息`
+当前数据库中：
+- `申请单基本信息` 仅保留权限申请主表字段，不再承载 HR 判定结果
+- `人员属性查询` 由 `在职花名册表` 更新完成后同步全量刷新
 - `组织列表` 需已有最新批次数据，用于提取 `责任 HR 集合`
 
-因此 `7.2` 的示例 SQL 可直接基于 `申请单基本信息 + 在职花名册表 + 组织属性查询 + 组织列表` 执行；若后续再次发生表名或字段迁移，应同步更新输入表与字段映射。
+因此 `7.2` 的示例 SQL 应基于 `在职花名册表 + 组织属性查询 + 组织列表` 生成 `人员属性查询`；申请单使用时再按 `申请单基本信息.工号 -> 人员属性查询.工号` 关联。
+
+说明：
+- 当前库中物理字段已中文化
+- 因此 `7.2` 采用“中文物理字段 + 英文逻辑别名”写法，既可直接执行，也便于表达规则逻辑
+- 当申请人工号无法关联到 `人员属性查询` 时，查询层或规则层应视为 `roster_match_status = UNMATCHED`
 
 ### 7.2 建议 SQL
 ```sql
-WITH applicant AS (
+TRUNCATE TABLE "人员属性查询";
+
+WITH roster AS (
     SELECT
-        document_no,
-        BTRIM(employee_no) AS employee_no
-    FROM "申请单基本信息"
-),
-roster AS (
-    SELECT
-        BTRIM(employee_no) AS employee_no,
-        BTRIM(department_id) AS department_id,
-        employee_name,
-        level1_function_name,
-        level2_function_name,
-        position_name,
-        standard_position_name,
-        org_path_name
+        BTRIM("人员编号") AS employee_no,
+        BTRIM("部门ID") AS department_id,
+        "查询日期" AS roster_query_date,
+        "导入批次号" AS roster_import_batch_no,
+        "姓名" AS employee_name,
+        "一级职能名称" AS level1_function_name,
+        "二级职能名称" AS level2_function_name,
+        "职位名称" AS position_name,
+        "标准岗位名称" AS standard_position_name,
+        "组织路径名称" AS org_path_name
     FROM "在职花名册表"
 ),
 org_attr AS (
     SELECT
-        BTRIM(org_code) AS org_code,
-        wanyu_city_sales_department
+        BTRIM("行政组织编码") AS org_code,
+        "万御城市营业部" AS wanyu_city_sales_department
     FROM "组织属性查询"
+),
+latest_batch AS (
+    SELECT "导入批次号"
+    FROM "组织列表"
+    ORDER BY "记录创建时间" DESC
+    LIMIT 1
 ),
 responsible_hr AS (
     SELECT DISTINCT
-        BTRIM(hr_owner_employee_no) AS employee_no
+        BTRIM("责任HR工号") AS employee_no
     FROM "组织列表"
-    WHERE import_batch_no = (
-        SELECT import_batch_no
-        FROM "组织列表"
-        ORDER BY created_at DESC
-        LIMIT 1
-    )
-      AND NULLIF(BTRIM(hr_owner_employee_no), '') IS NOT NULL
+    WHERE "导入批次号" = (SELECT "导入批次号" FROM latest_batch)
+      AND NULLIF(BTRIM("责任HR工号"), '') IS NOT NULL
 ),
 base_joined AS (
     SELECT
-        a.document_no,
-        a.employee_no AS applicant_employee_no,
+        r.employee_no,
         r.employee_name,
+        r.department_id,
+        r.roster_query_date,
+        r.roster_import_batch_no,
         r.level1_function_name,
         r.level2_function_name,
         r.position_name,
         r.standard_position_name,
         r.org_path_name,
         o.wanyu_city_sales_department,
+        rh.employee_no AS responsible_hr_employee_no,
+        (SELECT "导入批次号" FROM latest_batch) AS responsible_hr_import_batch_no,
         CASE
             WHEN rh.employee_no IS NOT NULL THEN TRUE
             ELSE FALSE
@@ -528,13 +584,11 @@ base_joined AS (
             WHEN r.employee_no IS NULL THEN 'UNMATCHED'
             ELSE 'MATCHED'
         END AS roster_match_status
-    FROM applicant a
-    LEFT JOIN roster r
-        ON a.employee_no = r.employee_no
+    FROM roster r
     LEFT JOIN org_attr o
         ON r.department_id = o.org_code
     LEFT JOIN responsible_hr rh
-        ON a.employee_no = rh.employee_no
+        ON r.employee_no = rh.employee_no
 ),
 classified AS (
     SELECT
@@ -570,6 +624,68 @@ classified AS (
               THEN 'HY'
             ELSE 'HX'
         END AS hr_type,
+        CASE
+            WHEN b.employee_name IS NULL THEN NULL
+            WHEN COALESCE(b.level1_function_name, '') = '人力资源' THEN 'level1_function_name'
+            WHEN COALESCE(b.position_name, '') ~ '(人力|人事|HRBP|HR共享|业务HR|项目HR|综合人事|人力资源|人力行政|人力业务支持|hrbp|hr)'
+              THEN 'position_name'
+            WHEN COALESCE(b.position_name, '') = '目标与绩效管理专业总监'
+             AND b.is_hr_org_path
+              THEN 'position_name'
+            WHEN COALESCE(b.position_name, '') <> '目标与绩效管理专业总监'
+             AND COALESCE(b.position_name, '') ~ '(组织发展|薪酬|绩效|福利)'
+              THEN 'position_name'
+            WHEN COALESCE(b.standard_position_name, '') ~ '(人力|人事|HRBP|HR共享|综合人事|人力资源|人力行政|人力业务支持|人力综合|hrbp|hr)'
+              THEN 'standard_position_name'
+            WHEN COALESCE(b.wanyu_city_sales_department, '') <> ''
+             AND COALESCE(b.position_name, '') IN ('认证中心负责人', '服务站总站长')
+              THEN 'wanyu_city_sales_department'
+            WHEN b.is_hr_org_path
+             AND (
+                    COALESCE(b.position_name, '') IN ('组织与效能资深总监', '部门负责人', 'AI与流程变革资深总监', '平台与运营资深总监')
+                    OR COALESCE(b.position_name, '') ~ '(总裁|总经理)'
+                 )
+              THEN 'position_name'
+            WHEN b.is_hr_org_path
+             AND COALESCE(b.position_name, '') IN ('运营经理', '运营主管', '数据分析')
+              THEN 'position_name'
+            WHEN COALESCE(b.is_responsible_hr, FALSE)
+              THEN 'responsible_hr_employee_no'
+            WHEN b.is_hr_org_path
+              THEN 'org_path_name'
+            ELSE NULL
+        END AS hr_primary_evidence,
+        CASE
+            WHEN b.employee_name IS NULL THEN NULL
+            WHEN COALESCE(b.level1_function_name, '') = '人力资源' THEN b.level1_function_name
+            WHEN COALESCE(b.position_name, '') ~ '(人力|人事|HRBP|HR共享|业务HR|项目HR|综合人事|人力资源|人力行政|人力业务支持|hrbp|hr)'
+              THEN b.position_name
+            WHEN COALESCE(b.position_name, '') = '目标与绩效管理专业总监'
+             AND b.is_hr_org_path
+              THEN b.position_name
+            WHEN COALESCE(b.position_name, '') <> '目标与绩效管理专业总监'
+             AND COALESCE(b.position_name, '') ~ '(组织发展|薪酬|绩效|福利)'
+              THEN b.position_name
+            WHEN COALESCE(b.standard_position_name, '') ~ '(人力|人事|HRBP|HR共享|综合人事|人力资源|人力行政|人力业务支持|人力综合|hrbp|hr)'
+              THEN b.standard_position_name
+            WHEN COALESCE(b.wanyu_city_sales_department, '') <> ''
+             AND COALESCE(b.position_name, '') IN ('认证中心负责人', '服务站总站长')
+              THEN b.wanyu_city_sales_department
+            WHEN b.is_hr_org_path
+             AND (
+                    COALESCE(b.position_name, '') IN ('组织与效能资深总监', '部门负责人', 'AI与流程变革资深总监', '平台与运营资深总监')
+                    OR COALESCE(b.position_name, '') ~ '(总裁|总经理)'
+                 )
+              THEN b.position_name
+            WHEN b.is_hr_org_path
+             AND COALESCE(b.position_name, '') IN ('运营经理', '运营主管', '数据分析')
+              THEN b.position_name
+            WHEN COALESCE(b.is_responsible_hr, FALSE)
+              THEN b.employee_no
+            WHEN b.is_hr_org_path
+              THEN b.org_path_name
+            ELSE NULL
+        END AS hr_primary_value,
         CASE
             WHEN b.employee_name IS NULL THEN 'roster_not_found'
             WHEN COALESCE(b.level1_function_name, '') = '人力资源' THEN 'level1_is_hr'
@@ -621,7 +737,57 @@ joined AS (
         END AS hr_subdomain
     FROM classified c
 )
-SELECT *
+INSERT INTO "人员属性查询" (
+    "工号",
+    "姓名",
+    "部门ID",
+    "一级职能名称",
+    "二级职能名称",
+    "职位名称",
+    "标准岗位名称",
+    "组织路径名称",
+    "万御城市营业部",
+    "责任HR工号",
+    "责任HR导入批次号",
+    "花名册查询日期",
+    "花名册导入批次号",
+    "花名册匹配状态",
+    "申请人HR类型",
+    "是否责任HR",
+    "是否HR人员",
+    "是否疑似HR人员",
+    "HR主判定依据",
+    "HR主判定值",
+    "HR子域",
+    "HR判定原因",
+    "记录创建时间",
+    "记录更新时间"
+)
+SELECT
+    employee_no,
+    employee_name,
+    department_id,
+    level1_function_name,
+    level2_function_name,
+    position_name,
+    standard_position_name,
+    org_path_name,
+    wanyu_city_sales_department,
+    responsible_hr_employee_no,
+    responsible_hr_import_batch_no,
+    roster_query_date,
+    roster_import_batch_no,
+    roster_match_status,
+    hr_type,
+    is_responsible_hr,
+    (hr_type IN ('H1', 'H2', 'H3')) AS is_hr_staff,
+    (hr_type = 'HY') AS is_suspected_hr_staff,
+    hr_primary_evidence,
+    hr_primary_value,
+    hr_subdomain,
+    hr_judgement_reason,
+    NOW(),
+    NOW()
 FROM joined;
 ```
 
@@ -664,7 +830,7 @@ FROM joined;
 - 特定人力共享中心、HRBP 组、组织发展组等增强规则
 
 ### 8.5 H3 是责任配置口径，不是严格职能口径
-`H3` 的来源是 `组织列表.hr_owner_employee_no`，反映的是：
+`H3` 的来源是 `组织列表.责任HR工号`，反映的是：
 - 某人被维护为组织的 `责任 HR`
 
 但这不必然等价于：
@@ -694,7 +860,9 @@ FROM joined;
 ## 9. 验收标准
 满足以下条件可视为方案完成：
 
-- 可按申请人工号关联到 `在职花名册表`
+- 花名册导入完成后可同步全量刷新 `人员属性查询`
+- `申请单基本信息` 不新增、不写入 HR 判定字段
+- 可按申请人工号关联到 `人员属性查询`
 - 可按申请人工号关联到 `组织列表` 最新责任 HR 集合
 - 能输出 `H1 / H2 / H3 / HY / HX`
 - 能额外输出 `roster_match_status`
@@ -712,3 +880,7 @@ FROM joined;
 
 ## 10. 交付物
 - 方案文档：`方案计划文档/010申请单申请人HR与疑似HR识别方案文档.md`
+- 发布与回滚步骤：`方案计划文档/010A人员属性查询发布与回滚步骤.md`
+ - 建表与升级：`automation/sql/001_permission_apply_collect.sql`、`automation/sql/019_person_attributes.sql`、`automation/sql/021_drop_applicant_hr_columns_from_basic_info.sql`
+- 验收 SQL：`automation/sql/020_person_attributes_acceptance.sql`
+- 写库实现：`automation/db/postgres.py`

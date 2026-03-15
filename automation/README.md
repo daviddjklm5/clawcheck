@@ -96,7 +96,7 @@ python automation/scripts/run.py rolecatalog \
   --credentials automation/config/credentials.prod.local.yaml
 ```
 
-Initialize all 9 tables/functions on a new database:
+Initialize all 10 tables/functions on a new database:
 ```bash
 python automation/scripts/run.py dbinit \
   --config automation/config/settings.prod.yaml \
@@ -117,6 +117,7 @@ python automation/scripts/run.py dbinit \
 - SQL: `automation/sql/008_organization_list_standardize_latest_columns.sql`
 - SQL: `automation/sql/009_permission_catalog.sql`
 - SQL: `automation/sql/010_permission_apply_collect_migrate_basic_info.sql`
+- SQL: `automation/sql/019_person_attributes.sql`
 
 ## 5. Notes
 - Default home entry for `001/003/004` related browser actions is `https://hr.onewo.com/ierp/?formId=home_page`.
@@ -127,6 +128,7 @@ python automation/scripts/run.py dbinit \
 - The actual export dialog button is `转后台执行`.
 - Report scheme and employment type are both selected through F7 dialogs.
 - The roster import writes into PostgreSQL table `在职花名册表`.
+- The roster import also refreshes PostgreSQL table `人员属性查询`.
 
 - The orglist flow targets `组织快速维护 -> 万物云 -> 业务状态(已启用/已停用) -> 列表包含所有下级`.
 - The actual orglist export path is `更多 -> 引出数据（按列表）`.

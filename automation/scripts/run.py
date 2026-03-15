@@ -204,6 +204,7 @@ def main() -> int:
         from automation.db.postgres import (
             PostgresActiveRosterStore,
             PostgresOrganizationListStore,
+            PostgresPersonAttributesStore,
             PostgresPermissionCatalogStore,
             PostgresPermissionStore,
         )
@@ -216,11 +217,13 @@ def main() -> int:
                 permission_store = PostgresPermissionStore(settings.db)
                 roster_store = PostgresActiveRosterStore(settings.db)
                 org_store = PostgresOrganizationListStore(settings.db)
+                person_attributes_store = PostgresPersonAttributesStore(settings.db)
                 catalog_store = PostgresPermissionCatalogStore(settings.db)
 
                 permission_store.ensure_table()
                 roster_store.ensure_table()
                 org_store.ensure_table()
+                person_attributes_store.ensure_table()
                 permission_catalog = catalog_store.seed_catalog()
                 summary = {
                     "initialized_tables": [
@@ -228,6 +231,7 @@ def main() -> int:
                         "申请单权限列表",
                         "申请单审批记录",
                         "申请表组织范围",
+                        "人员属性查询",
                         "在职花名册表",
                         "组织列表",
                         "城市所属战区",

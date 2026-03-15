@@ -4,6 +4,7 @@ from contextlib import contextmanager
 from datetime import date, datetime
 import json
 from pathlib import Path
+import re
 from typing import Any
 
 from automation.utils.approval_record_helpers import (
@@ -23,6 +24,7 @@ BASIC_INFO_TABLE = '"申请单基本信息"'
 PERMISSION_APPLY_DETAIL_TABLE = '"申请单权限列表"'
 APPROVAL_RECORD_TABLE = '"申请单审批记录"'
 APPLY_FORM_ORG_SCOPE_TABLE = '"申请表组织范围"'
+PERSON_ATTRIBUTES_TABLE = '"人员属性查询"'
 
 BASIC_INFO_COLUMNS = {
     "document_no": "单据编号",
@@ -90,6 +92,60 @@ PERMISSION_CATALOG_COLUMNS = {
     "updated_at": "记录更新时间",
 }
 
+PERSON_ATTRIBUTES_COLUMNS = {
+    "employee_no": "工号",
+    "employee_name": "姓名",
+    "department_id": "部门ID",
+    "level1_function_name": "一级职能名称",
+    "level2_function_name": "二级职能名称",
+    "position_name": "职位名称",
+    "standard_position_name": "标准岗位名称",
+    "org_path_name": "组织路径名称",
+    "wanyu_city_sales_department": "万御城市营业部",
+    "responsible_hr_employee_no": "责任HR工号",
+    "responsible_hr_import_batch_no": "责任HR导入批次号",
+    "roster_query_date": "花名册查询日期",
+    "roster_import_batch_no": "花名册导入批次号",
+    "roster_match_status": "花名册匹配状态",
+    "hr_type": "申请人HR类型",
+    "is_responsible_hr": "是否责任HR",
+    "is_hr_staff": "是否HR人员",
+    "is_suspected_hr_staff": "是否疑似HR人员",
+    "hr_primary_evidence": "HR主判定依据",
+    "hr_primary_value": "HR主判定值",
+    "hr_subdomain": "HR子域",
+    "hr_judgement_reason": "HR判定原因",
+    "created_at": "记录创建时间",
+    "updated_at": "记录更新时间",
+}
+
+APPLICANT_HR_PATH_KEYWORDS = ("人力", "人事", "组织发展中心", "组织人才中心")
+APPLICANT_HR_H1_POSITION_KEYWORD_PATTERN = re.compile(
+    r"(人力|人事|HRBP|HR共享|业务HR|项目HR|综合人事|人力资源|人力行政|人力业务支持|hrbp|hr)",
+    re.IGNORECASE,
+)
+APPLICANT_HR_H1_STANDARD_POSITION_PATTERN = re.compile(
+    r"(人力|人事|HRBP|HR共享|综合人事|人力资源|人力行政|人力业务支持|人力综合|hrbp|hr)",
+    re.IGNORECASE,
+)
+APPLICANT_HR_H1_ORG_DEV_PATTERN = re.compile(r"(组织发展|薪酬|绩效|福利)")
+APPLICANT_HR_H2_MANAGEMENT_POSITION_PATTERN = re.compile(r"(总裁|总经理)")
+APPLICANT_HR_H2_POSITION_WHITELIST = {
+    "组织与效能资深总监",
+    "部门负责人",
+    "AI与流程变革资深总监",
+    "平台与运营资深总监",
+}
+APPLICANT_HR_H2_WEAK_SIGNAL_POSITION_WHITELIST = {
+    "运营经理",
+    "运营主管",
+    "数据分析",
+}
+APPLICANT_HR_H1_WANYU_POSITION_WHITELIST = {
+    "认证中心负责人",
+    "服务站总站长",
+}
+
 
 class _PostgresStoreBase:
     def __init__(self, settings: DatabaseSettings) -> None:
@@ -137,6 +193,16 @@ class _PostgresStoreBase:
         if isinstance(value, str) and not value.strip():
             return None
         return value
+
+    @staticmethod
+    def _strip_text(value: Any) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            normalized = value.strip()
+            return normalized or None
+        normalized = str(value).strip()
+        return normalized or None
 
     @classmethod
     def _to_int_or_none(cls, value: Any) -> int | None:
@@ -194,6 +260,17 @@ class _PostgresStoreBase:
             (table_name, column_name),
         )
         return cursor.fetchone() is not None
+
+    @staticmethod
+    def _table_exists(cursor, table_name: str) -> bool:
+        cursor.execute(
+            """
+            SELECT to_regclass(current_schema() || '.' || quote_ident(%s)) IS NOT NULL
+            """,
+            (table_name,),
+        )
+        row = cursor.fetchone()
+        return bool(row[0]) if row else False
 
 
 class PostgresPermissionStore(_PostgresStoreBase):
@@ -254,6 +331,295 @@ class PostgresPermissionStore(_PostgresStoreBase):
         if not self._index_exists(cursor, "uq_apply_form_org_scope_doc_role_null_org"):
             return True
         return False
+
+    @classmethod
+    def _is_hr_org_path(cls, org_path_name: str | None) -> bool:
+        if org_path_name is None:
+            return False
+        return any(keyword in org_path_name for keyword in APPLICANT_HR_PATH_KEYWORDS)
+
+    @classmethod
+    def _build_applicant_hr_tags(cls, applicant_profile: dict[str, Any]) -> dict[str, Any]:
+        employee_no = cls._strip_text(applicant_profile.get("employee_no"))
+        level1_function_name = cls._strip_text(applicant_profile.get("level1_function_name"))
+        level2_function_name = cls._strip_text(applicant_profile.get("level2_function_name"))
+        position_name = cls._strip_text(applicant_profile.get("position_name"))
+        standard_position_name = cls._strip_text(applicant_profile.get("standard_position_name"))
+        org_path_name = cls._strip_text(applicant_profile.get("org_path_name"))
+        wanyu_city_sales_department = cls._strip_text(applicant_profile.get("wanyu_city_sales_department"))
+        employee_name = cls._strip_text(applicant_profile.get("employee_name"))
+        is_responsible_hr = bool(applicant_profile.get("is_responsible_hr"))
+        is_hr_org_path = cls._is_hr_org_path(org_path_name)
+
+        result = {
+            "roster_match_status": "UNMATCHED" if employee_name is None else "MATCHED",
+            "hr_type": None,
+            "is_responsible_hr": is_responsible_hr,
+            "is_hr_staff": False,
+            "is_suspected_hr_staff": False,
+            "hr_primary_evidence": None,
+            "hr_primary_value": None,
+            "hr_subdomain": None,
+            "hr_judgement_reason": "roster_not_found" if employee_name is None else "no_hr_signal",
+        }
+
+        if employee_name is None:
+            return result
+
+        if level1_function_name == "人力资源":
+            hr_type = "H1"
+            hr_primary_evidence = "level1_function_name"
+            hr_primary_value = level1_function_name
+            hr_judgement_reason = "level1_is_hr"
+        elif position_name is not None and APPLICANT_HR_H1_POSITION_KEYWORD_PATTERN.search(position_name):
+            hr_type = "H1"
+            hr_primary_evidence = "position_name"
+            hr_primary_value = position_name
+            hr_judgement_reason = "position_keyword_hit"
+        elif position_name == "目标与绩效管理专业总监" and is_hr_org_path:
+            hr_type = "H1"
+            hr_primary_evidence = "position_name"
+            hr_primary_value = position_name
+            hr_judgement_reason = "position_org_dev_comp_perf_benefit_hit"
+        elif (
+            position_name is not None
+            and position_name != "目标与绩效管理专业总监"
+            and APPLICANT_HR_H1_ORG_DEV_PATTERN.search(position_name)
+        ):
+            hr_type = "H1"
+            hr_primary_evidence = "position_name"
+            hr_primary_value = position_name
+            hr_judgement_reason = "position_org_dev_comp_perf_benefit_hit"
+        elif standard_position_name is not None and APPLICANT_HR_H1_STANDARD_POSITION_PATTERN.search(standard_position_name):
+            hr_type = "H1"
+            hr_primary_evidence = "standard_position_name"
+            hr_primary_value = standard_position_name
+            hr_judgement_reason = "standard_position_keyword_hit"
+        elif wanyu_city_sales_department is not None and position_name in APPLICANT_HR_H1_WANYU_POSITION_WHITELIST:
+            hr_type = "H1"
+            hr_primary_evidence = "wanyu_city_sales_department"
+            hr_primary_value = wanyu_city_sales_department
+            hr_judgement_reason = "wanyu_city_sales_department_position_hit"
+        elif is_hr_org_path and (
+            position_name in APPLICANT_HR_H2_POSITION_WHITELIST
+            or (position_name is not None and APPLICANT_HR_H2_MANAGEMENT_POSITION_PATTERN.search(position_name))
+        ):
+            hr_type = "H2"
+            hr_primary_evidence = "position_name"
+            hr_primary_value = position_name
+            hr_judgement_reason = "weak_signal_management_position_promoted_to_h2"
+        elif is_hr_org_path and position_name in APPLICANT_HR_H2_WEAK_SIGNAL_POSITION_WHITELIST:
+            hr_type = "H2"
+            hr_primary_evidence = "position_name"
+            hr_primary_value = position_name
+            hr_judgement_reason = "weak_signal_position_promoted_to_h2"
+        elif is_responsible_hr:
+            hr_type = "H3"
+            hr_primary_evidence = "responsible_hr_employee_no"
+            hr_primary_value = employee_no
+            hr_judgement_reason = "responsible_hr_hit"
+        elif is_hr_org_path:
+            hr_type = "HY"
+            hr_primary_evidence = "org_path_name"
+            hr_primary_value = org_path_name
+            hr_judgement_reason = "org_path_keyword_hit_only"
+        else:
+            hr_type = "HX"
+            hr_primary_evidence = None
+            hr_primary_value = None
+            hr_judgement_reason = "no_hr_signal"
+
+        hr_subdomain = None
+        if hr_type in {"H1", "H2"}:
+            if position_name is not None and APPLICANT_HR_H2_MANAGEMENT_POSITION_PATTERN.search(position_name):
+                hr_subdomain = "hr_management"
+            elif level2_function_name == "人力资源":
+                hr_subdomain = "hr_general"
+            elif level2_function_name == "人事运营":
+                hr_subdomain = "hr_operations"
+            elif level2_function_name in {"招聘", "招聘外包服务"}:
+                hr_subdomain = "recruiting"
+            elif level2_function_name == "薪酬绩效":
+                hr_subdomain = "compensation_performance"
+            elif level2_function_name == "员工关系":
+                hr_subdomain = "employee_relations"
+            elif level2_function_name in {"人才发展", "组织发展"}:
+                hr_subdomain = "org_talent_development"
+            elif level2_function_name == "人力业务支持":
+                hr_subdomain = "hr_business_support"
+            elif level1_function_name in {"管理", "职能综合管理"}:
+                hr_subdomain = "hr_management"
+            else:
+                hr_subdomain = "other_hr_domain"
+
+        result.update(
+            {
+                "hr_type": hr_type,
+                "is_hr_staff": hr_type in {"H1", "H2", "H3"},
+                "is_suspected_hr_staff": hr_type == "HY",
+                "hr_primary_evidence": hr_primary_evidence,
+                "hr_primary_value": hr_primary_value,
+                "hr_subdomain": hr_subdomain,
+                "hr_judgement_reason": hr_judgement_reason,
+            }
+        )
+        return result
+
+    def _fetch_applicant_hr_profiles(
+        self,
+        cursor,
+        employee_nos: Iterable[str],
+    ) -> dict[str, dict[str, Any]]:
+        normalized_employee_nos = sorted(
+            {
+                employee_no
+                for value in employee_nos
+                if (employee_no := self._strip_text(value)) is not None
+            }
+        )
+        if not normalized_employee_nos:
+            return {}
+
+        roster_profiles: dict[str, dict[str, Any]] = {
+            employee_no: {
+                "employee_no": employee_no,
+                "employee_name": None,
+                "roster_query_date": None,
+                "roster_import_batch_no": None,
+                "level1_function_name": None,
+                "level2_function_name": None,
+                "position_name": None,
+                "standard_position_name": None,
+                "org_path_name": None,
+                "department_id": None,
+                "wanyu_city_sales_department": None,
+                "responsible_hr_employee_no": None,
+                "responsible_hr_import_batch_no": None,
+                "is_responsible_hr": False,
+            }
+            for employee_no in normalized_employee_nos
+        }
+
+        has_roster_table = self._table_exists(cursor, "在职花名册表")
+        roster_required_columns = (
+            "人员编号",
+            "部门ID",
+            "查询日期",
+            "导入批次号",
+            "姓名",
+            "一级职能名称",
+            "二级职能名称",
+            "职位名称",
+            "标准岗位名称",
+            "组织路径名称",
+        )
+        if has_roster_table and all(self._column_exists(cursor, "在职花名册表", column_name) for column_name in roster_required_columns):
+            cursor.execute(
+                """
+                SELECT
+                    BTRIM("人员编号") AS employee_no,
+                    BTRIM("部门ID") AS department_id,
+                    "查询日期",
+                    "导入批次号",
+                    "姓名",
+                    "一级职能名称",
+                    "二级职能名称",
+                    "职位名称",
+                    "标准岗位名称",
+                    "组织路径名称"
+                FROM "在职花名册表"
+                WHERE BTRIM("人员编号") = ANY(%s)
+                """,
+                (normalized_employee_nos,),
+            )
+            for row in cursor.fetchall():
+                employee_no = self._strip_text(row[0])
+                if employee_no is None:
+                    continue
+                roster_profiles[employee_no].update(
+                    {
+                        "roster_query_date": row[2],
+                        "roster_import_batch_no": self._strip_text(row[3]),
+                        "employee_name": self._strip_text(row[4]),
+                        "level1_function_name": self._strip_text(row[5]),
+                        "level2_function_name": self._strip_text(row[6]),
+                        "position_name": self._strip_text(row[7]),
+                        "standard_position_name": self._strip_text(row[8]),
+                        "org_path_name": self._strip_text(row[9]),
+                        "department_id": self._strip_text(row[1]),
+                    }
+                )
+
+        department_ids = sorted(
+            {
+                department_id
+                for profile in roster_profiles.values()
+                if (department_id := self._strip_text(profile.get("department_id"))) is not None
+            }
+        )
+        org_attr_by_code: dict[str, str | None] = {}
+        if (
+            department_ids
+            and self._table_exists(cursor, "组织属性查询")
+            and self._column_exists(cursor, "组织属性查询", "行政组织编码")
+            and self._column_exists(cursor, "组织属性查询", "万御城市营业部")
+        ):
+            cursor.execute(
+                """
+                SELECT BTRIM("行政组织编码") AS org_code, "万御城市营业部"
+                FROM "组织属性查询"
+                WHERE BTRIM("行政组织编码") = ANY(%s)
+                """,
+                (department_ids,),
+            )
+            org_attr_by_code = {
+                self._strip_text(row[0]): self._strip_text(row[1])
+                for row in cursor.fetchall()
+                if self._strip_text(row[0]) is not None
+            }
+
+        responsible_hr_employee_nos: set[str] = set()
+        responsible_hr_import_batch_no: str | None = None
+        if (
+            self._table_exists(cursor, "组织列表")
+            and self._column_exists(cursor, "组织列表", "责任HR工号")
+            and self._column_exists(cursor, "组织列表", "导入批次号")
+            and self._column_exists(cursor, "组织列表", "记录创建时间")
+        ):
+            cursor.execute(
+                """
+                SELECT "导入批次号"
+                FROM "组织列表"
+                ORDER BY "记录创建时间" DESC
+                LIMIT 1
+                """,
+            )
+            row = cursor.fetchone()
+            responsible_hr_import_batch_no = self._strip_text(row[0]) if row else None
+
+            cursor.execute(
+                """
+                SELECT DISTINCT BTRIM("责任HR工号") AS employee_no
+                FROM "组织列表"
+                WHERE "导入批次号" = %s
+                  AND NULLIF(BTRIM("责任HR工号"), '') IS NOT NULL
+                """,
+                (responsible_hr_import_batch_no,),
+            )
+            responsible_hr_employee_nos = {
+                employee_no
+                for row in cursor.fetchall()
+                if (employee_no := self._strip_text(row[0])) is not None
+            }
+
+        for employee_no, profile in roster_profiles.items():
+            department_id = self._strip_text(profile.get("department_id"))
+            profile["wanyu_city_sales_department"] = org_attr_by_code.get(department_id)
+            profile["is_responsible_hr"] = employee_no in responsible_hr_employee_nos
+            profile["responsible_hr_employee_no"] = employee_no if profile["is_responsible_hr"] else None
+            profile["responsible_hr_import_batch_no"] = responsible_hr_import_batch_no if profile["is_responsible_hr"] else None
+
+        return roster_profiles
 
     def ensure_table(self) -> None:
         ddl = self.schema_sql.read_text(encoding="utf-8")
@@ -324,8 +690,6 @@ class PostgresPermissionStore(_PostgresStoreBase):
             return normalized_documents
 
         unresolved_names = self._collect_unresolved_approver_names(normalized_documents)
-        if not unresolved_names:
-            return normalized_documents
 
         try:
             with self.connect() as connection:
@@ -855,6 +1219,155 @@ class PostgresPermissionCatalogStore(_PostgresStoreBase):
         }
 
 
+class PostgresPersonAttributesStore(_PostgresStoreBase):
+    table_name = PERSON_ATTRIBUTES_TABLE
+    schema_sql = Path(__file__).resolve().parents[1] / "sql" / "019_person_attributes.sql"
+
+    @classmethod
+    def _build_applicant_hr_tags(cls, applicant_profile: dict[str, Any]) -> dict[str, Any]:
+        return PostgresPermissionStore._build_applicant_hr_tags(applicant_profile)
+
+    def _ensure_schema(self, cursor) -> None:
+        if self._column_exists(cursor, "人员属性查询", "employee_no"):
+            raise RuntimeError('Detected legacy English schema for "人员属性查询". Run automation/sql/012_rename_columns_to_cn_fixed_schema.sql first.')
+        cursor.execute(self.schema_sql.read_text(encoding="utf-8"))
+
+    def ensure_table(self) -> None:
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                self._ensure_schema(cursor)
+
+    def _fetch_roster_employee_nos(self, cursor) -> list[str]:
+        if (
+            not self._table_exists(cursor, "在职花名册表")
+            or not self._column_exists(cursor, "在职花名册表", "人员编号")
+        ):
+            return []
+
+        cursor.execute(
+            """
+            SELECT BTRIM("人员编号") AS employee_no
+            FROM "在职花名册表"
+            WHERE NULLIF(BTRIM("人员编号"), '') IS NOT NULL
+            ORDER BY BTRIM("人员编号")
+            """
+        )
+        return [
+            employee_no
+            for row in cursor.fetchall()
+            if (employee_no := self._strip_text(row[0])) is not None
+        ]
+
+    def _build_person_attribute_payload(self, profile: dict[str, Any]) -> dict[str, Any]:
+        tags = self._build_applicant_hr_tags(profile)
+        return {
+            "employee_no": self._null_if_blank(profile.get("employee_no")),
+            "employee_name": self._null_if_blank(profile.get("employee_name")),
+            "department_id": self._null_if_blank(profile.get("department_id")),
+            "level1_function_name": self._null_if_blank(profile.get("level1_function_name")),
+            "level2_function_name": self._null_if_blank(profile.get("level2_function_name")),
+            "position_name": self._null_if_blank(profile.get("position_name")),
+            "standard_position_name": self._null_if_blank(profile.get("standard_position_name")),
+            "org_path_name": self._null_if_blank(profile.get("org_path_name")),
+            "wanyu_city_sales_department": self._null_if_blank(profile.get("wanyu_city_sales_department")),
+            "responsible_hr_employee_no": self._null_if_blank(profile.get("responsible_hr_employee_no")),
+            "responsible_hr_import_batch_no": self._null_if_blank(profile.get("responsible_hr_import_batch_no")),
+            "roster_query_date": profile.get("roster_query_date"),
+            "roster_import_batch_no": self._null_if_blank(profile.get("roster_import_batch_no")),
+            "roster_match_status": self._null_if_blank(tags.get("roster_match_status")),
+            "hr_type": self._null_if_blank(tags.get("hr_type")),
+            "is_responsible_hr": bool(tags.get("is_responsible_hr")),
+            "is_hr_staff": bool(tags.get("is_hr_staff")),
+            "is_suspected_hr_staff": bool(tags.get("is_suspected_hr_staff")),
+            "hr_primary_evidence": self._null_if_blank(tags.get("hr_primary_evidence")),
+            "hr_primary_value": self._null_if_blank(tags.get("hr_primary_value")),
+            "hr_subdomain": self._null_if_blank(tags.get("hr_subdomain")),
+            "hr_judgement_reason": self._null_if_blank(tags.get("hr_judgement_reason")),
+        }
+
+    def _refresh_from_roster(self, cursor) -> int:
+        self._ensure_schema(cursor)
+        employee_nos = self._fetch_roster_employee_nos(cursor)
+        cursor.execute(f"TRUNCATE TABLE {self.table_name}")
+        if not employee_nos:
+            return 0
+
+        permission_store = PostgresPermissionStore(self.settings)
+        profiles = permission_store._fetch_applicant_hr_profiles(cursor, employee_nos)
+        payloads = [
+            self._build_person_attribute_payload(profiles[employee_no])
+            for employee_no in sorted(profiles)
+        ]
+        if not payloads:
+            return 0
+
+        insert_columns = [
+            PERSON_ATTRIBUTES_COLUMNS["employee_no"],
+            PERSON_ATTRIBUTES_COLUMNS["employee_name"],
+            PERSON_ATTRIBUTES_COLUMNS["department_id"],
+            PERSON_ATTRIBUTES_COLUMNS["level1_function_name"],
+            PERSON_ATTRIBUTES_COLUMNS["level2_function_name"],
+            PERSON_ATTRIBUTES_COLUMNS["position_name"],
+            PERSON_ATTRIBUTES_COLUMNS["standard_position_name"],
+            PERSON_ATTRIBUTES_COLUMNS["org_path_name"],
+            PERSON_ATTRIBUTES_COLUMNS["wanyu_city_sales_department"],
+            PERSON_ATTRIBUTES_COLUMNS["responsible_hr_employee_no"],
+            PERSON_ATTRIBUTES_COLUMNS["responsible_hr_import_batch_no"],
+            PERSON_ATTRIBUTES_COLUMNS["roster_query_date"],
+            PERSON_ATTRIBUTES_COLUMNS["roster_import_batch_no"],
+            PERSON_ATTRIBUTES_COLUMNS["roster_match_status"],
+            PERSON_ATTRIBUTES_COLUMNS["hr_type"],
+            PERSON_ATTRIBUTES_COLUMNS["is_responsible_hr"],
+            PERSON_ATTRIBUTES_COLUMNS["is_hr_staff"],
+            PERSON_ATTRIBUTES_COLUMNS["is_suspected_hr_staff"],
+            PERSON_ATTRIBUTES_COLUMNS["hr_primary_evidence"],
+            PERSON_ATTRIBUTES_COLUMNS["hr_primary_value"],
+            PERSON_ATTRIBUTES_COLUMNS["hr_subdomain"],
+            PERSON_ATTRIBUTES_COLUMNS["hr_judgement_reason"],
+            PERSON_ATTRIBUTES_COLUMNS["created_at"],
+            PERSON_ATTRIBUTES_COLUMNS["updated_at"],
+        ]
+        cursor.executemany(
+            f"""
+            INSERT INTO {self.table_name} (
+                {self._quoted_columns(insert_columns)}
+            ) VALUES (
+                %(employee_no)s,
+                %(employee_name)s,
+                %(department_id)s,
+                %(level1_function_name)s,
+                %(level2_function_name)s,
+                %(position_name)s,
+                %(standard_position_name)s,
+                %(org_path_name)s,
+                %(wanyu_city_sales_department)s,
+                %(responsible_hr_employee_no)s,
+                %(responsible_hr_import_batch_no)s,
+                %(roster_query_date)s,
+                %(roster_import_batch_no)s,
+                %(roster_match_status)s,
+                %(hr_type)s,
+                %(is_responsible_hr)s,
+                %(is_hr_staff)s,
+                %(is_suspected_hr_staff)s,
+                %(hr_primary_evidence)s,
+                %(hr_primary_value)s,
+                %(hr_subdomain)s,
+                %(hr_judgement_reason)s,
+                NOW(),
+                NOW()
+            )
+            """,
+            payloads,
+        )
+        return len(payloads)
+
+    def refresh_from_roster(self) -> int:
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                return self._refresh_from_roster(cursor)
+
+
 class PostgresActiveRosterStore(_PostgresStoreBase):
     table_name = '"在职花名册表"'
     schema_sql = Path(__file__).resolve().parents[1] / "sql" / "002_active_roster.sql"
@@ -907,7 +1420,6 @@ class PostgresActiveRosterStore(_PostgresStoreBase):
         insert_columns = [roster_column_mapping[column] for column in roster_columns + metadata_columns + ["created_at", "updated_at"]]
         value_placeholders = [f"%({column})s" for column in roster_columns + metadata_columns]
         value_placeholders.extend(["NOW()", "NOW()"])
-        update_columns = [column for column in roster_columns + metadata_columns if column != "employee_no"]
 
         insert_sql = f"""
             INSERT INTO {self.table_name} (
@@ -915,12 +1427,6 @@ class PostgresActiveRosterStore(_PostgresStoreBase):
             ) VALUES (
                 {', '.join(value_placeholders)}
             )
-            ON CONFLICT ({self._quote_identifier(roster_column_mapping["employee_no"])}) DO UPDATE SET
-                {', '.join(
-                    f'{self._quote_identifier(roster_column_mapping[column])} = EXCLUDED.{self._quote_identifier(roster_column_mapping[column])}'
-                    for column in update_columns
-                )},
-                {self._quote_identifier(roster_column_mapping["updated_at"])} = NOW()
         """
 
         payloads: list[dict[str, Any]] = []
@@ -947,7 +1453,10 @@ class PostgresActiveRosterStore(_PostgresStoreBase):
 
         with self.connect() as connection:
             with connection.cursor() as cursor:
+                cursor.execute(f"TRUNCATE TABLE {self.table_name}")
                 cursor.executemany(insert_sql, payloads)
+                person_attributes_store = PostgresPersonAttributesStore(self.settings)
+                person_attributes_store._refresh_from_roster(cursor)
         return len(normalized_rows)
 
     @classmethod

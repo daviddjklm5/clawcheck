@@ -58,6 +58,18 @@ CREATE INDEX IF NOT EXISTS idx_apply_form_permission_list_document_no ON "申请
 CREATE INDEX IF NOT EXISTS idx_apply_form_approval_record_document_no ON "申请单审批记录"("单据编号");
 CREATE INDEX IF NOT EXISTS idx_apply_form_org_scope_document_no ON "申请表组织范围"("单据编号");
 CREATE INDEX IF NOT EXISTS idx_apply_form_org_scope_role_code ON "申请表组织范围"("角色编码");
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND table_name = '申请单基本信息'
+          AND column_name = '工号'
+    ) THEN
+        EXECUTE 'CREATE INDEX IF NOT EXISTS idx_apply_form_basic_info_employee_no ON "申请单基本信息"("工号")';
+    END IF;
+END $$;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_apply_form_org_scope_doc_role_org
 ON "申请表组织范围"("单据编号", "角色编码", "组织编码")
 WHERE "组织编码" IS NOT NULL;
