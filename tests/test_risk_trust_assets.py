@@ -97,7 +97,6 @@ class RiskTrustYamlAssetsTest(unittest.TestCase):
         self.assertEqual(summary_mapping["0.0"]["conclusion"], "拒绝")
         self.assertEqual(summary_mapping["0.5"]["action"], "manual_review")
         self.assertEqual(summary_mapping["2.5"]["conclusion"], "可信任")
-        self.assertIn("战区权限对接人", constants["constants"]["warzone_hr_approval_node_names"])
 
 
 if __name__ == "__main__":

@@ -281,12 +281,6 @@ class RiskTrustEvaluator:
             for node_name in self.constants.get("ignored_approval_node_names", [])
             if self._normalized_text(node_name) != "<NULL>"
         }
-        warzone_hr_node_names = {
-            self._normalized_text(node_name)
-            for node_name in self.constants.get("warzone_hr_approval_node_names", [])
-            if self._normalized_text(node_name) != "<NULL>"
-        }
-
         approval_records = list(bundle.get("approval_records", []))
         applicant_employee_no = self._normalized_text(basic_info.get("employee_no"))
         last_submit_index = -1
@@ -325,9 +319,8 @@ class RiskTrustEvaluator:
 
         def _is_warzone_hr(row: dict[str, Any]) -> bool:
             approver_org = dict(row.get("approver_org_attributes", {}))
-            node_name = self._normalized_text(row.get("node_name"))
             process_level_category = self._normalized_text(approver_org.get("process_level_category"))
-            return process_level_category == "战区人行部门" or node_name in warzone_hr_node_names
+            return process_level_category == "战区人行部门"
 
         details: list[dict[str, Any]] = []
         for detail_row in bundle.get("permission_details", []):

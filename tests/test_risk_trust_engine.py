@@ -142,7 +142,7 @@ class RiskTrustEvaluatorTest(unittest.TestCase):
         low_score_details = [row for row in detail_rows if row["is_low_score"]]
         self.assertTrue(low_score_details)
 
-    def test_warzone_node_name_counts_even_if_org_category_is_local(self) -> None:
+    def test_warzone_node_name_without_warzone_org_does_not_count(self) -> None:
         bundle = {
             "basic_info": {"document_no": "RA-4", "employee_no": "001"},
             "applicant_person_attributes": {"hr_type": "H1"},
@@ -179,9 +179,9 @@ class RiskTrustEvaluatorTest(unittest.TestCase):
         summary_rows, detail_rows = self.evaluator.evaluate_documents([bundle], assessment_batch_no="audit_batch_4")
 
         approval_detail = next(row for row in detail_rows if row["dimension_name"] == "审批人判断")
-        self.assertEqual(approval_detail["rule_id"], "APPROVAL_CHAIN_DEFAULT")
-        self.assertEqual(approval_detail["score"], 2.5)
-        self.assertEqual(summary_rows[0]["final_score"], 1.5)
+        self.assertEqual(approval_detail["rule_id"], "APPROVAL_LOCAL_WITHOUT_WARZONE_HISTORY")
+        self.assertEqual(approval_detail["score"], 0.0)
+        self.assertEqual(summary_rows[0]["final_score"], 0.0)
 
     def test_hr_b1_permission_does_not_fall_into_non_hr_rule(self) -> None:
         bundle = {
@@ -201,7 +201,7 @@ class RiskTrustEvaluatorTest(unittest.TestCase):
                     "approver_employee_no": "008",
                     "approval_action": "同意",
                     "approval_time": "2026-03-15 11:00:00",
-                    "approver_org_attributes": {"process_level_category": "属地组织"},
+                    "approver_org_attributes": {"process_level_category": "战区人行部门"},
                 },
             ],
             "permission_details": [
