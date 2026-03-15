@@ -25,6 +25,8 @@ PERMISSION_APPLY_DETAIL_TABLE = '"申请单权限列表"'
 APPROVAL_RECORD_TABLE = '"申请单审批记录"'
 APPLY_FORM_ORG_SCOPE_TABLE = '"申请表组织范围"'
 PERSON_ATTRIBUTES_TABLE = '"人员属性查询"'
+RISK_TRUST_ASSESSMENT_TABLE = '"申请单风险信任评估"'
+RISK_TRUST_ASSESSMENT_DETAIL_TABLE = '"申请单风险信任评估明细"'
 
 BASIC_INFO_COLUMNS = {
     "document_no": "单据编号",
@@ -1366,6 +1368,16 @@ class PostgresPersonAttributesStore(_PostgresStoreBase):
         with self.connect() as connection:
             with connection.cursor() as cursor:
                 return self._refresh_from_roster(cursor)
+
+
+class PostgresRiskTrustStore(_PostgresStoreBase):
+    schema_sql = Path(__file__).resolve().parents[1] / "sql" / "022_risk_trust_assessment.sql"
+
+    def ensure_table(self) -> None:
+        ddl = self.schema_sql.read_text(encoding="utf-8")
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(ddl)
 
 
 class PostgresActiveRosterStore(_PostgresStoreBase):

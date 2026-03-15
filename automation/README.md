@@ -15,6 +15,7 @@ playwright install chromium
 - UAT credentials: `automation/config/credentials.local.yaml`
 - Prod credentials: `automation/config/credentials.prod.local.yaml`
 - Selectors: `automation/config/selectors.yaml`
+- Audit rules: `automation/config/rules/`
 
 Default runtime target:
 - `check/login/run/collect/roster/orglist` use prod config by default when `--config` / `--credentials` are not passed.
@@ -96,7 +97,7 @@ python automation/scripts/run.py rolecatalog \
   --credentials automation/config/credentials.prod.local.yaml
 ```
 
-Initialize all 10 tables/functions on a new database:
+Initialize all 12 tables/functions on a new database:
 ```bash
 python automation/scripts/run.py dbinit \
   --config automation/config/settings.prod.yaml \
@@ -118,6 +119,7 @@ python automation/scripts/run.py dbinit \
 - SQL: `automation/sql/009_permission_catalog.sql`
 - SQL: `automation/sql/010_permission_apply_collect_migrate_basic_info.sql`
 - SQL: `automation/sql/019_person_attributes.sql`
+- SQL: `automation/sql/022_risk_trust_assessment.sql`
 
 ## 5. Notes
 - Default home entry for `001/003/004` related browser actions is `https://hr.onewo.com/ierp/?formId=home_page`.

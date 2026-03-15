@@ -1,0 +1,277 @@
+version: "2026-03-15"
+package: "apply_form_risk_trust"
+description: "申请表审批风险与信任度评估矩阵"
+enabled: true
+owner: "HR数字化产品组"
+imports:
+  - "risk_trust_constants.yaml"
+
+defaults:
+  low_score_threshold: 1.0
+  summary_score_policy: "lowest_score_wins"
+  role_score_policy: "lowest_score_wins"
+  role_org_score_policy: "lowest_score_wins"
+  emit_low_score_details: true
+  emit_all_low_score_details: true
+
+output_contract:
+  summary_required_fields:
+    - "单据编号"
+    - "评估批次号"
+    - "评估版本"
+    - "最终信任分"
+    - "总结论"
+    - "建议动作"
+    - "是否命中人工干预"
+    - "是否存在低分明细"
+    - "低分明细条数"
+    - "低分明细结论"
+  detail_required_fields:
+    - "单据编号"
+    - "角色编码"
+    - "组织编码"
+    - "维度名称"
+    - "命中规则编码"
+    - "维度得分"
+    - "明细结论"
+    - "是否低分明细"
+    - "建议干预动作"
+
+dimensions:
+  applicant_role:
+    scope: "document"
+    fact_path: "applicant.hr_type"
+    rules:
+      - id: "APPLICANT_HR_STAFF"
+        when:
+          applicant_hr_type_in_ref: "applicant_hr_staff_types"
+        score: 2.5
+        summary: "申请人为明确或责任 HR"
+      - id: "APPLICANT_HR_SUSPECTED"
+        when:
+          applicant_hr_type_in_ref: "applicant_hr_suspected_types"
+        score: 1.5
+        summary: "申请人为疑似 HR"
+      - id: "APPLICANT_HR_NON_HR"
+        when:
+          applicant_hr_type_equals: "HX"
+        score: 1.0
+        summary: "申请人不是 HR"
+        low_score_detail: "申请人 HR 类型为 HX，需结合权限与组织继续复核"
+      - id: "APPLICANT_HR_TYPE_MISSING"
+        when:
+          applicant_hr_type_is_null: true
+        score: 1.0
+        summary: "申请人未命中人员属性"
+        low_score_detail: "申请人未匹配人员属性，需人工复核"
+        intervention_action: "补齐人员属性后复核"
+
+  applicant_process_category:
+    scope: "document"
+    fact_path: "applicant.process_level_category"
+    score_map_ref: "applicant_process_category_scores"
+    default_score: 0.5
+
+  approval_chain:
+    scope: "approval"
+    rules:
+      - id: "APPROVAL_ALL_EQUAL_SUBMITTER"
+        when:
+          current_round_all_approvers_equal_submitter: true
+        score: 0.0
+        summary: "从最后一次提交开始，所有有效审批人与提交人相同"
+        low_score_detail: "审批链异常，当前轮审批人未形成有效复核"
+      - id: "APPROVAL_LOCAL_WITHOUT_WARZONE_HISTORY"
+        when:
+          applicant_process_level_category_in:
+            - "属地组织"
+            - "<NULL>"
+          has_warzone_hr_in_history: false
+        score: 0.0
+        summary: "属地或未知组织申请，历史审批中不存在战区人行部门"
+        low_score_detail: "缺少战区人行部门审批，建议拒绝或补齐审批链"
+      - id: "APPROVAL_LOCAL_WITHOUT_WARZONE_CURRENT_ROUND"
+        when:
+          applicant_process_level_category_in:
+            - "属地组织"
+            - "<NULL>"
+          has_warzone_hr_in_history: true
+          has_warzone_hr_in_current_round: false
+        score: 0.5
+        summary: "属地或未知组织申请，当前审批轮缺少战区人行部门"
+        low_score_detail: "当前审批轮缺少战区人行部门，需人工干预补齐审批链"
+        intervention_action: "补齐战区人行部门审批后复核"
+      - id: "APPROVAL_CHAIN_DEFAULT"
+        when:
+          default: true
+        score: 2.5
+        summary: "审批链满足当前信任要求"
+
+  permission_level:
+    scope: "detail"
+    rules:
+      - id: "PERMISSION_CATALOG_MISSING"
+        when:
+          role_catalog_matched: false
+        score: 0.5
+        summary: "申请权限未命中权限列表主数据"
+        low_score_detail: "权限主数据缺失，需管理员更新权限列表后复核"
+        intervention_action: "管理员更新权限列表后复核"
+      - id: "PERMISSION_W"
+        when:
+          permission_level_equals: "W类-取消"
+        score: 0.0
+        summary: "申请已取消权限"
+        low_score_detail: "权限级别为 W 类，建议拒绝"
+      - id: "PERMISSION_A_REMOTE_NOT_ALLOWED"
+        when:
+          permission_level_equals: "A类-远程"
+          applicant_process_level_category_not_in_ref: "remote_allowed_process_categories"
+        score: 0.0
+        summary: "非远程交付中心申请 A 类远程权限"
+        low_score_detail: "申请人不属于远程交付中心，不能申请 A 类远程权限"
+      - id: "PERMISSION_A_REMOTE_ALLOWED"
+        when:
+          permission_level_equals: "A类-远程"
+          applicant_process_level_category_in_ref: "remote_allowed_process_categories"
+        score: 2.5
+        summary: "远程交付中心申请 A 类远程权限"
+      - id: "PERMISSION_S1_NOT_ALLOWED"
+        when:
+          permission_level_equals: "S1类-限定"
+          applicant_process_level_category_not_in_ref: "s1_allowed_process_categories"
+        score: 0.0
+        summary: "非限定组织申请 S1 类权限"
+        low_score_detail: "申请人组织不在 S1 类权限允许范围内"
+      - id: "PERMISSION_S1_ALLOWED"
+        when:
+          permission_level_equals: "S1类-限定"
+          applicant_process_level_category_in_ref: "s1_allowed_process_categories"
+        score: 0.5
+        summary: "限定组织申请 S1 类权限"
+        low_score_detail: "S1 类权限需人工复核后放行"
+        intervention_action: "复核限定权限申请依据"
+      - id: "PERMISSION_S2_DENIED"
+        when:
+          permission_level_equals: "S2类-限定"
+          applicant_process_level_category_in_ref: "s2_denied_process_categories"
+        score: 0.0
+        summary: "低授权组织申请 S2 类权限"
+        low_score_detail: "申请人组织分类不满足 S2 类权限要求"
+      - id: "PERMISSION_S2_ALLOWED"
+        when:
+          permission_level_equals: "S2类-限定"
+        score: 0.5
+        summary: "S2 类权限需人工复核"
+        low_score_detail: "S2 类权限需人工复核后放行"
+        intervention_action: "复核限定权限申请依据"
+      - id: "PERMISSION_B1_HR_STAFF"
+        when:
+          permission_level_equals: "B1类-涉薪"
+          applicant_hr_type_in_ref: "applicant_hr_staff_types"
+        score: 1.0
+        summary: "HR 申请 B1 类权限"
+        low_score_detail: "B1 类涉薪权限需要人工关注"
+        intervention_action: "复核涉薪权限申请依据"
+      - id: "PERMISSION_B1_NON_HR"
+        when:
+          permission_level_equals: "B1类-涉薪"
+        score: 0.0
+        summary: "非 HR 申请 B1 类权限"
+        low_score_detail: "非 HR 申请 B1 类涉薪权限，建议拒绝"
+      - id: "PERMISSION_B2_HR_STAFF"
+        when:
+          permission_level_equals: "B2类-涉档案绩效"
+          applicant_hr_type_in_ref: "applicant_hr_staff_types"
+        score: 2.5
+        summary: "HR 申请 B2 类权限"
+      - id: "PERMISSION_B2_NON_HR"
+        when:
+          permission_level_equals: "B2类-涉档案绩效"
+        score: 1.0
+        summary: "非 HR 申请 B2 类权限"
+        low_score_detail: "非 HR 申请 B2 类权限，需人工关注"
+        intervention_action: "复核档案绩效权限申请依据"
+      - id: "PERMISSION_C_HR_STAFF"
+        when:
+          permission_level_equals: "C类-常规"
+          applicant_hr_type_in_ref: "applicant_hr_staff_types"
+        score: 2.5
+        summary: "HR 申请 C 类权限"
+      - id: "PERMISSION_C_DEFAULT"
+        when:
+          permission_level_equals: "C类-常规"
+        score: 2.5
+        summary: "常规权限申请"
+
+  target_organization:
+    scope: "detail_org"
+    rules:
+      - id: "TARGET_ORG_SCOPE_SKIPPED"
+        when:
+          role_skip_org_scope_check: true
+          target_org_code_is_null: true
+        score: 2.5
+        summary: "角色不检查组织范围"
+      - id: "TARGET_ORG_L1_NOT_ALLOWED"
+        when:
+          target_org_auth_level_equals: "一级授权"
+          applicant_process_level_category_not_in_ref: "s1_allowed_process_categories"
+        score: 0.0
+        summary: "非高授权组织申请一级授权范围"
+        low_score_detail: "申请一级授权范围，但申请人组织分类不在允许范围内"
+      - id: "TARGET_ORG_L2_NOT_ALLOWED"
+        when:
+          target_org_auth_level_equals: "二级授权"
+          applicant_process_level_category_not_in_ref: "l2_allowed_process_categories"
+        score: 0.0
+        summary: "非允许组织申请二级授权范围"
+        low_score_detail: "申请二级授权范围，但申请人组织分类不在允许范围内"
+      - id: "TARGET_ORG_CROSS_UNIT_LOW"
+        when:
+          applicant_org_unit_not_equal_target_org_unit: true
+          applicant_process_level_category_in:
+            - "属地组织"
+            - "<NULL>"
+        score: 0.5
+        summary: "属地或未知组织跨组织单位申请"
+        low_score_detail: "跨组织单位申请，需人工复核组织范围合理性"
+        intervention_action: "复核跨组织单位申请依据"
+      - id: "TARGET_ORG_CROSS_UNIT_HIGH"
+        when:
+          applicant_org_unit_not_equal_target_org_unit: true
+          applicant_process_level_category_in_ref: "cross_org_high_trust_process_categories"
+        score: 2.5
+        summary: "高信任组织跨组织单位申请"
+      - id: "TARGET_ORG_CROSS_UNIT_OTHER"
+        when:
+          applicant_org_unit_not_equal_target_org_unit: true
+        score: 1.0
+        summary: "其他组织跨组织单位申请"
+        low_score_detail: "跨组织单位申请，需人工关注"
+        intervention_action: "复核跨组织单位申请依据"
+      - id: "TARGET_ORG_AUTH_LEVEL_MAP"
+        when:
+          default: true
+        score_map_ref: "organization_auth_level_scores"
+        score_source_fact: "target_org_auth_level"
+
+summary_conclusions:
+  - score: 0.0
+    conclusion: "拒绝"
+    action: "reject"
+  - score: 0.5
+    conclusion: "人工干预"
+    action: "manual_review"
+  - score: 1.0
+    conclusion: "人工干预"
+    action: "manual_review"
+  - score: 1.5
+    conclusion: "仅关注"
+    action: "warning"
+  - score: 2.0
+    conclusion: "仅关注"
+    action: "warning"
+  - score: 2.5
+    conclusion: "可信任"
+    action: "allow"

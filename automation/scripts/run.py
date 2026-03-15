@@ -207,6 +207,7 @@ def main() -> int:
             PostgresPersonAttributesStore,
             PostgresPermissionCatalogStore,
             PostgresPermissionStore,
+            PostgresRiskTrustStore,
         )
 
         try:
@@ -219,11 +220,13 @@ def main() -> int:
                 org_store = PostgresOrganizationListStore(settings.db)
                 person_attributes_store = PostgresPersonAttributesStore(settings.db)
                 catalog_store = PostgresPermissionCatalogStore(settings.db)
+                risk_trust_store = PostgresRiskTrustStore(settings.db)
 
                 permission_store.ensure_table()
                 roster_store.ensure_table()
                 org_store.ensure_table()
                 person_attributes_store.ensure_table()
+                risk_trust_store.ensure_table()
                 permission_catalog = catalog_store.seed_catalog()
                 summary = {
                     "initialized_tables": [
@@ -237,6 +240,8 @@ def main() -> int:
                         "城市所属战区",
                         "组织属性查询",
                         "权限列表",
+                        "申请单风险信任评估",
+                        "申请单风险信任评估明细",
                     ],
                     "permission_catalog": permission_catalog,
                 }

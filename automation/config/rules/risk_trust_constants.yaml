@@ -1,0 +1,76 @@
+version: "2026-03-15"
+package: "apply_form_risk_trust_constants"
+description: "申请表审批风险与信任度评估常量"
+enabled: true
+
+constants:
+  applicant_hr_staff_types:
+    - "H1"
+    - "H2"
+    - "H3"
+
+  applicant_hr_suspected_types:
+    - "HY"
+
+  remote_allowed_process_categories:
+    - "人事远程交付中心"
+
+  s1_allowed_process_categories:
+    - "BG人行中心与学社"
+    - "人事远程交付中心"
+
+  s2_denied_process_categories:
+    - "属地服务站"
+    - "属地组织"
+    - "<NULL>"
+
+  l2_allowed_process_categories:
+    - "BG人行中心与学社"
+    - "人事远程交付中心"
+    - "蝶发人行部"
+    - "业务单元本部"
+
+  cross_org_high_trust_process_categories:
+    - "BG人行中心与学社"
+    - "战区人行部门"
+    - "属地服务站"
+    - "人事远程交付中心"
+    - "万物云本部"
+    - "蝶发人行部"
+
+  applicant_process_category_scores:
+    "战区人行部门": 2.5
+    "属地服务站": 2.5
+    "人事远程交付中心": 2.5
+    "BG人行中心与学社": 1.0
+    "属地组织": 1.5
+    "万物云本部": 1.0
+    "业务单元本部": 1.5
+    "<NULL>": 0.5
+    "蝶发人行部": 1.0
+
+  organization_auth_level_scores:
+    "一级授权": 0.5
+    "二级授权": 1.0
+    "三级授权": 1.5
+    "<NULL>": 2.0
+
+  summary_conclusion_mapping:
+    "0.0":
+      conclusion: "拒绝"
+      action: "reject"
+    "0.5":
+      conclusion: "人工干预"
+      action: "manual_review"
+    "1.0":
+      conclusion: "人工干预"
+      action: "manual_review"
+    "1.5":
+      conclusion: "仅关注"
+      action: "warning"
+    "2.0":
+      conclusion: "仅关注"
+      action: "warning"
+    "2.5":
+      conclusion: "可信任"
+      action: "allow"
