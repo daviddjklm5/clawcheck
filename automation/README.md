@@ -114,6 +114,11 @@ Dry-run the audit and dump JSON only:
 python automation/scripts/run.py audit --document-no RA-20260315-00000001 --dry-run
 ```
 
+Export an audit batch distribution workbook:
+```bash
+python automation/scripts/export_audit_distribution_report.py --batch-no audit_20260315_112428
+```
+
 ## 4. Output
 - logs: `automation/logs/`
 - screenshots: `automation/screenshots/`
