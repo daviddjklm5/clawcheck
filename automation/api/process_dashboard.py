@@ -185,6 +185,16 @@ def approve_process_document(
         "events": [],
     }
 
+    response_payload: dict[str, Any] | None = None
+
+    def flush_execution_log() -> None:
+        if response_payload is not None:
+            execution_log["response"] = response_payload
+        log_path.write_text(
+            json.dumps(execution_log, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
     def add_event(message: str, **extra: Any) -> None:
         event = {
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -193,6 +203,7 @@ def approve_process_document(
         if extra:
             event.update(extra)
         execution_log["events"].append(event)
+        flush_execution_log()
 
     page = None
     browser = None
@@ -211,6 +222,7 @@ def approve_process_document(
         "screenshotFile": "",
         "message": "",
     }
+    flush_execution_log()
     logger = logging.getLogger("approval_api")
 
     try:
@@ -231,6 +243,7 @@ def approve_process_document(
             context.set_default_timeout(settings.browser.timeout_ms)
             context.set_default_navigation_timeout(settings.browser.navigation_timeout_ms)
             page = context.new_page()
+            add_event("browser_context_ready", stateFile=_to_repo_relative(state_file))
 
             home_page = HomePage(
                 home_url=settings.app.home_url,
@@ -275,6 +288,7 @@ def approve_process_document(
             else:
                 add_event("reuse_existing_login_state")
 
+            add_event("approval_flow_started", documentNo=document_no, dryRun=dry_run)
             flow_result = approval_flow.execute_approve(
                 document_no=document_no,
                 approval_opinion=approval_opinion,
@@ -328,8 +342,5 @@ def approve_process_document(
             except Exception:  # noqa: BLE001
                 pass
 
-    log_path.write_text(
-        json.dumps(execution_log, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    flush_execution_log()
     return response_payload

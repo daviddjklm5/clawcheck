@@ -11,36 +11,77 @@ import type {
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000/api").replace(/\/$/, "");
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    method: init?.method ?? "GET",
-    headers: {
-      Accept: "application/json",
-      ...(init?.body ? { "Content-Type": "application/json" } : {}),
-      ...(init?.headers ?? {}),
-    },
-    body: init?.body,
-  });
+type RequestOptions = RequestInit & {
+  timeoutMs?: number;
+  timeoutMessage?: string;
+};
 
-  if (!response.ok) {
-    let detailMessage = "";
-    try {
-      const errorPayload = (await response.json()) as { detail?: string };
-      detailMessage = String(errorPayload.detail ?? "").trim();
-    } catch {
-      detailMessage = "";
+async function request<T>(path: string, init?: RequestOptions): Promise<T> {
+  const { timeoutMs = 0, timeoutMessage, headers, signal, ...fetchInit } = init ?? {};
+  const controller = timeoutMs > 0 ? new AbortController() : null;
+  let didTimeout = false;
+  let detachAbortForwarder: (() => void) | null = null;
+
+  if (controller && signal) {
+    const forwardAbort = () => controller.abort();
+    if (signal.aborted) {
+      controller.abort();
+    } else {
+      signal.addEventListener("abort", forwardAbort, { once: true });
+      detachAbortForwarder = () => signal.removeEventListener("abort", forwardAbort);
     }
-    const error = new Error(`API request failed: ${response.status} ${response.statusText}`) as Error & {
-      status?: number;
-    };
-    error.status = response.status;
-    if (detailMessage) {
-      error.message = detailMessage;
-    }
-    throw error;
   }
 
-  return (await response.json()) as T;
+  const timeoutId =
+    controller !== null
+      ? window.setTimeout(() => {
+          didTimeout = true;
+          controller.abort();
+        }, timeoutMs)
+      : null;
+
+  try {
+    const response = await fetch(`${API_BASE_URL}${path}`, {
+      ...fetchInit,
+      method: fetchInit.method ?? "GET",
+      headers: {
+        Accept: "application/json",
+        ...(fetchInit.body ? { "Content-Type": "application/json" } : {}),
+        ...(headers ?? {}),
+      },
+      signal: controller?.signal ?? signal,
+    });
+
+    if (!response.ok) {
+      let detailMessage = "";
+      try {
+        const errorPayload = (await response.json()) as { detail?: string };
+        detailMessage = String(errorPayload.detail ?? "").trim();
+      } catch {
+        detailMessage = "";
+      }
+      const error = new Error(`API request failed: ${response.status} ${response.statusText}`) as Error & {
+        status?: number;
+      };
+      error.status = response.status;
+      if (detailMessage) {
+        error.message = detailMessage;
+      }
+      throw error;
+    }
+
+    return (await response.json()) as T;
+  } catch (error) {
+    if (didTimeout) {
+      throw new Error(timeoutMessage ?? `API request timed out after ${timeoutMs}ms`);
+    }
+    throw error;
+  } finally {
+    if (timeoutId !== null) {
+      window.clearTimeout(timeoutId);
+    }
+    detachAbortForwarder?.();
+  }
 }
 
 export const dashboardApi = {
@@ -65,6 +106,9 @@ export const dashboardApi = {
       {
         method: "POST",
         body: JSON.stringify(payload),
+        timeoutMs: 120_000,
+        timeoutMessage:
+          "审批请求超过 120 秒未返回，后端可能卡在 EHR 窗口。请检查弹出的 EHR 浏览器，并查看 automation/logs 下最新 approval_*.json。",
       },
     );
   },
