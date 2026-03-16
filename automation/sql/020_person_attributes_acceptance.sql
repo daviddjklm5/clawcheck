@@ -148,6 +148,24 @@ WHERE "申请人HR类型" IN ('HX', 'HY')
 ORDER BY "工号"
 LIMIT 100;
 
+-- 9.4 组织单位=人力资源与行政服务中心 且职位包含员工体验与行政，但未判为 H2
+SELECT
+    p."工号",
+    p."姓名",
+    p."部门ID",
+    p."职位名称",
+    p."申请人HR类型",
+    p."是否责任HR",
+    o."组织单位"
+FROM "人员属性查询" p
+LEFT JOIN "组织属性查询" o
+  ON BTRIM(o."行政组织编码") = BTRIM(p."部门ID")
+WHERE COALESCE(o."组织单位", '') = '人力资源与行政服务中心'
+  AND COALESCE(p."职位名称", '') LIKE '%员工体验与行政%'
+  AND COALESCE(p."申请人HR类型", '') <> 'H2'
+ORDER BY p."工号"
+LIMIT 100;
+
 -- 10. 申请单与人员属性查询关联命中率
 WITH apply_employees AS (
     SELECT DISTINCT BTRIM("工号") AS employee_no

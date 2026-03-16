@@ -76,6 +76,26 @@ class PersonAttributesStoreApplicantHrTest(unittest.TestCase):
         self.assertEqual(tags["hr_subdomain"], "other_hr_domain")
         self.assertEqual(tags["hr_judgement_reason"], "weak_signal_management_position_promoted_to_h2")
 
+    def test_employee_experience_position_in_special_org_unit_is_h2(self) -> None:
+        tags = self.store._build_applicant_hr_tags(
+            {
+                "employee_no": "05026859",
+                "employee_name": "张三",
+                "position_name": "员工体验与行政专业经理",
+                "org_unit_name": "人力资源与行政服务中心",
+                "level2_function_name": "综合行政",
+                "is_responsible_hr": True,
+            }
+        )
+
+        self.assertEqual(tags["hr_type"], "H2")
+        self.assertTrue(tags["is_hr_staff"])
+        self.assertFalse(tags["is_suspected_hr_staff"])
+        self.assertEqual(tags["hr_primary_evidence"], "org_unit_name+position_name")
+        self.assertEqual(tags["hr_primary_value"], "人力资源与行政服务中心|员工体验与行政专业经理")
+        self.assertEqual(tags["hr_subdomain"], "other_hr_domain")
+        self.assertEqual(tags["hr_judgement_reason"], "org_unit_employee_experience_position_promoted_to_h2")
+
     def test_responsible_hr_without_other_signal_is_h3(self) -> None:
         tags = self.store._build_applicant_hr_tags(
             {

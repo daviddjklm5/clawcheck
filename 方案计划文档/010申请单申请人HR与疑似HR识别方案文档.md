@@ -167,9 +167,9 @@
 若仅使用 `HR 组织路径` 作为判定条件，会命中一批弱信号人员。
 
 在去除 H1 强信号后，这批弱信号人员共 `128` 人，其中：
-- `H2`：`13` 人
-- `H3`：`4` 人
-- `HY`：`111` 人
+- `H2`：`61` 人
+- `H3`：`2` 人
+- `HY`：`65` 人
 
 弱信号人群中，抽样确认存在以下明显非 HR 岗位：
 - `运营经理`
@@ -186,7 +186,8 @@
 - 新增 `组织发展中心 / 组织人才中心` 口径后，额外进入弱信号池的人员共 `14` 人
   - 其中 `2` 人提升为 `H2`
   - `12` 人进入 `HY`
-- 在当前版本中，若弱信号人员同时属于 `责任 HR`，则优先进入 `H3`，不再落入 `HY`
+- 当前版本新增 `组织单位 = 人力资源与行政服务中心` 且 `职位名称` 包含 `员工体验与行政` 的专项提升规则，额外有 `48` 人从弱信号池提升为 `H2`
+- 在当前版本中，若弱信号人员同时属于 `责任 HR`，且命中 H2 提升规则，则优先进入 `H2`；其余责任 HR 继续优先进入 `H3`，不再落入 `HY`
 
 补充调查结论：
 - 当前花名册中，`组织路径名称` 包含 `HR` 的记录仅 `12` 人，对应 `3` 条唯一路径
@@ -204,12 +205,12 @@
 - 但命中 `组织列表` 最新批次中的责任 HR 集合
 
 按当前数据统计：
-- `H3` 共 `83` 人
-- 这 `83` 人共覆盖 `6,331` 个组织
+- `H3` 共 `81` 人
+- 这 `81` 人共覆盖 `6,317` 个组织
 - 在最新责任 HR 集合 `586` 人中，分类分布为：
   - `H1`：`491`
-  - `H2`：`4`
-  - `H3`：`83`
+  - `H2`：`6`
+  - `H3`：`81`
   - `UNMATCHED`：`8`
 
 `H3` 的典型职位包括：
@@ -290,7 +291,8 @@ H1 显式关键词口径采用保守规则，优先识别以下显式文本：
 - 但位于 HR 弱信号人群中
 - 且经专项调查后，某些职位应从弱信号提升为“推定 HR”
 
-当前版本先纳入以下 `职位名称`：
+当前版本先纳入以下 H2 提升条件：
+- `组织单位 = 人力资源与行政服务中心`，且 `职位名称` 包含 `员工体验与行政`
 - `运营经理`
 - `运营主管`
 - `数据分析`
@@ -304,10 +306,13 @@ H1 显式关键词口径采用保守规则，优先识别以下显式文本：
 
 并且必须同时满足：
 1. 不满足 H1
-2. `组织路径名称` 命中 `HR 组织路径`
-3. `职位名称` 属于上述 H2 白名单
+2. 满足以下任一条件：
+   - `组织单位 = 人力资源与行政服务中心`，且 `职位名称` 包含 `员工体验与行政`
+   - `组织路径名称` 命中 `HR 组织路径`，且 `职位名称` 属于上述 H2 白名单
 
-当前调查结果中，H2 共 `13` 人，样本包括：
+当前调查结果中，H2 共 `61` 人，样本包括：
+- `员工体验与行政` / `员工体验与行政专业经理` / `员工体验与行政高级专业经理` / `员工体验与行政资深专业经理`
+  - 位于 `人力资源与行政服务中心` 的人员共 `48` 人
 - `数据分析`
   - `万物云_万科物业_人力资源与行政服务部`
 - `运营主管`
@@ -335,9 +340,10 @@ H1 显式关键词口径采用保守规则，优先识别以下显式文本：
 
 说明：
 - H2 是“经人工调查后提升”的职位型规则
-- 当前 H2 仅覆盖已调查确认的弱信号岗位
+- 当前 H2 由“职位白名单”与“组织范围限定的专项岗位”共同组成
 - `总裁 / 总经理` 类职位只在其所在组织命中 `HR 组织路径` 时进入 `H2`
-- 这类职位进入 `H2` 后，其 `hr_subdomain` 统一归入 `hr_management`
+- `员工体验与行政` 相关岗位仅在 `组织单位 = 人力资源与行政服务中心` 时进入 `H2`
+- `总裁 / 总经理` 类职位进入 `H2` 后，其 `hr_subdomain` 统一归入 `hr_management`
 - 后续若发现更多应提升岗位，可继续追加到 H2 白名单
 
 ### 4.4 H3：责任 HR
@@ -352,7 +358,7 @@ H1 显式关键词口径采用保守规则，优先识别以下显式文本：
 - `H3` 代表“责任配置角色上的 HR”
 - `H3` 不要求其 `职位名称`、`标准岗位名称`、`一级职能名称` 命中 HR 强信号
 - `H3` 可覆盖运营、综合、监察等职位，只要其在组织配置中被维护为责任 HR
-- 当前统计下，`H3` 共 `83` 人
+- 当前统计下，`H3` 共 `81` 人
 
 ### 4.5 HY：疑似 HR
 满足以下条件时判为 `HY`：
@@ -370,7 +376,7 @@ H1 显式关键词口径采用保守规则，优先识别以下显式文本：
 - 若该人员同时属于 `责任 HR`，则优先落入 `H3`，不再停留在 `HY`
 - 该类人群保留为“待补充规则”的疑似 HR 池
 
-按当前口径统计，HY 当前共 `111` 人，其中包含新增纳入 `组织发展中心 / 组织人才中心` 弱信号池、但未命中 `H2 / H3` 的人员。
+按当前口径统计，HY 当前共 `65` 人，其中包含新增纳入 `组织发展中心 / 组织人才中心` 弱信号池、但未命中 `H2 / H3` 的人员。
 
 ### 4.6 HX：不是 HR
 满足以下条件时判为 `HX`：
@@ -450,6 +456,7 @@ H1 显式关键词口径采用保守规则，优先识别以下显式文本：
     - `wanyu_city_sales_department_position_hit`
     - `weak_signal_management_position_promoted_to_h2`
     - `weak_signal_position_promoted_to_h2`
+    - `org_unit_employee_experience_position_promoted_to_h2`
     - `responsible_hr_hit`
     - `org_path_keyword_hit_only`
     - `roster_not_found`
@@ -537,6 +544,7 @@ WITH roster AS (
 org_attr AS (
     SELECT
         BTRIM("行政组织编码") AS org_code,
+        "组织单位" AS org_unit_name,
         "万御城市营业部" AS wanyu_city_sales_department
     FROM "组织属性查询"
 ),
@@ -565,6 +573,7 @@ base_joined AS (
         r.position_name,
         r.standard_position_name,
         r.org_path_name,
+        o.org_unit_name,
         o.wanyu_city_sales_department,
         rh.employee_no AS responsible_hr_employee_no,
         (SELECT "导入批次号" FROM latest_batch) AS responsible_hr_import_batch_no,
@@ -618,6 +627,9 @@ classified AS (
             WHEN b.is_hr_org_path
              AND COALESCE(b.position_name, '') IN ('运营经理', '运营主管', '数据分析')
               THEN 'H2'
+            WHEN COALESCE(b.org_unit_name, '') = '人力资源与行政服务中心'
+             AND COALESCE(b.position_name, '') LIKE '%员工体验与行政%'
+              THEN 'H2'
             WHEN COALESCE(b.is_responsible_hr, FALSE)
               THEN 'H3'
             WHEN b.is_hr_org_path
@@ -649,6 +661,9 @@ classified AS (
             WHEN b.is_hr_org_path
              AND COALESCE(b.position_name, '') IN ('运营经理', '运营主管', '数据分析')
               THEN 'position_name'
+            WHEN COALESCE(b.org_unit_name, '') = '人力资源与行政服务中心'
+             AND COALESCE(b.position_name, '') LIKE '%员工体验与行政%'
+              THEN 'org_unit_name+position_name'
             WHEN COALESCE(b.is_responsible_hr, FALSE)
               THEN 'responsible_hr_employee_no'
             WHEN b.is_hr_org_path
@@ -680,6 +695,9 @@ classified AS (
             WHEN b.is_hr_org_path
              AND COALESCE(b.position_name, '') IN ('运营经理', '运营主管', '数据分析')
               THEN b.position_name
+            WHEN COALESCE(b.org_unit_name, '') = '人力资源与行政服务中心'
+             AND COALESCE(b.position_name, '') LIKE '%员工体验与行政%'
+              THEN COALESCE(b.org_unit_name, '') || '|' || COALESCE(b.position_name, '')
             WHEN COALESCE(b.is_responsible_hr, FALSE)
               THEN b.employee_no
             WHEN b.is_hr_org_path
@@ -711,6 +729,9 @@ classified AS (
             WHEN b.is_hr_org_path
              AND COALESCE(b.position_name, '') IN ('运营经理', '运营主管', '数据分析')
               THEN 'weak_signal_position_promoted_to_h2'
+            WHEN COALESCE(b.org_unit_name, '') = '人力资源与行政服务中心'
+             AND COALESCE(b.position_name, '') LIKE '%员工体验与行政%'
+              THEN 'org_unit_employee_experience_position_promoted_to_h2'
             WHEN COALESCE(b.is_responsible_hr, FALSE)
               THEN 'responsible_hr_hit'
             WHEN b.is_hr_org_path
@@ -798,12 +819,13 @@ FROM joined;
 - 现阶段无法用申请单样本充分回归验证
 - 方案结论主要建立在全量花名册统计基础上
 
-### 8.2 H2 是白名单提升规则
+### 8.2 H2 是白名单 / 范围提升规则
 当前 H2 不是自然强信号，而是：
 - 从弱信号人群中专项调查
 - 再人工确认提升
+- 部分岗位需要叠加明确组织范围才进入 H2
 
-因此 H2 应保持“小而稳”的白名单特征，不建议一次性扩得过宽。
+因此 H2 应保持“小而稳”的可解释特征，不建议一次性扩得过宽。
 
 ### 8.3 H1 的绩效类职位需要保留组织约束
 当前规则中：
@@ -874,6 +896,7 @@ FROM joined;
 - `department_id` 可关联到 `组织属性查询.org_code`，且 `wanyu_city_sales_department` 非空并且 `职位名称 in ('认证中心负责人', '服务站总站长')` 的人员可识别为 `H1`
 - `组织路径名称` 命中 `HR 组织路径（人力 / 人事 / 组织发展中心 / 组织人才中心）`，且 `职位名称` 属于 `组织与效能资深总监 / 部门负责人 / AI与流程变革资深总监 / 平台与运营资深总监 / 总裁类 / 总经理类` 的人员可识别为 `H2`
 - 弱信号中 `职位名称 in ('运营经理', '运营主管', '数据分析')` 且路径命中 `HR 组织路径` 的人员可识别为 `H2`
+- `department_id` 可关联到 `组织属性查询.org_code`，且 `组织单位 = 人力资源与行政服务中心` 并且 `职位名称` 包含 `员工体验与行政` 的人员可识别为 `H2`
 - 未命中 `H1 / H2`，但命中 `组织列表` 最新责任 HR 集合的人员可识别为 `H3`
 - 仅因 `组织路径名称` 命中 `HR 组织路径`、且未命中 `H3` 的其他弱信号人员识别为 `HY`
 - 其他已匹配人员识别为 `HX`

@@ -206,6 +206,8 @@ APPLICANT_HR_H2_WEAK_SIGNAL_POSITION_WHITELIST = {
     "运营主管",
     "数据分析",
 }
+APPLICANT_HR_H2_SPECIAL_ORG_UNIT = "人力资源与行政服务中心"
+APPLICANT_HR_H2_EMPLOYEE_EXPERIENCE_POSITION_PATTERN = re.compile(r"员工体验与行政")
 APPLICANT_HR_H1_WANYU_POSITION_WHITELIST = {
     "认证中心负责人",
     "服务站总站长",
@@ -413,6 +415,7 @@ class PostgresPermissionStore(_PostgresStoreBase):
         position_name = cls._strip_text(applicant_profile.get("position_name"))
         standard_position_name = cls._strip_text(applicant_profile.get("standard_position_name"))
         org_path_name = cls._strip_text(applicant_profile.get("org_path_name"))
+        org_unit_name = cls._strip_text(applicant_profile.get("org_unit_name"))
         wanyu_city_sales_department = cls._strip_text(applicant_profile.get("wanyu_city_sales_department"))
         employee_name = cls._strip_text(applicant_profile.get("employee_name"))
         is_responsible_hr = bool(applicant_profile.get("is_responsible_hr"))
@@ -480,6 +483,15 @@ class PostgresPermissionStore(_PostgresStoreBase):
             hr_primary_evidence = "position_name"
             hr_primary_value = position_name
             hr_judgement_reason = "weak_signal_position_promoted_to_h2"
+        elif (
+            org_unit_name == APPLICANT_HR_H2_SPECIAL_ORG_UNIT
+            and position_name is not None
+            and APPLICANT_HR_H2_EMPLOYEE_EXPERIENCE_POSITION_PATTERN.search(position_name)
+        ):
+            hr_type = "H2"
+            hr_primary_evidence = "org_unit_name+position_name"
+            hr_primary_value = f"{org_unit_name}|{position_name}"
+            hr_judgement_reason = "org_unit_employee_experience_position_promoted_to_h2"
         elif is_responsible_hr:
             hr_type = "H3"
             hr_primary_evidence = "responsible_hr_employee_no"
@@ -559,6 +571,7 @@ class PostgresPermissionStore(_PostgresStoreBase):
                 "standard_position_name": None,
                 "org_path_name": None,
                 "department_id": None,
+                "org_unit_name": None,
                 "wanyu_city_sales_department": None,
                 "responsible_hr_employee_no": None,
                 "responsible_hr_import_batch_no": None,
@@ -624,26 +637,38 @@ class PostgresPermissionStore(_PostgresStoreBase):
                 if (department_id := self._strip_text(profile.get("department_id"))) is not None
             }
         )
-        org_attr_by_code: dict[str, str | None] = {}
+        org_attr_by_code: dict[str, dict[str, str | None]] = {}
         if (
             department_ids
             and self._table_exists(cursor, "组织属性查询")
             and self._column_exists(cursor, "组织属性查询", "行政组织编码")
-            and self._column_exists(cursor, "组织属性查询", "万御城市营业部")
         ):
-            cursor.execute(
-                """
-                SELECT BTRIM("行政组织编码") AS org_code, "万御城市营业部"
-                FROM "组织属性查询"
-                WHERE BTRIM("行政组织编码") = ANY(%s)
-                """,
-                (department_ids,),
-            )
-            org_attr_by_code = {
-                self._strip_text(row[0]): self._strip_text(row[1])
-                for row in cursor.fetchall()
-                if self._strip_text(row[0]) is not None
-            }
+            has_wanyu_city_sales_department = self._column_exists(cursor, "组织属性查询", "万御城市营业部")
+            has_org_unit_name = self._column_exists(cursor, "组织属性查询", "组织单位")
+            if has_wanyu_city_sales_department or has_org_unit_name:
+                wanyu_city_sales_department_select = (
+                    '"万御城市营业部"' if has_wanyu_city_sales_department else 'NULL::TEXT AS "万御城市营业部"'
+                )
+                org_unit_name_select = '"组织单位"' if has_org_unit_name else 'NULL::TEXT AS "组织单位"'
+                cursor.execute(
+                    f"""
+                    SELECT
+                        BTRIM("行政组织编码") AS org_code,
+                        {wanyu_city_sales_department_select},
+                        {org_unit_name_select}
+                    FROM "组织属性查询"
+                    WHERE BTRIM("行政组织编码") = ANY(%s)
+                    """,
+                    (department_ids,),
+                )
+                org_attr_by_code = {
+                    org_code: {
+                        "wanyu_city_sales_department": self._strip_text(row[1]),
+                        "org_unit_name": self._strip_text(row[2]),
+                    }
+                    for row in cursor.fetchall()
+                    if (org_code := self._strip_text(row[0])) is not None
+                }
 
         responsible_hr_employee_nos: set[str] = set()
         responsible_hr_import_batch_no: str | None = None
@@ -681,7 +706,9 @@ class PostgresPermissionStore(_PostgresStoreBase):
 
         for employee_no, profile in roster_profiles.items():
             department_id = self._strip_text(profile.get("department_id"))
-            profile["wanyu_city_sales_department"] = org_attr_by_code.get(department_id)
+            org_attr = org_attr_by_code.get(department_id, {})
+            profile["wanyu_city_sales_department"] = org_attr.get("wanyu_city_sales_department")
+            profile["org_unit_name"] = org_attr.get("org_unit_name")
             profile["is_responsible_hr"] = employee_no in responsible_hr_employee_nos
             profile["responsible_hr_employee_no"] = employee_no if profile["is_responsible_hr"] else None
             profile["responsible_hr_import_batch_no"] = responsible_hr_import_batch_no if profile["is_responsible_hr"] else None
