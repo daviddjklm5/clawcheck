@@ -71,8 +71,9 @@ class DocumentApprovalFlow:
         todo_trigger = self.page.locator("div[id^='processflexpanelap_']").filter(has_text="待办任务").first
         todo_trigger.wait_for(state="visible", timeout=self.timeout_ms)
         todo_trigger.click(force=True)
-        self.page.locator("#gridview").first.wait_for(state="visible", timeout=self.timeout_ms)
-        self.collector._wait_for_grid_headers(TODO_HEADERS)
+        # Reuse the collect path's todo-list readiness flow so approval can see
+        # the full pending set instead of only the current 10-row page.
+        self.collector._wait_for_todo_list_ready()
 
     def _list_visible_tabs(self) -> list[str]:
         tabs = self.page.evaluate(

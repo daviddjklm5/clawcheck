@@ -49,6 +49,19 @@ class DocumentApprovalFlowTest(unittest.TestCase):
         )
         locator.evaluate.assert_any_call("(el) => el.blur()")
 
+    def test_open_todo_list_ready_reuses_collect_wait_flow(self) -> None:
+        todo_trigger = MagicMock()
+        self.page.locator.return_value.filter.return_value.first = todo_trigger
+        self.flow.collector._wait_for_todo_list_ready = MagicMock()
+
+        self.flow._open_todo_list_ready()
+
+        self.page.locator.assert_called_once_with("div[id^='processflexpanelap_']")
+        self.page.locator.return_value.filter.assert_called_once_with(has_text="待办任务")
+        todo_trigger.wait_for.assert_called_once_with(state="visible", timeout=2000)
+        todo_trigger.click.assert_called_once_with(force=True)
+        self.flow.collector._wait_for_todo_list_ready.assert_called_once_with()
+
 
 if __name__ == "__main__":
     unittest.main()
