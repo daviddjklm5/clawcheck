@@ -148,6 +148,44 @@ class PermissionCollectFlowTest(unittest.TestCase):
         self.assertEqual(document["approval_records"][0]["approver_name"], "何颖")
         self.assertEqual(document["approval_records"][0]["approver_employee_no"], "00769528")
 
+    def test_extract_role_organization_scopes_skips_configured_skip_org_scope_role(self) -> None:
+        flow = PermissionCollectFlow(
+            page=self.page,
+            logger=self.logger,
+            timeout_ms=2000,
+            home_url="https://example.com",
+            skip_org_scope_role_codes={"qbireport"},
+        )
+        detail_rows = [
+            {
+                "line_no": "6",
+                "role_code": "qbireport",
+                "role_name": "QBI报表权限申请",
+                "org_scope_count": None,
+            }
+        ]
+
+        with (
+            patch.object(flow, "_wait_for_permission_detail_grid_ready", return_value={"selector": "#entryentity"}),
+            patch.object(flow, "_wait_for_grid_row_ready"),
+            patch.object(flow, "_wait_for_detail_link_ready") as wait_link,
+        ):
+            scopes = flow.extract_role_organization_scopes("RA-20260316-00020066", detail_rows)
+
+        self.assertEqual(
+            scopes,
+            [
+                {
+                    "line_no": "6",
+                    "role_code": "qbireport",
+                    "role_name": "QBI报表权限申请",
+                    "organization_codes": [],
+                }
+            ],
+        )
+        wait_link.assert_not_called()
+        self.logger.info.assert_called_once()
+
     def test_collect_approval_record_cards_uses_scrollable_tabpage_script(self) -> None:
         self.page.evaluate.return_value = []
 

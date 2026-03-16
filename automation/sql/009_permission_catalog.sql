@@ -135,7 +135,8 @@ WITH seed_data(role_code, role_name, permission_level, sort_order) AS (
         ('WY26', '公司考勤HR', 'W类-取消', 93),
         ('WY75', '（万物云其他军种）调动维护', 'W类-取消', 94),
         ('WY45', '批量电子合同001', 'W类-取消', 95),
-        ('WY72', '（万物云其他军种）离司维护', 'W类-取消', 96)
+        ('WY72', '（万物云其他军种）离司维护', 'W类-取消', 96),
+        ('qbireport', 'QBI报表权限申请', 'C类-常规', 97)
 )
 INSERT INTO "权限列表" (
     "角色编码",
@@ -151,7 +152,7 @@ SELECT
     role_code,
     role_name,
     permission_level,
-    role_code IN ('RLHMD001', 'DTX009') AS "不检查组织范围",
+    role_code IN ('RLHMD001', 'DTX009', 'qbireport') AS "不检查组织范围",
     'manual_seed' AS source_system,
     jsonb_build_object(
         'role_code', role_code,
