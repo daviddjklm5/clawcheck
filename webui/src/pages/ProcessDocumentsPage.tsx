@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useDeferredValue, useEffect, useState } from "react";
 import CloseOutlinedIcon from "@mui/icons-material/CloseOutlined";
 import {
   Alert,
@@ -6,6 +6,7 @@ import {
   Button,
   Drawer,
   IconButton,
+  MenuItem,
   Paper,
   Stack,
   Tab,
@@ -14,6 +15,7 @@ import {
   Typography,
 } from "@mui/material";
 import type { GridColDef, GridRenderCellParams } from "@mui/x-data-grid";
+import { useSearchParams } from "react-router-dom";
 
 import { AppDataGrid } from "../components/AppDataGrid";
 import { KeyValueList } from "../components/KeyValueList";
@@ -79,6 +81,16 @@ const detailTabs: Array<{ value: DetailTab; label: string }> = [
   { value: "orgScopes", label: "目标组织" },
   { value: "approvals", label: "审批记录" },
 ];
+
+const quickConclusionFilters = ["all", "拒绝", "加强审核"] as const;
+
+function isDetailTab(value: string | null): value is DetailTab {
+  return detailTabs.some((item) => item.value === value);
+}
+
+function normalizeText(value: string): string {
+  return value.trim().toLowerCase();
+}
 
 function formatScoreLabel(score: number | null | undefined): string {
   if (typeof score !== "number" || Number.isNaN(score)) {
@@ -203,19 +215,28 @@ const riskColumns: GridColDef<RiskDetailRow>[] = [
 ];
 
 export function ProcessDocumentsPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [workbench, setWorkbench] = useState<ProcessWorkbench | null>(null);
   const [detail, setDetail] = useState<ProcessDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
-  const [selectedDocumentNo, setSelectedDocumentNo] = useState("");
-  const [detailDrawerOpen, setDetailDrawerOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<DetailTab>("summary");
   const [approvalOpinion, setApprovalOpinion] = useState("同意");
   const [approvalSubmittingMode, setApprovalSubmittingMode] = useState<"approve" | "dryRun" | null>(null);
   const [approvalResult, setApprovalResult] = useState<ProcessApprovalResponse | null>(null);
   const [approvalError, setApprovalError] = useState<string | null>(null);
+  const [refreshVersion, setRefreshVersion] = useState(0);
+
+  const queryText = searchParams.get("q") ?? "";
+  const deferredQueryText = useDeferredValue(queryText);
+  const conclusionFilter = searchParams.get("conclusion") ?? "all";
+  const statusFilter = searchParams.get("status") ?? "all";
+  const selectedDocumentNo = searchParams.get("documentNo") ?? "";
+  const detailDrawerOpen = selectedDocumentNo !== "";
+  const activeTab: DetailTab = isDetailTab(searchParams.get("tab"))
+    ? (searchParams.get("tab") as DetailTab)
+    : "summary";
 
   const workbenchStats = workbench?.stats ?? [];
   const workbenchDocuments = workbench?.documents ?? [];
@@ -230,6 +251,53 @@ export function ProcessDocumentsPage() {
   const detailRoles = detail?.roles ?? [];
   const detailOrgScopes = detail?.orgScopes ?? [];
   const detailApprovals = detail?.approvals ?? [];
+
+  const normalizedQueryText = normalizeText(deferredQueryText);
+  const statusOptions = Array.from(
+    new Set(workbenchDocuments.map((item) => item.documentStatus).filter((item) => Boolean(item))),
+  );
+  const filteredDocuments = workbenchDocuments.filter((item) => {
+    if (conclusionFilter !== "all" && item.summaryConclusionLabel !== conclusionFilter) {
+      return false;
+    }
+    if (statusFilter !== "all" && item.documentStatus !== statusFilter) {
+      return false;
+    }
+    if (!normalizedQueryText) {
+      return true;
+    }
+
+    return normalizeText(
+      [
+        item.documentNo,
+        item.applicantName,
+        item.applicantNo,
+        item.permissionTarget,
+        item.department,
+        item.summaryConclusionLabel,
+      ].join(" "),
+    ).includes(normalizedQueryText);
+  });
+  const hasActiveFilters = Boolean(queryText || conclusionFilter !== "all" || statusFilter !== "all");
+
+  function updateSearchParams(
+    updates: Record<string, string | null>,
+    options: { replace?: boolean } = {},
+  ) {
+    const nextParams = new URLSearchParams(searchParams);
+
+    for (const [key, value] of Object.entries(updates)) {
+      if (value === null || value === "" || value === "all") {
+        nextParams.delete(key);
+      } else {
+        nextParams.set(key, value);
+      }
+    }
+
+    if (nextParams.toString() !== searchParams.toString()) {
+      setSearchParams(nextParams, { replace: options.replace ?? true });
+    }
+  }
 
   useEffect(() => {
     let active = true;
@@ -266,7 +334,17 @@ export function ProcessDocumentsPage() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [refreshVersion]);
+
+  useEffect(() => {
+    if (!selectedDocumentNo || !workbench) {
+      return;
+    }
+
+    if (!workbench.documents.some((item) => item.documentNo === selectedDocumentNo)) {
+      updateSearchParams({ documentNo: null, tab: null }, { replace: true });
+    }
+  }, [selectedDocumentNo, workbench]);
 
   useEffect(() => {
     if (!detailDrawerOpen || !selectedDocumentNo) {
@@ -313,7 +391,7 @@ export function ProcessDocumentsPage() {
     return () => {
       active = false;
     };
-  }, [detailDrawerOpen, selectedDocumentNo]);
+  }, [detailDrawerOpen, selectedDocumentNo, refreshVersion]);
 
   useEffect(() => {
     setApprovalOpinion("同意");
@@ -323,13 +401,23 @@ export function ProcessDocumentsPage() {
   }, [selectedDocumentNo]);
 
   function openDetail(documentNo: string) {
-    setSelectedDocumentNo(documentNo);
-    setActiveTab("summary");
-    setDetailDrawerOpen(true);
+    updateSearchParams(
+      {
+        documentNo,
+        tab: "summary",
+      },
+      { replace: false },
+    );
   }
 
   function closeDetail() {
-    setDetailDrawerOpen(false);
+    updateSearchParams(
+      {
+        documentNo: null,
+        tab: null,
+      },
+      { replace: false },
+    );
   }
 
   async function runApproval(dryRun: boolean) {
@@ -454,13 +542,110 @@ export function ProcessDocumentsPage() {
 
       {error ? <Alert severity="error">{error}</Alert> : null}
 
+      <Paper
+        elevation={0}
+        sx={{
+          p: 2,
+          border: "1px solid",
+          borderColor: "divider",
+          backgroundColor: "rgba(255,255,255,0.84)",
+        }}
+      >
+        <Stack spacing={2}>
+          <Stack direction={{ xs: "column", xl: "row" }} spacing={1.5} alignItems={{ xl: "center" }}>
+            <TextField
+              label="查询单据"
+              placeholder="单据编号 / 申请人 / 工号 / 权限对象 / 部门"
+              value={queryText}
+              onChange={(event) => updateSearchParams({ q: event.target.value }, { replace: true })}
+              size="small"
+              sx={{ minWidth: { xs: "100%", xl: 360 } }}
+            />
+            <TextField
+              select
+              label="单据状态"
+              value={statusFilter}
+              onChange={(event) => updateSearchParams({ status: event.target.value }, { replace: true })}
+              size="small"
+              sx={{ minWidth: { xs: "100%", sm: 180 } }}
+            >
+              <MenuItem value="all">全部状态</MenuItem>
+              {statusOptions.map((item) => (
+                <MenuItem key={item} value={item}>
+                  {item}
+                </MenuItem>
+              ))}
+            </TextField>
+            <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap" }}>
+              {quickConclusionFilters.map((item) => {
+                const selected = conclusionFilter === item || (item === "all" && conclusionFilter === "all");
+                const label = item === "all" ? "全部结论" : item;
+                return (
+                  <Button
+                    key={item}
+                    variant={selected ? "contained" : "outlined"}
+                    disableElevation
+                    size="small"
+                    onClick={() => updateSearchParams({ conclusion: item }, { replace: true })}
+                    sx={{ textTransform: "none" }}
+                  >
+                    {label}
+                  </Button>
+                );
+              })}
+            </Stack>
+            <Stack direction="row" spacing={1}>
+              <Button
+                variant="outlined"
+                size="small"
+                onClick={() => setRefreshVersion((currentValue) => currentValue + 1)}
+              >
+                刷新
+              </Button>
+              <Button
+                variant="text"
+                size="small"
+                disabled={!hasActiveFilters}
+                onClick={() =>
+                  updateSearchParams(
+                    {
+                      q: null,
+                      conclusion: null,
+                      status: null,
+                    },
+                    { replace: true },
+                  )
+                }
+              >
+                重置筛选
+              </Button>
+            </Stack>
+          </Stack>
+
+          <Stack
+            direction={{ xs: "column", md: "row" }}
+            justifyContent="space-between"
+            alignItems={{ xs: "flex-start", md: "center" }}
+            spacing={1}
+          >
+            <Typography variant="body2" color="text.secondary">
+              当前结果 {filteredDocuments.length} / {workbenchDocuments.length} 项
+              {hasActiveFilters ? "，已按工具栏条件过滤" : "，当前未设置额外筛选"}
+            </Typography>
+            <Typography variant="caption" color="text.secondary">
+              当前筛选条件与抽屉状态会同步到 URL，刷新页面后可恢复上下文。
+            </Typography>
+          </Stack>
+        </Stack>
+      </Paper>
+
       <AppDataGrid<ProcessDocumentRow>
         title="待处理单据列表"
         subtitle="默认每页 20 项，仅点击单据编号打开右侧详情抽屉；关闭抽屉后保留列表上下文。"
-        rows={workbenchDocuments}
+        rows={filteredDocuments}
         columns={documentColumns}
         loading={loading}
-        rowCount={workbenchDocuments.length}
+        rowCount={filteredDocuments.length}
         minHeight={MAIN_GRID_HEIGHT}
         pageSizeOptions={[20, 50, 100]}
         initialState={{
@@ -582,7 +767,7 @@ export function ProcessDocumentsPage() {
 
             <Tabs
               value={activeTab}
-              onChange={(_, value: DetailTab) => setActiveTab(value)}
+              onChange={(_, value: DetailTab) => updateSearchParams({ tab: value }, { replace: true })}
               variant="scrollable"
               allowScrollButtonsMobile
               sx={{
