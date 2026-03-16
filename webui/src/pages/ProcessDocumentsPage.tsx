@@ -45,9 +45,9 @@ type DetailTab =
   | "orgScopes"
   | "approvals";
 
-const MAIN_GRID_PAGE_SIZE = 20;
-const DETAIL_GRID_PAGE_SIZE = 20;
-const MAIN_GRID_HEIGHT = 1180;
+const MAIN_GRID_PAGE_SIZE = 10;
+const DETAIL_GRID_PAGE_SIZE = 10;
+const MAIN_GRID_HEIGHT = 760;
 const DETAIL_GRID_HEIGHT = 920;
 
 const documentStatusTone: Record<string, Tone> = {
@@ -641,13 +641,13 @@ export function ProcessDocumentsPage() {
 
       <AppDataGrid<ProcessDocumentRow>
         title="待处理单据列表"
-        subtitle="默认每页 20 项，仅点击单据编号打开右侧详情抽屉；关闭抽屉后保留列表上下文。"
+        subtitle="默认每页 10 项，仅点击单据编号打开右侧详情抽屉；关闭抽屉后保留列表上下文。"
         rows={filteredDocuments}
         columns={documentColumns}
         loading={loading}
         rowCount={filteredDocuments.length}
         minHeight={MAIN_GRID_HEIGHT}
-        pageSizeOptions={[20, 50, 100]}
+        pageSizeOptions={[10, 20, 50, 100]}
         initialState={{
           sorting: {
             sortModel: [{ field: "finalScore", sort: "asc" }],
@@ -995,7 +995,7 @@ export function ProcessDocumentsPage() {
                 loading={detailLoading}
                 rowCount={detailRiskDetails.length}
                 minHeight={DETAIL_GRID_HEIGHT}
-                pageSizeOptions={[20, 50]}
+                pageSizeOptions={[10, 20, 50]}
                 initialState={{
                   pagination: {
                     paginationModel: {
@@ -1016,7 +1016,7 @@ export function ProcessDocumentsPage() {
                 loading={detailLoading}
                 rowCount={detailRoles.length}
                 minHeight={DETAIL_GRID_HEIGHT}
-                pageSizeOptions={[20, 50]}
+                pageSizeOptions={[10, 20, 50]}
                 initialState={{
                   pagination: {
                     paginationModel: {
@@ -1037,7 +1037,7 @@ export function ProcessDocumentsPage() {
                 loading={detailLoading}
                 rowCount={detailOrgScopes.length}
                 minHeight={DETAIL_GRID_HEIGHT}
-                pageSizeOptions={[20, 50]}
+                pageSizeOptions={[10, 20, 50]}
                 initialState={{
                   pagination: {
                     paginationModel: {
@@ -1058,7 +1058,7 @@ export function ProcessDocumentsPage() {
                 loading={detailLoading}
                 rowCount={detailApprovals.length}
                 minHeight={DETAIL_GRID_HEIGHT}
-                pageSizeOptions={[20, 50]}
+                pageSizeOptions={[10, 20, 50]}
                 initialState={{
                   pagination: {
                     paginationModel: {
