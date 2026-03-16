@@ -889,7 +889,13 @@ class PermissionCollectFlow:
 
     def _wait_for_todo_list_ready(self) -> None:
         self.page.locator("#gridview").first.wait_for(state="visible", timeout=self.timeout_ms)
-        self._ensure_todo_page_size(1000)
+        try:
+            self._ensure_todo_page_size(1000)
+        except PlaywrightTimeoutError as exc:
+            self.logger.warning(
+                "Todo page size selector not ready, continue with current pagination: %s",
+                exc,
+            )
         self._wait_for_grid_headers(TODO_HEADERS)
 
     def _remember_current_document_tab(self, document_no: str) -> None:

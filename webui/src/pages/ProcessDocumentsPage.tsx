@@ -2,10 +2,12 @@ import { useEffect, useState } from "react";
 import {
   Alert,
   Box,
+  Button,
   Paper,
   Stack,
   Tab,
   Tabs,
+  TextField,
   Typography,
 } from "@mui/material";
 import type { GridColDef, GridRowParams } from "@mui/x-data-grid";
@@ -20,6 +22,7 @@ import type {
   ApprovalRow,
   DistributionSection,
   OrgScopeRow,
+  ProcessApprovalResponse,
   ProcessDashboard,
   ProcessDetail,
   ProcessDocumentRow,
@@ -29,7 +32,7 @@ import type {
   Tone,
 } from "../types/dashboard";
 
-type DetailTab = "overview" | "lowScoreDetails" | "roles" | "orgScopes" | "approvals";
+type DetailTab = "overview" | "approvalAction" | "lowScoreDetails" | "roles" | "orgScopes" | "approvals";
 
 const documentStatusTone: Record<string, Tone> = {
   已提交: "warning",
@@ -246,7 +249,8 @@ const executionLogColumns: GridColDef<ProcessExecutionLogRow>[] = [
 ];
 
 const detailTabs: Array<{ value: DetailTab; label: string }> = [
-  { value: "overview", label: "聚合反馈" },
+  { value: "overview", label: "风险总览" },
+  { value: "approvalAction", label: "审批单据" },
   { value: "lowScoreDetails", label: "原始低分明细" },
   { value: "roles", label: "申请角色" },
   { value: "orgScopes", label: "目标组织" },
@@ -290,9 +294,15 @@ export function ProcessDocumentsPage() {
   const [detailError, setDetailError] = useState<string | null>(null);
   const [selectedDocumentNo, setSelectedDocumentNo] = useState("");
   const [activeTab, setActiveTab] = useState<DetailTab>("overview");
+  const [approvalOpinion, setApprovalOpinion] = useState("同意");
+  const [approvalSubmittingMode, setApprovalSubmittingMode] = useState<"approve" | "dryRun" | null>(null);
+  const [approvalResult, setApprovalResult] = useState<ProcessApprovalResponse | null>(null);
+  const [approvalError, setApprovalError] = useState<string | null>(null);
 
   const dashboardStats = dashboard?.stats ?? [];
   const dashboardDocuments = dashboard?.documents ?? [];
+  const selectedDocumentRow =
+    dashboardDocuments.find((item) => item.documentNo === selectedDocumentNo) ?? null;
   const dashboardDistributionSections = dashboard?.distributionSections ?? [];
   const dashboardExecutionLogs = dashboard?.executionLogs ?? [];
   const detailOverviewFields = detail?.overviewFields ?? [];
@@ -398,11 +408,47 @@ export function ProcessDocumentsPage() {
     };
   }, [selectedDocumentNo]);
 
+  useEffect(() => {
+    setApprovalOpinion("同意");
+    setApprovalResult(null);
+    setApprovalError(null);
+    setApprovalSubmittingMode(null);
+  }, [selectedDocumentNo]);
+
+  async function runApproval(dryRun: boolean) {
+    if (!selectedDocumentNo) {
+      return;
+    }
+
+    const opinion = approvalOpinion.trim();
+    if (!opinion) {
+      setApprovalError("请先填写审批意见，再执行审批。");
+      setApprovalResult(null);
+      return;
+    }
+
+    try {
+      setApprovalSubmittingMode(dryRun ? "dryRun" : "approve");
+      setApprovalError(null);
+      setApprovalResult(null);
+      const response = await dashboardApi.approveProcessDocument(selectedDocumentNo, {
+        action: "approve",
+        approvalOpinion: opinion,
+        dryRun,
+      });
+      setApprovalResult(response);
+    } catch (approvalLoadError) {
+      setApprovalError(approvalLoadError instanceof Error ? approvalLoadError.message : "审批执行失败");
+    } finally {
+      setApprovalSubmittingMode(null);
+    }
+  }
+
   return (
     <Stack spacing={3}>
       <Box>
         <Typography variant="body1">
-          当前处理单据页直接读取 PostgreSQL 最新评估批次，默认按 `104` 方案展示聚合反馈摘要，并保留原始低分明细、批次分布与最近执行日志。
+          当前处理单据页直接读取 PostgreSQL 最新评估批次，默认按 `104` 方案展示风险总览，并保留审批单据、原始低分明细、批次分布与最近执行日志。
         </Typography>
       </Box>
 
@@ -465,7 +511,7 @@ export function ProcessDocumentsPage() {
               {selectedDocumentNo ? `单据详情：${selectedDocumentNo}` : "单据详情"}
             </Typography>
             <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 2 }}>
-              右侧详情默认按 `104` 方案展示聚合反馈，并保留原始低分明细、申请角色、目标组织、审批记录四类联查信息。
+              右侧详情默认按 `104` 方案展示风险总览，并补充审批单据、原始低分明细、申请角色、目标组织、审批记录联查信息。
             </Typography>
 
             <Tabs
@@ -520,7 +566,7 @@ export function ProcessDocumentsPage() {
           ) : null}
 
           {detail && activeTab === "overview" ? (
-            <SectionCard title="聚合反馈" subtitle="默认按 104 方案聚合展示风险摘要，避免把角色 x 组织展开条数误读为风险点数量。">
+            <SectionCard title="风险总览" subtitle="默认按 104 方案聚合展示风险摘要，避免把角色 x 组织展开条数误读为风险点数量。">
               <Stack spacing={2}>
                 <Box
                   sx={{
@@ -603,6 +649,86 @@ export function ProcessDocumentsPage() {
                     • {item}
                   </Typography>
                 ))}
+              </Stack>
+            </SectionCard>
+          ) : null}
+
+          {activeTab === "approvalAction" ? (
+            <SectionCard title="审批单据" subtitle="第一阶段仅开放批准动作；前端“批准”会映射到 EHR 的“同意 + 提交”。">
+              <Stack spacing={2}>
+                <Alert severity="warning">
+                  本操作会真实写回 EHR。当前实现会自动打开目标单据的 `任务处理`，将 `审批决策` 设为 `同意`，把下方审批意见写入 EHR 后点击 `提交`。
+                </Alert>
+
+                <KeyValueList
+                  items={[
+                    { label: "单据编号", value: selectedDocumentNo || "-", hint: "当前将对该单据执行审批动作。" },
+                    { label: "权限对象", value: selectedDocumentRow?.permissionTarget ?? "-", hint: "来自处理单据主表。" },
+                    {
+                      label: "当前总结论",
+                      value: selectedDocumentRow?.summaryConclusionLabel ?? "-",
+                      hint: "展示层沿用 104 方案结论文案。",
+                    },
+                    {
+                      label: "建议动作",
+                      value: selectedDocumentRow?.suggestedActionLabel ?? "-",
+                      hint: "仅作参考，不自动替代真实审批动作。",
+                    },
+                    { label: "EHR 审批决策", value: "同意", hint: "后端执行时固定选择该决策值。" },
+                    { label: "EHR 执行按钮", value: "提交", hint: "EHR 实页执行按钮文案。前端按钮文案仍显示“批准”。" },
+                  ]}
+                />
+
+                <TextField
+                  label="审批意见"
+                  multiline
+                  minRows={4}
+                  value={approvalOpinion}
+                  onChange={(event) => setApprovalOpinion(event.target.value)}
+                  disabled={!selectedDocumentNo || approvalSubmittingMode !== null}
+                  placeholder="请输入要带到 EHR 的审批意见。"
+                />
+
+                <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5}>
+                  <Button
+                    variant="contained"
+                    disableElevation
+                    disabled={!selectedDocumentNo || approvalSubmittingMode !== null || !approvalOpinion.trim()}
+                    onClick={() => void runApproval(false)}
+                  >
+                    {approvalSubmittingMode === "approve" ? "批准中..." : "批准"}
+                  </Button>
+                  <Button
+                    variant="outlined"
+                    disabled={!selectedDocumentNo || approvalSubmittingMode !== null || !approvalOpinion.trim()}
+                    onClick={() => void runApproval(true)}
+                  >
+                    {approvalSubmittingMode === "dryRun" ? "验证中..." : "验证连通性（dry-run）"}
+                  </Button>
+                </Stack>
+
+                {approvalError ? <Alert severity="error">{approvalError}</Alert> : null}
+
+                {approvalResult ? (
+                  <Stack spacing={1.5}>
+                    <Alert severity={approvalResult.dryRun ? "info" : "success"}>{approvalResult.message}</Alert>
+                    <KeyValueList
+                      items={[
+                        { label: "执行状态", value: approvalResult.status, hint: approvalResult.dryRun ? "当前只做连通性验证，不点击提交。" : "已按返回结果完成执行。" },
+                        { label: "开始时间", value: approvalResult.startedAt || "-", hint: "后端开始执行审批的时间。" },
+                        { label: "结束时间", value: approvalResult.finishedAt || "-", hint: "后端完成执行或返回结果的时间。" },
+                        { label: "EHR 决策", value: approvalResult.ehrDecision || "-", hint: "当前固定为“同意”。" },
+                        { label: "EHR 提交按钮", value: approvalResult.ehrSubmitLabel || "-", hint: "实际点击的 EHR 页面按钮文案。" },
+                        { label: "日志文件", value: approvalResult.logFile || "-", hint: "审批执行 JSON 日志，可用于排障。" },
+                        {
+                          label: "异常截图",
+                          value: approvalResult.screenshotFile || "-",
+                          hint: approvalResult.screenshotFile ? "失败时自动抓取。" : "本次执行未产生异常截图。",
+                        },
+                      ]}
+                    />
+                  </Stack>
+                ) : null}
               </Stack>
             </SectionCard>
           ) : null}

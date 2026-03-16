@@ -1,12 +1,22 @@
 from __future__ import annotations
 
 from datetime import datetime
+import json
+import logging
+import os
 from pathlib import Path
+import traceback
 import re
 from typing import Any
 
+from playwright.sync_api import sync_playwright
+
 from automation.api.config_summary import REPO_ROOT, _load_runtime_settings
 from automation.db.postgres import PostgresRiskTrustStore
+from automation.flows.document_approval_flow import DocumentApprovalFlow
+from automation.pages.home_page import HomePage
+from automation.pages.login_page import LoginPage
+from automation.utils.config_loader import load_local_auth, load_selectors
 
 _BATCH_NO_PATTERN = re.compile(r'"assessment_batch_no"\s*:\s*"([^"]+)"')
 _VERSION_PATTERN = re.compile(r'"assessment_version"\s*:\s*"([^"]+)"')
@@ -14,6 +24,9 @@ _DOCUMENT_COUNT_PATTERN = re.compile(r'"document_count"\s*:\s*(\d+)')
 _DETAIL_COUNT_PATTERN = re.compile(r'"detail_count"\s*:\s*(\d+)')
 _DOCUMENT_NO_PATTERN = re.compile(r'"document_no"\s*:\s*"([^"]+)"')
 _AUDIT_LOG_FILENAME_PATTERN = re.compile(r"audit_(\d{8})_(\d{6})$")
+DEFAULT_CREDENTIALS_PATH = REPO_ROOT / "automation/config/credentials.local.yaml"
+PROD_CREDENTIALS_PATH = REPO_ROOT / "automation/config/credentials.prod.local.yaml"
+SELECTORS_PATH = REPO_ROOT / "automation/config/selectors.yaml"
 
 
 def _to_repo_relative(path: Path) -> str:
@@ -28,6 +41,26 @@ def _resolve_runtime_path(raw_path: str) -> Path:
     if path.is_absolute():
         return path
     return REPO_ROOT / path
+
+
+def _resolve_credentials_path(settings_path: Path) -> Path:
+    if settings_path.name.endswith(".prod.yaml"):
+        return PROD_CREDENTIALS_PATH
+    return DEFAULT_CREDENTIALS_PATH
+
+
+def _apply_runtime_auth(settings_path: Path, settings) -> Path:
+    credentials_path = _resolve_credentials_path(settings_path)
+    if credentials_path.exists():
+        local_auth = load_local_auth(credentials_path)
+        if local_auth.get("username"):
+            settings.auth.username = local_auth["username"]
+        if local_auth.get("password"):
+            settings.auth.password = local_auth["password"]
+
+    settings.auth.username = os.getenv("IERP_USERNAME", settings.auth.username)
+    settings.auth.password = os.getenv("IERP_PASSWORD", settings.auth.password)
+    return credentials_path
 
 
 def _extract_audit_log_summary(path: Path) -> dict[str, Any] | None:
@@ -93,3 +126,195 @@ def get_process_document_detail(document_no: str, assessment_batch_no: str | Non
         document_no=document_no,
         assessment_batch_no=assessment_batch_no,
     )
+
+
+def approve_process_document(
+    document_no: str,
+    action: str,
+    approval_opinion: str,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    if action != "approve":
+        raise ValueError(f"暂不支持审批动作 {action!r}，当前仅支持 'approve'")
+
+    settings_path, settings = _load_runtime_settings()
+    credentials_path = _apply_runtime_auth(settings_path, settings)
+    selectors = load_selectors(SELECTORS_PATH)
+    logs_dir = _resolve_runtime_path(settings.runtime.logs_dir)
+    screenshots_dir = _resolve_runtime_path(settings.runtime.screenshots_dir)
+    state_file = _resolve_runtime_path(settings.runtime.state_file)
+
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    screenshots_dir.mkdir(parents=True, exist_ok=True)
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+
+    started_at = datetime.now()
+    timestamp_slug = started_at.strftime("%Y%m%d_%H%M%S")
+    safe_document_no = re.sub(r"[^A-Za-z0-9._-]+", "_", document_no).strip("_") or "document"
+    log_path = logs_dir / f"approval_{timestamp_slug}_{safe_document_no}.json"
+    screenshot_path = screenshots_dir / f"approval_error_{timestamp_slug}_{safe_document_no}.png"
+
+    execution_log: dict[str, Any] = {
+        "request": {
+            "documentNo": document_no,
+            "action": action,
+            "approvalOpinion": approval_opinion,
+            "dryRun": dry_run,
+        },
+        "runtime": {
+            "settingsFile": _to_repo_relative(settings_path),
+            "credentialsFile": _to_repo_relative(credentials_path),
+            "selectorsFile": _to_repo_relative(SELECTORS_PATH),
+            "stateFile": _to_repo_relative(state_file),
+        },
+        "events": [],
+    }
+
+    def add_event(message: str, **extra: Any) -> None:
+        event = {
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "message": message,
+        }
+        if extra:
+            event.update(extra)
+        execution_log["events"].append(event)
+
+    page = None
+    browser = None
+    context = None
+    response_payload = {
+        "documentNo": document_no,
+        "action": action,
+        "ehrDecision": "同意",
+        "ehrSubmitLabel": "提交",
+        "approvalOpinion": approval_opinion,
+        "dryRun": dry_run,
+        "status": "running",
+        "startedAt": started_at.strftime("%Y-%m-%d %H:%M:%S"),
+        "finishedAt": "",
+        "logFile": _to_repo_relative(log_path),
+        "screenshotFile": "",
+        "message": "",
+    }
+    logger = logging.getLogger("approval_api")
+
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(
+                headless=not settings.browser.headed,
+                slow_mo=settings.browser.slow_mo_ms,
+            )
+            context_kwargs: dict[str, Any] = {
+                "ignore_https_errors": settings.browser.ignore_https_errors,
+                "viewport": {"width": 1600, "height": 960},
+                "accept_downloads": False,
+            }
+            if state_file.exists():
+                context_kwargs["storage_state"] = str(state_file)
+
+            context = browser.new_context(**context_kwargs)
+            context.set_default_timeout(settings.browser.timeout_ms)
+            context.set_default_navigation_timeout(settings.browser.navigation_timeout_ms)
+            page = context.new_page()
+
+            home_page = HomePage(
+                home_url=settings.app.home_url,
+                page=page,
+                selectors=selectors,
+                logger=logger,
+                timeout_ms=settings.browser.timeout_ms,
+            )
+            login_page = LoginPage(
+                home_url=settings.app.home_url,
+                page=page,
+                selectors=selectors,
+                logger=logger,
+                timeout_ms=settings.browser.timeout_ms,
+            )
+            approval_flow = DocumentApprovalFlow(
+                page=page,
+                logger=logger,
+                timeout_ms=settings.browser.timeout_ms,
+                home_url=settings.app.home_url,
+            )
+
+            add_event("open_home_page", homeUrl=settings.app.home_url)
+            home_page.open()
+            try:
+                home_page.wait_ready()
+                add_event("home_ready")
+            except Exception as exc:  # noqa: BLE001
+                add_event("home_ready_probe_failed", error=str(exc))
+
+            if not login_page.is_logged_in():
+                if not settings.auth.username.strip() or not settings.auth.password.strip():
+                    raise RuntimeError("当前登录态失效，且未配置可用账号密码，无法执行审批。")
+                add_event("login_required")
+                login_page.login(
+                    username=settings.auth.username.strip(),
+                    password=settings.auth.password.strip(),
+                    require_manual_captcha=False,
+                )
+                context.storage_state(path=str(state_file))
+                add_event("login_refreshed", stateFile=_to_repo_relative(state_file))
+            else:
+                add_event("reuse_existing_login_state")
+
+            flow_result = approval_flow.execute_approve(
+                document_no=document_no,
+                approval_opinion=approval_opinion,
+                dry_run=dry_run,
+            )
+            add_event("approval_flow_finished", result=flow_result)
+
+            response_payload["ehrSubmitLabel"] = str(flow_result.get("submitLabel") or "提交")
+            response_payload["status"] = "succeeded"
+            response_payload["finishedAt"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            response_payload["message"] = (
+                "已完成 EHR 写入验证，未点击提交。"
+                if dry_run
+                else "EHR 已完成同意并提交。"
+            )
+            execution_log["result"] = flow_result
+            execution_log["response"] = response_payload
+    except Exception as exc:  # noqa: BLE001
+        response_payload["status"] = "failed"
+        response_payload["finishedAt"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        response_payload["message"] = (
+            f"审批执行失败：{exc}。详见 {response_payload['logFile']}"
+        )
+        if page is not None:
+            try:
+                page.screenshot(path=str(screenshot_path), full_page=True)
+                response_payload["screenshotFile"] = _to_repo_relative(screenshot_path)
+            except Exception as screenshot_exc:  # noqa: BLE001
+                add_event("screenshot_failed", error=str(screenshot_exc))
+
+        execution_log["error"] = {
+            "type": type(exc).__name__,
+            "message": str(exc),
+            "traceback": traceback.format_exc(),
+        }
+        execution_log["response"] = response_payload
+        log_path.write_text(
+            json.dumps(execution_log, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        raise RuntimeError(response_payload["message"]) from exc
+    finally:
+        if context is not None:
+            try:
+                context.close()
+            except Exception:  # noqa: BLE001
+                pass
+        if browser is not None:
+            try:
+                browser.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+    log_path.write_text(
+        json.dumps(execution_log, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return response_payload

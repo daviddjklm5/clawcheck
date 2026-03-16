@@ -4,6 +4,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from automation.flows.permission_collect_flow import PermissionCollectFlow
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 
 class PermissionCollectFlowTest(unittest.TestCase):
@@ -180,6 +181,32 @@ class PermissionCollectFlowTest(unittest.TestCase):
         self.assertEqual(normalized[0]["approver_name"], "何颖(00769528)")
         self.assertEqual(normalized[0]["approval_time"], "2026-03-12 09:42:23")
         self.assertEqual(normalized[1]["approval_time"], "2026-03-13 15:46:49")
+
+    def test_wait_for_todo_list_ready_continues_without_page_size_selector(self) -> None:
+        grid_collection = MagicMock()
+        grid_locator = MagicMock()
+        grid_collection.first = grid_locator
+
+        def locator_side_effect(selector: str):
+            if selector == "#gridview":
+                return grid_collection
+            raise AssertionError(f"unexpected selector: {selector}")
+
+        self.page.locator.side_effect = locator_side_effect
+
+        with (
+            patch.object(
+                self.flow,
+                "_ensure_todo_page_size",
+                side_effect=PlaywrightTimeoutError("page size missing"),
+            ),
+            patch.object(self.flow, "_wait_for_grid_headers") as wait_headers,
+        ):
+            self.flow._wait_for_todo_list_ready()
+
+        grid_locator.wait_for.assert_called_once_with(state="visible", timeout=2000)
+        wait_headers.assert_called_once()
+        self.logger.warning.assert_called_once()
 
 
 if __name__ == "__main__":

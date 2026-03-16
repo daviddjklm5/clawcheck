@@ -165,6 +165,27 @@ export interface ProcessDetail {
   notes: string[];
 }
 
+export interface ProcessApprovalRequest {
+  action: "approve";
+  approvalOpinion: string;
+  dryRun: boolean;
+}
+
+export interface ProcessApprovalResponse {
+  documentNo: string;
+  action: string;
+  ehrDecision: string;
+  ehrSubmitLabel: string;
+  approvalOpinion: string;
+  dryRun: boolean;
+  status: string;
+  startedAt: string;
+  finishedAt: string;
+  logFile: string;
+  screenshotFile: string;
+  message: string;
+}
+
 export interface DistributionItem {
   id: string;
   label: string;
