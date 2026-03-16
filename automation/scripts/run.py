@@ -41,6 +41,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--create", action="store_true", help="Enable create/save action in workflow run")
     parser.add_argument("--submit", action="store_true", help="Enable final submit action in workflow run")
     parser.add_argument("--document-no", default="", help="Specific permission document number to collect")
+    parser.add_argument(
+        "--document-nos",
+        default="",
+        help="Comma-separated permission document numbers for audit action",
+    )
     parser.add_argument("--limit", type=int, default=1, help="Maximum number of permission documents to collect")
     parser.add_argument("--dry-run", action="store_true", help="Collect data without writing PostgreSQL")
     parser.add_argument("--dump-json", default="", help="Optional JSON dump path for collected payload")
@@ -75,6 +80,19 @@ def resolve_path(path_str: str) -> Path:
     if path.is_absolute():
         return path
     return REPO_ROOT / path
+
+
+def normalize_document_nos(document_no: str, document_nos_arg: str) -> list[str]:
+    ordered: list[str] = []
+    seen: set[str] = set()
+
+    for raw_value in [document_no, *document_nos_arg.split(",")]:
+        normalized = raw_value.strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        ordered.append(normalized)
+    return ordered
 
 
 def resolve_runtime_paths(args: argparse.Namespace) -> tuple[Path, Path, Path]:
@@ -263,11 +281,13 @@ def main() -> int:
         from automation.rules import RiskTrustEvaluator, load_risk_trust_package
 
         try:
+            target_document_nos = normalize_document_nos(args.document_no, args.document_nos)
             config_dir = REPO_ROOT / "automation" / "config" / "rules"
             package = load_risk_trust_package(config_dir)
             store = PostgresRiskTrustStore(settings.db)
             bundles = store.fetch_document_bundles(
-                document_no=args.document_no.strip() or None,
+                document_no=target_document_nos[0] if len(target_document_nos) == 1 else None,
+                document_nos=target_document_nos if target_document_nos else None,
                 limit=args.limit,
             )
             assessment_batch_no = f"audit_{datetime.now().strftime('%Y%m%d_%H%M%S')}"

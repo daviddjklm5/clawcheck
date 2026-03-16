@@ -112,6 +112,7 @@ export interface CollectRunRequest {
   documentNo: string;
   limit: number;
   dryRun: boolean;
+  autoAudit: boolean;
 }
 
 export interface CollectRunSummary {
@@ -129,6 +130,11 @@ export interface CollectRunSummary {
   skippedCount: number;
   failedCount: number;
   message: string;
+  autoAudit: boolean;
+  auditStatus: string;
+  auditBatchNo: string;
+  auditMessage: string;
+  auditLogFile: string;
   dumpFile: string;
   skippedDumpFile: string;
   failedDumpFile: string;
@@ -240,6 +246,34 @@ export interface ProcessApprovalRequest {
   action: "approve";
   approvalOpinion: string;
   dryRun: boolean;
+}
+
+export interface ProcessAuditRunRequest {
+  documentNo: string;
+  documentNos: string[];
+  limit: number;
+  dryRun: boolean;
+}
+
+export interface ProcessAuditRunSummary {
+  id: string;
+  taskId: string;
+  status: string;
+  requestedAt: string;
+  startedAt: string;
+  finishedAt: string;
+  requestedDocumentNos: string[];
+  requestedLimit: number;
+  dryRun: boolean;
+  documentCount: number;
+  detailCount: number;
+  assessmentBatchNo: string;
+  assessmentVersion: string;
+  message: string;
+  dumpFile: string;
+  summaryFile: string;
+  logFile: string;
+  outputTail: string;
 }
 
 export interface ProcessApprovalResponse {

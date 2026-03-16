@@ -194,9 +194,13 @@ export function CollectDocumentsPage() {
   const [runDocumentNo, setRunDocumentNo] = useState("");
   const [runLimit, setRunLimit] = useState("10");
   const [runDryRun, setRunDryRun] = useState(false);
+  const [runAutoAudit, setRunAutoAudit] = useState(true);
   const [runSubmitting, setRunSubmitting] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
   const [runNotice, setRunNotice] = useState<string | null>(null);
+  const [auditSubmitting, setAuditSubmitting] = useState(false);
+  const [auditError, setAuditError] = useState<string | null>(null);
+  const [auditNotice, setAuditNotice] = useState<string | null>(null);
 
   const queryText = searchParams.get("q") ?? "";
   const deferredQueryText = useDeferredValue(queryText);
@@ -396,6 +400,7 @@ export function CollectDocumentsPage() {
         documentNo: normalizedDocumentNo,
         limit: normalizedDocumentNo ? 1 : parsedLimit,
         dryRun: runDryRun,
+        autoAudit: runDryRun ? false : runAutoAudit,
       });
 
       setRunNotice(result.message || "采集任务已提交。");
@@ -404,6 +409,29 @@ export function CollectDocumentsPage() {
       setRunError(submitError instanceof Error ? submitError.message : "启动采集任务失败");
     } finally {
       setRunSubmitting(false);
+    }
+  }
+
+  async function triggerAudit(documentNo: string) {
+    const normalizedDocumentNo = documentNo.trim();
+    if (!normalizedDocumentNo) {
+      return;
+    }
+    try {
+      setAuditSubmitting(true);
+      setAuditError(null);
+      setAuditNotice(null);
+      const result = await dashboardApi.startProcessAuditTask({
+        documentNo: normalizedDocumentNo,
+        documentNos: [],
+        limit: 1,
+        dryRun: false,
+      });
+      setAuditNotice(result.message || "评估任务已提交。");
+    } catch (submitError) {
+      setAuditError(submitError instanceof Error ? submitError.message : "启动评估任务失败");
+    } finally {
+      setAuditSubmitting(false);
     }
   }
 
@@ -456,7 +484,9 @@ export function CollectDocumentsPage() {
 
       {error ? <Alert severity="error">{error}</Alert> : null}
       {runError ? <Alert severity="error">{runError}</Alert> : null}
+      {auditError ? <Alert severity="error">{auditError}</Alert> : null}
       {runNotice ? <Alert severity="success">{runNotice}</Alert> : null}
+      {auditNotice ? <Alert severity="success">{auditNotice}</Alert> : null}
 
       <Box
         sx={{
@@ -523,6 +553,17 @@ export function CollectDocumentsPage() {
             <FormControlLabel
               control={<Switch checked={runDryRun} onChange={(event) => setRunDryRun(event.target.checked)} />}
               label="仅验证不落库"
+              sx={{ ml: 0 }}
+            />
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={runAutoAudit}
+                  onChange={(event) => setRunAutoAudit(event.target.checked)}
+                  disabled={runDryRun}
+                />
+              }
+              label="采集后自动评估"
               sx={{ ml: 0 }}
             />
             <Stack direction="row" spacing={1}>
@@ -603,6 +644,12 @@ export function CollectDocumentsPage() {
                       开始 {currentTask.startedAt || currentTask.requestedAt}，成功 {currentTask.successCount} 张，跳过{" "}
                       {currentTask.skippedCount} 张，失败 {currentTask.failedCount} 张。
                     </Typography>
+                    {currentTask.auditStatus ? (
+                      <Typography variant="caption" color="text.secondary">
+                        增量评估 {currentTask.auditStatus === "succeeded" ? "已完成" : currentTask.auditStatus}，
+                        批次 {currentTask.auditBatchNo || "-"}。
+                      </Typography>
+                    ) : null}
                   </>
                 ) : (
                   <Typography variant="body2" color="text.secondary">
@@ -640,6 +687,12 @@ export function CollectDocumentsPage() {
                     <Typography variant="caption" color="text.secondary">
                       dump: {workbench.recentRuns[0].dumpFile || "-"}
                     </Typography>
+                    {workbench.recentRuns[0].auditStatus ? (
+                      <Typography variant="caption" color="text.secondary">
+                        增量评估 {workbench.recentRuns[0].auditStatus === "succeeded" ? "已完成" : workbench.recentRuns[0].auditStatus}
+                        ，批次 {workbench.recentRuns[0].auditBatchNo || "-"}。
+                      </Typography>
+                    ) : null}
                   </>
                 ) : (
                   <Typography variant="body2" color="text.secondary">
@@ -796,6 +849,14 @@ export function CollectDocumentsPage() {
                 onClick={() => void triggerCollect({ documentNo: selectedDocumentNo, limit: 1 })}
               >
                 {runSubmitting ? "提交中..." : "重新采集当前单据"}
+              </Button>
+              <Button
+                variant="outlined"
+                size="small"
+                disabled={!selectedDocumentNo || auditSubmitting}
+                onClick={() => void triggerAudit(selectedDocumentNo)}
+              >
+                {auditSubmitting ? "提交中..." : "评估当前单据"}
               </Button>
             </Stack>
 

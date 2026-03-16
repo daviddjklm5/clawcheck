@@ -2001,7 +2001,7 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                     "tone": "info",
                 },
                 {
-                    "label": "最新评估批次",
+                    "label": "最近评估批次",
                     "value": "-",
                     "hint": "执行 `python automation/scripts/run.py audit` 后会显示最新批次。",
                     "tone": "default",
@@ -2018,42 +2018,48 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
 
     def _build_process_workbench_stats(
         self,
-        *,
-        latest_batch_no: str,
-        batch_summary: dict[str, Any],
-        distribution_sections: list[dict[str, Any]],
+        summary_rows: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
-        reject_count = next(
-            (item["count"] for item in distribution_sections[0]["items"] if item["label"] == "拒绝"),
-            0,
-        ) if distribution_sections else 0
-        manual_review_count = next(
-            (item["count"] for item in distribution_sections[0]["items"] if item["label"] == "人工干预"),
-            0,
-        ) if distribution_sections else 0
+        reject_count = sum(1 for row in summary_rows if row["summary_conclusion"] == "拒绝")
+        manual_review_count = sum(1 for row in summary_rows if row["summary_conclusion"] == "人工干预")
+        latest_row = (
+            max(
+                summary_rows,
+                key=lambda row: (
+                    row["assessed_at"] or datetime.min,
+                    row["assessment_batch_no"] or "",
+                    row["document_no"] or "",
+                ),
+            )
+            if summary_rows
+            else None
+        )
+        latest_batch_no = latest_row["assessment_batch_no"] if latest_row is not None else "-"
+        latest_version = latest_row["assessment_version"] if latest_row is not None else "-"
+        latest_assessed_at = self._format_datetime_value(latest_row["assessed_at"]) if latest_row is not None else "-"
         return [
             {
                 "label": "待处理单据",
-                "value": str(batch_summary["documentCount"]),
-                "hint": "来自最新已落库评估批次的单据数。",
-                "tone": "warning" if batch_summary["documentCount"] else "info",
+                "value": str(len(summary_rows)),
+                "hint": "来自逐单最新评估结果快照的单据数。",
+                "tone": "warning" if summary_rows else "info",
             },
             {
                 "label": "拒绝",
                 "value": str(reject_count),
-                "hint": "最新批次中总结论为“拒绝”的单据数。",
+                "hint": "逐单最新结果中总结论为“拒绝”的单据数。",
                 "tone": "danger" if reject_count else "success",
             },
             {
                 "label": display_summary_conclusion("人工干预"),
                 "value": str(manual_review_count),
-                "hint": "需要加强审核的单据数。",
+                "hint": "逐单最新结果中需要加强审核的单据数。",
                 "tone": "warning" if manual_review_count else "success",
             },
             {
-                "label": "最新评估批次",
+                "label": "最近评估批次",
                 "value": latest_batch_no,
-                "hint": f"评估版本 {batch_summary['assessmentVersion']}，评估时间 {batch_summary['assessedAt']}。",
+                "hint": f"来自逐单最新结果中的最近一次评估写入，版本 {latest_version}，评估时间 {latest_assessed_at}。",
                 "tone": "default",
             },
         ]
@@ -2084,20 +2090,12 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
         self.ensure_table()
         with self.connect() as connection:
             with connection.cursor() as cursor:
-                latest_batch_no = self._fetch_latest_assessment_batch_no(cursor)
-                if latest_batch_no is None:
+                summary_rows = self._fetch_latest_process_summary_rows(cursor)
+                if not summary_rows:
                     return self._empty_process_workbench()
 
-                batch_summary = self._fetch_process_batch_summary(cursor, latest_batch_no)
-                summary_rows = self._fetch_process_summary_rows(cursor, latest_batch_no)
-                distribution_sections = self._fetch_process_distribution_sections(cursor, latest_batch_no)
-
         return {
-            "stats": self._build_process_workbench_stats(
-                latest_batch_no=latest_batch_no,
-                batch_summary=batch_summary,
-                distribution_sections=distribution_sections,
-            ),
+            "stats": self._build_process_workbench_stats(summary_rows),
             "documents": self._build_process_document_rows(summary_rows),
         }
 
@@ -2140,14 +2138,21 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
         self.ensure_table()
         with self.connect() as connection:
             with connection.cursor() as cursor:
-                batch_no = self._strip_text(assessment_batch_no) or self._fetch_latest_assessment_batch_no(cursor)
+                batch_no = self._strip_text(assessment_batch_no)
                 if batch_no is None:
-                    return None
-                summary_rows = self._fetch_process_summary_rows(
-                    cursor,
-                    batch_no,
-                    document_no=normalized_document_no,
-                )
+                    summary_rows = self._fetch_latest_process_summary_rows(
+                        cursor,
+                        document_no=normalized_document_no,
+                    )
+                    if not summary_rows:
+                        return None
+                    batch_no = self._strip_text(summary_rows[0]["assessment_batch_no"])
+                else:
+                    summary_rows = self._fetch_process_summary_rows(
+                        cursor,
+                        batch_no,
+                        document_no=normalized_document_no,
+                    )
                 if not summary_rows:
                     return None
                 summary_row = summary_rows[0]
@@ -2320,14 +2325,28 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
     def fetch_document_bundles(
         self,
         document_no: str | None = None,
+        document_nos: Iterable[str] | None = None,
         limit: int = 0,
     ) -> list[dict[str, Any]]:
         normalized_document_no = self._strip_text(document_no)
+        normalized_document_nos: list[str] = []
+        seen_document_nos: set[str] = set()
+        for value in document_nos or []:
+            normalized = self._strip_text(value)
+            if normalized is None or normalized in seen_document_nos:
+                continue
+            seen_document_nos.add(normalized)
+            normalized_document_nos.append(normalized)
         query_limit = max(limit, 0)
 
         with self.connect() as connection:
             with connection.cursor() as cursor:
-                basic_rows = self._fetch_basic_info_rows(cursor, normalized_document_no, query_limit)
+                basic_rows = self._fetch_basic_info_rows(
+                    cursor,
+                    normalized_document_no,
+                    query_limit,
+                    document_nos=normalized_document_nos,
+                )
                 if not basic_rows:
                     return []
 
@@ -2467,7 +2486,21 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                 self._insert_assessment_summary_rows(cursor, normalized_summary_rows)
                 self._insert_assessment_detail_rows(cursor, normalized_detail_rows)
 
-    def _fetch_basic_info_rows(self, cursor, document_no: str | None, limit: int) -> list[dict[str, Any]]:
+    def _fetch_basic_info_rows(
+        self,
+        cursor,
+        document_no: str | None,
+        limit: int,
+        document_nos: Iterable[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        normalized_document_nos: list[str] = []
+        seen_document_nos: set[str] = set()
+        for value in document_nos or []:
+            normalized = self._strip_text(value)
+            if normalized is None or normalized in seen_document_nos:
+                continue
+            seen_document_nos.add(normalized)
+            normalized_document_nos.append(normalized)
         sql = f"""
             SELECT
                 {self._quote_identifier(BASIC_INFO_COLUMNS["document_no"])},
@@ -2486,15 +2519,31 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
             FROM {BASIC_INFO_TABLE}
         """
         params: list[Any] = []
-        if document_no is not None:
+        if normalized_document_nos:
+            sql += f" WHERE {self._quote_identifier(BASIC_INFO_COLUMNS['document_no'])} = ANY(%s)"
+            params.append(normalized_document_nos)
+            sql += (
+                f" ORDER BY ARRAY_POSITION(%s::varchar[], {self._quote_identifier(BASIC_INFO_COLUMNS['document_no'])}),"
+                f" {self._quote_identifier(BASIC_INFO_COLUMNS['latest_approval_time'])} DESC NULLS LAST,"
+                f" {self._quote_identifier(BASIC_INFO_COLUMNS['apply_time'])} DESC NULLS LAST,"
+                f" {self._quote_identifier(BASIC_INFO_COLUMNS['document_no'])}"
+            )
+            params.append(normalized_document_nos)
+        elif document_no is not None:
             sql += f" WHERE {self._quote_identifier(BASIC_INFO_COLUMNS['document_no'])} = %s"
             params.append(document_no)
-        sql += (
-            f" ORDER BY {self._quote_identifier(BASIC_INFO_COLUMNS['latest_approval_time'])} DESC NULLS LAST,"
-            f" {self._quote_identifier(BASIC_INFO_COLUMNS['apply_time'])} DESC NULLS LAST,"
-            f" {self._quote_identifier(BASIC_INFO_COLUMNS['document_no'])}"
-        )
-        if limit > 0:
+            sql += (
+                f" ORDER BY {self._quote_identifier(BASIC_INFO_COLUMNS['latest_approval_time'])} DESC NULLS LAST,"
+                f" {self._quote_identifier(BASIC_INFO_COLUMNS['apply_time'])} DESC NULLS LAST,"
+                f" {self._quote_identifier(BASIC_INFO_COLUMNS['document_no'])}"
+            )
+        else:
+            sql += (
+                f" ORDER BY {self._quote_identifier(BASIC_INFO_COLUMNS['latest_approval_time'])} DESC NULLS LAST,"
+                f" {self._quote_identifier(BASIC_INFO_COLUMNS['apply_time'])} DESC NULLS LAST,"
+                f" {self._quote_identifier(BASIC_INFO_COLUMNS['document_no'])}"
+            )
+        if limit > 0 and not normalized_document_nos:
             sql += " LIMIT %s"
             params.append(limit)
         cursor.execute(sql, params)
@@ -2838,6 +2887,119 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
             WHERE assessment.{self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["assessment_batch_no"])} = %s
         """
         params: list[Any] = [assessment_batch_no]
+        if document_no is not None:
+            sql += (
+                f" AND assessment.{self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS['document_no'])} = %s"
+            )
+            params.append(document_no)
+        sql += f"""
+            ORDER BY assessment.{self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["final_score"])} ASC,
+                     assessment.{self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["low_score_detail_count"])} DESC,
+                     basic.{self._quote_identifier(BASIC_INFO_COLUMNS["latest_approval_time"])} DESC NULLS LAST,
+                     basic.{self._quote_identifier(BASIC_INFO_COLUMNS["document_no"])}
+        """
+        cursor.execute(sql, params)
+        rows = cursor.fetchall()
+        return [
+            {
+                "document_no": self._strip_text(row[0]),
+                "employee_no": self._strip_text(row[1]),
+                "applicant_name": self._strip_text(row[2]),
+                "level1_function_name": self._strip_text(row[3]),
+                "applicant_position_name": self._strip_text(row[4]),
+                "permission_target": self._strip_text(row[5]),
+                "document_status": self._strip_text(row[6]),
+                "company_name": self._strip_text(row[7]),
+                "department_name": self._strip_text(row[8]),
+                "position_name": self._strip_text(row[9]),
+                "apply_time": row[10],
+                "latest_approval_time": row[11],
+                "applicant_org_unit_name": self._strip_text(row[12]),
+                "assessment_batch_no": self._strip_text(row[13]),
+                "assessment_version": self._strip_text(row[14]),
+                "applicant_hr_type": self._strip_text(row[15]),
+                "applicant_process_level_category": self._strip_text(row[16]),
+                "final_score": self._format_score_value(row[17]),
+                "summary_conclusion": self._strip_text(row[18]),
+                "suggested_action": self._strip_text(row[19]),
+                "lowest_hit_dimension": self._strip_text(row[20]),
+                "lowest_hit_role_code": self._strip_text(row[21]),
+                "lowest_hit_org_code": self._strip_text(row[22]),
+                "hit_manual_review": bool(row[23]),
+                "has_low_score_details": bool(row[24]),
+                "low_score_detail_count": row[25],
+                "low_score_detail_conclusion": self._strip_text(row[26]),
+                "assessment_explain": self._strip_text(row[27]),
+                "assessed_at": row[28],
+                "applicant_identity_label": self._applicant_identity_label(
+                    hr_type=self._strip_text(row[15]),
+                    position_name=self._strip_text(row[4]) or self._strip_text(row[9]),
+                    level1_function_name=self._strip_text(row[3]),
+                ),
+            }
+            for row in rows
+            if self._strip_text(row[0]) is not None
+        ]
+
+    def _fetch_latest_process_summary_rows(
+        self,
+        cursor,
+        document_no: str | None = None,
+    ) -> list[dict[str, Any]]:
+        sql = f"""
+            WITH latest_assessment AS (
+                SELECT
+                    assessment.*,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY assessment.{self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["document_no"])}
+                        ORDER BY assessment.{self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["assessed_at"])} DESC,
+                                 assessment.{self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["id"])} DESC
+                    ) AS rn
+                FROM {RISK_TRUST_ASSESSMENT_TABLE} AS assessment
+            )
+            SELECT
+                assessment.{self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["document_no"])},
+                basic.{self._quote_identifier(BASIC_INFO_COLUMNS["employee_no"])},
+                person.{self._quote_identifier(PERSON_ATTRIBUTES_COLUMNS["employee_name"])},
+                person.{self._quote_identifier(PERSON_ATTRIBUTES_COLUMNS["level1_function_name"])},
+                person.{self._quote_identifier(PERSON_ATTRIBUTES_COLUMNS["position_name"])},
+                basic.{self._quote_identifier(BASIC_INFO_COLUMNS["permission_target"])},
+                basic.{self._quote_identifier(BASIC_INFO_COLUMNS["document_status"])},
+                basic.{self._quote_identifier(BASIC_INFO_COLUMNS["company_name"])},
+                basic.{self._quote_identifier(BASIC_INFO_COLUMNS["department_name"])},
+                basic.{self._quote_identifier(BASIC_INFO_COLUMNS["position_name"])},
+                basic.{self._quote_identifier(BASIC_INFO_COLUMNS["apply_time"])},
+                basic.{self._quote_identifier(BASIC_INFO_COLUMNS["latest_approval_time"])},
+                applicant_org.{self._quote_identifier(ORG_ATTRIBUTE_COLUMNS["org_unit_name"])},
+                assessment.{self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["assessment_batch_no"])},
+                assessment.{self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["assessment_version"])},
+                assessment.{self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["applicant_hr_type"])},
+                assessment.{self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["applicant_process_level_category"])},
+                assessment.{self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["final_score"])},
+                assessment.{self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["summary_conclusion"])},
+                assessment.{self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["suggested_action"])},
+                assessment.{self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["lowest_hit_dimension"])},
+                assessment.{self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["lowest_hit_role_code"])},
+                assessment.{self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["lowest_hit_org_code"])},
+                assessment.{self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["hit_manual_review"])},
+                assessment.{self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["has_low_score_details"])},
+                assessment.{self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["low_score_detail_count"])},
+                assessment.{self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["low_score_detail_conclusion"])},
+                assessment.{self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["assessment_explain"])},
+                assessment.{self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["assessed_at"])}
+            FROM latest_assessment AS assessment
+            INNER JOIN {BASIC_INFO_TABLE} AS basic
+                ON basic.{self._quote_identifier(BASIC_INFO_COLUMNS["document_no"])} =
+                   assessment.{self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["document_no"])}
+            LEFT JOIN {PERSON_ATTRIBUTES_TABLE} AS person
+                ON person.{self._quote_identifier(PERSON_ATTRIBUTES_COLUMNS["employee_no"])} =
+                   basic.{self._quote_identifier(BASIC_INFO_COLUMNS["employee_no"])}
+            LEFT JOIN "组织属性查询" AS applicant_org
+                ON applicant_org.{self._quote_identifier(ORG_ATTRIBUTE_COLUMNS["org_code"])} =
+                   person.{self._quote_identifier(PERSON_ATTRIBUTES_COLUMNS["department_id"])}
+            WHERE assessment.rn = 1
+        """
+        params: list[Any] = []
         if document_no is not None:
             sql += (
                 f" AND assessment.{self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS['document_no'])} = %s"

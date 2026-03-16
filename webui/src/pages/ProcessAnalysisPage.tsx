@@ -174,7 +174,7 @@ export function ProcessAnalysisPage() {
       {error ? <Alert severity="error">{error}</Alert> : null}
 
       {dashboard?.latestBatch ? (
-        <SectionCard title="最新评估批次" subtitle="处理单据工作台当前默认读取该批次。">
+        <SectionCard title="最新评估批次" subtitle="该页面保留批次视角；处理单据工作台已切换为逐单最新结果视角。">
           <KeyValueList
             items={[
               { label: "批次号", value: dashboard.latestBatch.batchNo, hint: "来自评估总表最新批次。" },

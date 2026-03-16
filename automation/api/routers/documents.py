@@ -8,6 +8,7 @@ from automation.api.collect_workbench import (
     get_collect_workbench,
     start_collect_task,
 )
+from automation.api.audit_workbench import start_audit_task
 from automation.api.process_dashboard import (
     approve_process_document,
     get_process_analysis_dashboard,
@@ -32,6 +33,16 @@ class CollectRunRequest(BaseModel):
 
     documentNo: str = ""
     limit: int = Field(default=10, ge=1)
+    dryRun: bool = False
+    autoAudit: bool = True
+
+
+class ProcessAuditRunRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    documentNo: str = ""
+    documentNos: list[str] = Field(default_factory=list)
+    limit: int = Field(default=0, ge=0)
     dryRun: bool = False
 
 
@@ -60,6 +71,7 @@ def post_collect_workbench_run(payload: CollectRunRequest) -> dict[str, object]:
             document_no=payload.documentNo,
             limit=payload.limit,
             dry_run=payload.dryRun,
+            auto_audit=payload.autoAudit,
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -106,6 +118,19 @@ def get_process_workbench_document(
     if detail is None:
         raise HTTPException(status_code=404, detail=f"未找到单据 {document_no} 的评估详情")
     return detail
+
+
+@router.post("/process-workbench/audit")
+def post_process_workbench_audit(payload: ProcessAuditRunRequest) -> dict[str, object]:
+    try:
+        return start_audit_task(
+            document_no=payload.documentNo,
+            document_nos=payload.documentNos,
+            limit=payload.limit,
+            dry_run=payload.dryRun,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/process-dashboard/{document_no}/approval")

@@ -10,10 +10,12 @@ from automation.api.routers.documents import (
     get_collect_workbench_document,
     get_collect_workbench_documents,
     ProcessDocumentApprovalRequest,
+    ProcessAuditRunRequest,
     post_collect_workbench_run,
     get_process_analysis,
     get_process_workbench_document,
     get_process_workbench_documents,
+    post_process_workbench_audit,
     post_process_workbench_document_approval,
 )
 
@@ -42,12 +44,18 @@ class DocumentsRouterTest(unittest.TestCase):
             "status": "queued",
             "message": "采集任务已创建，等待执行。",
         }
-        request = CollectRunRequest(documentNo="RA-TEST-001", limit=1, dryRun=True)
+        request = CollectRunRequest(documentNo="RA-TEST-001", limit=1, dryRun=True, autoAudit=False)
 
-        with patch("automation.api.routers.documents.start_collect_task", return_value=payload):
+        with patch("automation.api.routers.documents.start_collect_task", return_value=payload) as mocked_start:
             result = post_collect_workbench_run(request)
 
         self.assertEqual(result, payload)
+        mocked_start.assert_called_once_with(
+            document_no="RA-TEST-001",
+            limit=1,
+            dry_run=True,
+            auto_audit=False,
+        )
 
     def test_get_process_workbench_documents_returns_payload(self) -> None:
         payload = {"stats": [], "documents": []}
@@ -72,6 +80,30 @@ class DocumentsRouterTest(unittest.TestCase):
 
         self.assertEqual(context.exception.status_code, 404)
         self.assertEqual(context.exception.detail, "未找到单据 RA-TEST-001 的评估详情")
+
+    def test_post_process_workbench_audit_forwards_document_nos(self) -> None:
+        payload = {
+            "taskId": "audit-001",
+            "status": "queued",
+            "requestedDocumentNos": ["RA-TEST-001", "RA-TEST-002"],
+        }
+        request = ProcessAuditRunRequest(
+            documentNo="RA-TEST-001",
+            documentNos=["RA-TEST-002"],
+            limit=2,
+            dryRun=False,
+        )
+
+        with patch("automation.api.routers.documents.start_audit_task", return_value=payload) as mocked_start:
+            result = post_process_workbench_audit(request)
+
+        self.assertEqual(result, payload)
+        mocked_start.assert_called_once_with(
+            document_no="RA-TEST-001",
+            document_nos=["RA-TEST-002"],
+            limit=2,
+            dry_run=False,
+        )
 
     def test_post_process_workbench_document_approval_returns_payload(self) -> None:
         payload = {

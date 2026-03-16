@@ -5,6 +5,8 @@ import type {
   CollectWorkbench,
   MasterDataDashboard,
   ProcessAnalysisDashboard,
+  ProcessAuditRunRequest,
+  ProcessAuditRunSummary,
   ProcessApprovalRequest,
   ProcessApprovalResponse,
   ProcessDetail,
@@ -123,6 +125,12 @@ export const dashboardApi = {
           "审批请求超过 120 秒未返回，后端可能卡在 EHR 窗口。请检查弹出的 EHR 浏览器，并查看 automation/logs 下最新 approval_*.json。",
       },
     );
+  },
+  startProcessAuditTask(payload: ProcessAuditRunRequest): Promise<ProcessAuditRunSummary> {
+    return request<ProcessAuditRunSummary>("/documents/process-workbench/audit", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
   },
   getRuntimeSettings(): Promise<RuntimeSettingsSummary> {
     return request<RuntimeSettingsSummary>("/settings/runtime");

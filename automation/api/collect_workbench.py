@@ -11,6 +11,7 @@ from typing import Any
 from uuid import uuid4
 
 from automation.api.config_summary import REPO_ROOT, _load_runtime_settings
+from automation.api.audit_workbench import run_audit_now
 from automation.db.postgres import PostgresPermissionStore
 
 _LOG_FILE_PATTERN = re.compile(r"Log file:\s*(.+)")
@@ -50,11 +51,16 @@ def _task_to_payload(task: dict[str, Any]) -> dict[str, Any]:
         "requestedDocumentNo": task.get("requestedDocumentNo", ""),
         "requestedLimit": int(task.get("requestedLimit") or 0),
         "dryRun": bool(task.get("dryRun")),
+        "autoAudit": bool(task.get("autoAudit")),
         "requestedCount": int(task.get("requestedCount") or 0),
         "successCount": int(task.get("successCount") or 0),
         "skippedCount": int(task.get("skippedCount") or 0),
         "failedCount": int(task.get("failedCount") or 0),
         "message": str(task.get("message") or ""),
+        "auditStatus": str(task.get("auditStatus") or ""),
+        "auditBatchNo": str(task.get("auditBatchNo") or ""),
+        "auditMessage": str(task.get("auditMessage") or ""),
+        "auditLogFile": str(task.get("auditLogFile") or ""),
         "dumpFile": str(task.get("dumpFile") or ""),
         "skippedDumpFile": str(task.get("skippedDumpFile") or ""),
         "failedDumpFile": str(task.get("failedDumpFile") or ""),
@@ -88,6 +94,25 @@ def _extract_log_file(output_text: str) -> str:
         return ""
     log_path = Path(matches[-1].strip())
     return _to_repo_relative(log_path)
+
+
+def _extract_collected_document_nos(payload: Any) -> list[str]:
+    if not isinstance(payload, list):
+        return []
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for row in payload:
+        if not isinstance(row, dict):
+            continue
+        basic_info = row.get("basic_info")
+        if not isinstance(basic_info, dict):
+            continue
+        document_no = str(basic_info.get("document_no") or "").strip()
+        if not document_no or document_no in seen:
+            continue
+        seen.add(document_no)
+        ordered.append(document_no)
+    return ordered
 
 
 def _build_task_message(
@@ -174,12 +199,14 @@ def _run_collect_task(task_id: str) -> None:
         output_tail = combined_output[-4000:] if combined_output else ""
         success_payload = _load_json_file(dump_path)
         success_count = len(success_payload) if isinstance(success_payload, list) else 0
+        success_document_nos = _extract_collected_document_nos(success_payload)
         skipped_count = _count_from_sidecar(skipped_dump_path, "skipped_count")
         failed_count = _count_from_sidecar(failed_dump_path, "failed_count")
         requested_count = max(
             success_count + skipped_count + failed_count,
             1 if task["requestedDocumentNo"] else int(task["requestedLimit"]),
         )
+        audit_result: dict[str, Any] | None = None
 
         if process.returncode != 0:
             status = "failed"
@@ -203,6 +230,23 @@ def _run_collect_task(task_id: str) -> None:
                 dry_run=bool(task["dryRun"]),
             )
 
+        if (
+            process.returncode == 0
+            and success_document_nos
+            and bool(task.get("autoAudit"))
+            and not bool(task["dryRun"])
+        ):
+            audit_result = run_audit_now(
+                document_nos=success_document_nos,
+                limit=len(success_document_nos),
+                dry_run=False,
+            )
+            if audit_result["status"] != "succeeded":
+                status = "partial"
+                message = f"{message}；增量评估失败：{audit_result['message']}"
+            else:
+                message = f"{message}；已完成增量评估，批次 {audit_result['assessmentBatchNo']}"
+
         with _TASK_LOCK:
             task = _TASK_STATE_BY_ID[task_id]
             task["status"] = status
@@ -214,6 +258,10 @@ def _run_collect_task(task_id: str) -> None:
             task["message"] = message
             task["logFile"] = _extract_log_file(combined_output)
             task["outputTail"] = output_tail
+            task["auditStatus"] = str(audit_result.get("status") or "") if audit_result is not None else ""
+            task["auditBatchNo"] = str(audit_result.get("assessmentBatchNo") or "") if audit_result is not None else ""
+            task["auditMessage"] = str(audit_result.get("message") or "") if audit_result is not None else ""
+            task["auditLogFile"] = str(audit_result.get("logFile") or "") if audit_result is not None else ""
             _persist_task_snapshot(task_id)
     except Exception as exc:  # noqa: BLE001
         with _TASK_LOCK:
@@ -266,6 +314,7 @@ def start_collect_task(
     document_no: str | None = None,
     limit: int = 10,
     dry_run: bool = False,
+    auto_audit: bool = True,
 ) -> dict[str, Any]:
     normalized_document_no = (document_no or "").strip()
     normalized_limit = 1 if normalized_document_no else max(int(limit or 0), 1)
@@ -287,11 +336,16 @@ def start_collect_task(
         "requestedDocumentNo": normalized_document_no,
         "requestedLimit": normalized_limit,
         "dryRun": bool(dry_run),
+        "autoAudit": bool(auto_audit),
         "requestedCount": 0,
         "successCount": 0,
         "skippedCount": 0,
         "failedCount": 0,
         "message": "采集任务已创建，等待执行。",
+        "auditStatus": "",
+        "auditBatchNo": "",
+        "auditMessage": "",
+        "auditLogFile": "",
         "dumpFile": _to_repo_relative(dump_file_path),
         "skippedDumpFile": _to_repo_relative(
             dump_file_path.with_name(f"{dump_file_path.stem}_skipped{dump_file_path.suffix}")

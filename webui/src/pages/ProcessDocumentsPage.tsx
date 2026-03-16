@@ -374,7 +374,7 @@ export function ProcessDocumentsPage() {
               ? Number((loadError as { status?: number }).status)
               : undefined;
           if (status === 404) {
-            setDetailError(`当前评估批次未返回单据 ${selectedDocumentNo} 的详情。请确认该单据已完成评估并成功落库。`);
+            setDetailError(`当前未找到单据 ${selectedDocumentNo} 的评估详情。请确认该单据已完成评估并成功落库。`);
           } else {
             setDetailError(loadError instanceof Error ? loadError.message : "加载单据详情失败");
           }
