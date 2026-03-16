@@ -11,12 +11,14 @@ from automation.api.routers.documents import (
     get_collect_workbench_documents,
     ProcessDocumentApprovalRequest,
     ProcessAuditRunRequest,
+    ProcessTodoSyncRequest,
     post_collect_workbench_run,
     get_process_analysis,
     get_process_workbench_document,
     get_process_workbench_documents,
     post_process_workbench_audit,
     post_process_workbench_document_approval,
+    post_process_workbench_todo_sync,
 )
 
 
@@ -122,6 +124,21 @@ class DocumentsRouterTest(unittest.TestCase):
             result = post_process_workbench_document_approval("RA-TEST-001", request)
 
         self.assertEqual(result, payload)
+
+    def test_post_process_workbench_todo_sync_returns_payload(self) -> None:
+        payload = {
+            "taskId": "sync-001",
+            "status": "succeeded",
+            "processedCount": 3,
+            "message": "待办状态同步完成",
+        }
+        request = ProcessTodoSyncRequest(dryRun=False)
+
+        with patch("automation.api.routers.documents.run_process_todo_sync_now", return_value=payload) as mocked_sync:
+            result = post_process_workbench_todo_sync(request)
+
+        self.assertEqual(result, payload)
+        mocked_sync.assert_called_once_with(dry_run=False)
 
 
 if __name__ == "__main__":

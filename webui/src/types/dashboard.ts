@@ -158,6 +158,8 @@ export interface ProcessDocumentRow {
   permissionTarget: string;
   department: string;
   documentStatus: string;
+  todoProcessStatus: string;
+  todoStatusUpdatedAt: string;
   finalScore: number;
   summaryConclusion: string;
   summaryConclusionLabel: string;
@@ -289,6 +291,29 @@ export interface ProcessApprovalResponse {
   logFile: string;
   screenshotFile: string;
   message: string;
+}
+
+export interface ProcessTodoSyncRequest {
+  dryRun: boolean;
+}
+
+export interface ProcessTodoSyncResponse {
+  taskId: string;
+  status: string;
+  dryRun: boolean;
+  startedAt: string;
+  finishedAt: string;
+  projectDocumentCount: number;
+  ehrTodoCount: number;
+  pendingCount: number;
+  processedCount: number;
+  changedCount: number;
+  unchangedCount: number;
+  extraEhrTodoCount: number;
+  message: string;
+  dumpFile: string;
+  logFile: string;
+  outputTail: string;
 }
 
 export interface DistributionItem {

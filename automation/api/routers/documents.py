@@ -16,6 +16,7 @@ from automation.api.process_dashboard import (
     get_process_document_detail,
     get_process_workbench,
 )
+from automation.api.process_todo_sync import run_process_todo_sync_now
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
@@ -25,6 +26,12 @@ class ProcessDocumentApprovalRequest(BaseModel):
 
     action: str = "approve"
     approvalOpinion: str = ""
+    dryRun: bool = False
+
+
+class ProcessTodoSyncRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     dryRun: bool = False
 
 
@@ -165,5 +172,15 @@ def post_process_workbench_document_approval(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/process-workbench/todo-sync")
+def post_process_workbench_todo_sync(
+    payload: ProcessTodoSyncRequest,
+) -> dict[str, object]:
+    try:
+        return run_process_todo_sync_now(dry_run=payload.dryRun)
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc

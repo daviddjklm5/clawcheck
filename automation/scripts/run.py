@@ -19,14 +19,25 @@ DEFAULT_CREDENTIALS_PATH = "automation/config/credentials.local.yaml"
 DEFAULT_SELECTORS_PATH = "automation/config/selectors.yaml"
 PROD_CONFIG_PATH = "automation/config/settings.prod.yaml"
 PROD_CREDENTIALS_PATH = "automation/config/credentials.prod.local.yaml"
-PROD_DEFAULT_ACTIONS = {"check", "login", "run", "collect", "roster", "orglist", "rolecatalog", "dbinit", "audit"}
+PROD_DEFAULT_ACTIONS = {
+    "check",
+    "login",
+    "run",
+    "collect",
+    "roster",
+    "orglist",
+    "rolecatalog",
+    "dbinit",
+    "audit",
+    "sync-todo-status",
+}
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="iERP automation runner")
     parser.add_argument(
         "action",
-        choices=["check", "login", "run", "collect", "roster", "orglist", "rolecatalog", "dbinit", "audit"],
+        choices=["check", "login", "run", "collect", "roster", "orglist", "rolecatalog", "dbinit", "audit", "sync-todo-status"],
         help="Action to execute",
     )
     parser.add_argument("--config", default=DEFAULT_CONFIG_PATH, help="Settings YAML path")
@@ -334,6 +345,7 @@ def main() -> int:
         PostgresOrganizationListStore,
         PostgresPermissionCatalogStore,
         PostgresPermissionStore,
+        PostgresRiskTrustStore,
     )
     from automation.flows.active_roster_flow import ActiveRosterFlow
     from automation.flows.organization_quick_maintain_flow import OrganizationQuickMaintainFlow
@@ -832,6 +844,116 @@ def main() -> int:
 
                     result_shot = save_screenshot(page, shots_dir, "collect_result")
                     logger.info("Collect completed. Screenshot: %s", result_shot)
+
+                elif args.action == "sync-todo-status":
+                    sync_started_at = datetime.now()
+                    process_store = PostgresRiskTrustStore(settings.db)
+                    permission_store = PostgresPermissionStore(settings.db)
+                    project_document_nos = process_store.fetch_process_workbench_document_nos()
+                    existing_sync_states = permission_store.fetch_document_sync_states(project_document_nos)
+
+                    ehr_permission_document_nos: list[str] = []
+                    if project_document_nos:
+                        home_page.open()
+                        if not login_page.is_logged_in():
+                            logger.info("Stored session is not valid, relogin required")
+                            ensure_login(
+                                login_page,
+                                settings,
+                                settings.runtime.retries,
+                                settings.runtime.retry_wait_sec,
+                                retry_call,
+                            )
+                            context.storage_state(path=str(state_file))
+                            logger.info("Auth state refreshed: %s", state_file)
+
+                        collector = PermissionCollectFlow(
+                            page=page,
+                            logger=logger,
+                            timeout_ms=settings.browser.timeout_ms,
+                            home_url=settings.app.home_url,
+                        )
+
+                        def _list_permission_todo_document_nos() -> list[str]:
+                            home_page.open()
+                            home_page.wait_ready()
+                            collector.open_todo_list()
+                            todo_rows = collector.extract_grid_rows(TODO_HEADERS)
+                            ordered_document_nos: list[str] = []
+                            seen_document_nos: set[str] = set()
+                            for row in todo_rows:
+                                if row.get("单据") != "权限申请":
+                                    continue
+                                document_no = str(row.get("单据编号") or "").strip()
+                                if not document_no or document_no in seen_document_nos:
+                                    continue
+                                seen_document_nos.add(document_no)
+                                ordered_document_nos.append(document_no)
+                            return ordered_document_nos
+
+                        ehr_permission_document_nos = retry_call(
+                            _list_permission_todo_document_nos,
+                            retries=settings.runtime.retries,
+                            wait_sec=settings.runtime.retry_wait_sec,
+                        )
+
+                    ehr_permission_document_no_set = set(ehr_permission_document_nos)
+                    status_by_document_no = {
+                        document_no: ("待处理" if document_no in ehr_permission_document_no_set else "已处理")
+                        for document_no in project_document_nos
+                    }
+                    pending_count = sum(1 for status in status_by_document_no.values() if status == "待处理")
+                    processed_count = sum(1 for status in status_by_document_no.values() if status == "已处理")
+                    changed_count = sum(
+                        1
+                        for document_no, status in status_by_document_no.items()
+                        if (existing_sync_states.get(document_no, {}).get("todo_process_status") or "待处理") != status
+                    )
+                    unchanged_count = max(len(status_by_document_no) - changed_count, 0)
+                    extra_ehr_todo_count = len(ehr_permission_document_no_set.difference(project_document_nos))
+
+                    if args.dry_run:
+                        logger.info("Dry-run enabled; skipping PostgreSQL todo-status write")
+                    else:
+                        permission_store.update_todo_process_statuses(status_by_document_no)
+                        logger.info("Updated todo process status for %s project document(s)", len(status_by_document_no))
+
+                    dump_path = (
+                        resolve_path(args.dump_json)
+                        if args.dump_json
+                        else logs_dir / f"todo_sync_{timestamp_slug()}.json"
+                    )
+                    dump_path.parent.mkdir(parents=True, exist_ok=True)
+                    payload = {
+                        "status": "succeeded",
+                        "dry_run": bool(args.dry_run),
+                        "started_at": sync_started_at.strftime("%Y-%m-%d %H:%M:%S"),
+                        "finished_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "project_document_count": len(project_document_nos),
+                        "ehr_todo_count": len(ehr_permission_document_nos),
+                        "pending_count": pending_count,
+                        "processed_count": processed_count,
+                        "changed_count": changed_count,
+                        "unchanged_count": unchanged_count,
+                        "extra_ehr_todo_count": extra_ehr_todo_count,
+                        "message": (
+                            f"待办状态同步完成：待处理 {pending_count} 张，已处理 {processed_count} 张，"
+                            f"状态变更 {changed_count} 张"
+                            + ("（dry-run，未写入 PostgreSQL）" if args.dry_run else "")
+                        ),
+                        "project_document_nos": project_document_nos,
+                        "ehr_todo_document_nos": ehr_permission_document_nos,
+                    }
+                    dump_path.write_text(
+                        json.dumps(payload, ensure_ascii=False, indent=2),
+                        encoding="utf-8",
+                    )
+                    logger.info("Todo status sync completed. JSON dump: %s", dump_path)
+                    logger.info("Todo status sync summary: %s", payload)
+
+                    if project_document_nos:
+                        result_shot = save_screenshot(page, shots_dir, "todo_sync_result")
+                        logger.info("Todo status sync screenshot: %s", result_shot)
 
                 elif args.action == "roster":
                     if args.skip_export and not args.skip_import:

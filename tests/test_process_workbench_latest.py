@@ -54,6 +54,8 @@ class ProcessWorkbenchLatestSnapshotTest(unittest.TestCase):
                 "permission_target": "张三",
                 "department_name": "人事部",
                 "document_status": "已提交",
+                "todo_process_status": "待处理",
+                "todo_status_updated_at": datetime(2026, 3, 16, 12, 30, 0),
                 "final_score": 1.0,
                 "summary_conclusion": "人工干预",
                 "suggested_action": "manual_review",
@@ -69,6 +71,8 @@ class ProcessWorkbenchLatestSnapshotTest(unittest.TestCase):
                 "permission_target": "李四",
                 "department_name": "运营部",
                 "document_status": "已提交",
+                "todo_process_status": "已处理",
+                "todo_status_updated_at": datetime(2026, 3, 16, 12, 31, 0),
                 "final_score": 0.0,
                 "summary_conclusion": "拒绝",
                 "suggested_action": "reject",
@@ -92,11 +96,14 @@ class ProcessWorkbenchLatestSnapshotTest(unittest.TestCase):
             result = self.store.fetch_process_workbench()
 
         mocked_fetch_latest.assert_called_once_with(self.cursor)
-        self.assertEqual(result["stats"][0]["value"], "2")
+        self.assertEqual(result["stats"][0]["value"], "1")
         self.assertEqual(result["stats"][1]["value"], "1")
         self.assertEqual(result["stats"][2]["value"], "1")
-        self.assertEqual(result["stats"][3]["value"], "audit_20260316_121915")
+        self.assertEqual(result["stats"][3]["value"], "1")
+        self.assertEqual(result["stats"][4]["value"], "audit_20260316_121915")
         self.assertEqual([row["documentNo"] for row in result["documents"]], ["RA-TEST-001", "RA-TEST-002"])
+        self.assertEqual(result["documents"][0]["todoProcessStatus"], "待处理")
+        self.assertEqual(result["documents"][1]["todoProcessStatus"], "已处理")
 
     def test_fetch_process_document_detail_defaults_to_latest_result_for_document(self) -> None:
         summary_row = {
@@ -105,6 +112,8 @@ class ProcessWorkbenchLatestSnapshotTest(unittest.TestCase):
             "employee_no": "0001",
             "permission_target": "张三",
             "document_status": "已提交",
+            "todo_process_status": "已处理",
+            "todo_status_updated_at": datetime(2026, 3, 16, 12, 31, 0),
             "department_name": "人事部",
             "apply_time": None,
             "applicant_identity_label": "属地 HR",
@@ -155,8 +164,10 @@ class ProcessWorkbenchLatestSnapshotTest(unittest.TestCase):
         mocked_fetch_latest.assert_called_once_with(self.cursor, document_no="RA-TEST-001")
         mocked_fetch_low_score.assert_called_once_with(self.cursor, "audit_20260316_121915", ["RA-TEST-001"])
         batch_field = next(field for field in result["overviewFields"] if field["label"] == "评估批次号")
+        todo_field = next(field for field in result["overviewFields"] if field["label"] == "待办处理状态")
         self.assertEqual(result["documentNo"], "RA-TEST-001")
         self.assertEqual(batch_field["value"], "audit_20260316_121915")
+        self.assertEqual(todo_field["value"], "已处理")
         self.assertEqual(result["feedbackOverview"]["summaryConclusionLabel"], "加强审核")
 
 

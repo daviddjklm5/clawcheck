@@ -13,7 +13,7 @@ from playwright.sync_api import sync_playwright
 
 from automation.api.config_summary import REPO_ROOT, _load_runtime_settings
 from automation.api.audit_workbench import get_audit_task_overview
-from automation.db.postgres import PostgresRiskTrustStore
+from automation.db.postgres import PostgresPermissionStore, PostgresRiskTrustStore
 from automation.flows.document_approval_flow import DocumentApprovalFlow
 from automation.pages.home_page import HomePage
 from automation.pages.login_page import LoginPage
@@ -230,6 +230,32 @@ def approve_process_document(
     flush_execution_log()
     logger = logging.getLogger("approval_api")
 
+    permission_store = PostgresPermissionStore(settings.db)
+    try:
+        sync_state = permission_store.fetch_document_sync_states([document_no]).get(document_no, {})
+    except Exception as exc:  # noqa: BLE001
+        sync_state = {}
+        add_event("todo_process_status_probe_failed", error=str(exc))
+    else:
+        todo_process_status = str(sync_state.get("todo_process_status") or "").strip()
+        todo_status_updated_at = str(sync_state.get("todo_status_updated_at") or "").strip()
+        if todo_process_status:
+            add_event(
+                "todo_process_status_probed",
+                documentNo=document_no,
+                todoProcessStatus=todo_process_status,
+                todoStatusUpdatedAt=todo_status_updated_at,
+            )
+        if todo_process_status == "已处理":
+            response_payload["status"] = "failed"
+            response_payload["finishedAt"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            response_payload["message"] = (
+                "该单据最近一次待办同步结果为“已处理”，当前账号待办列表中未找到。"
+                "若怀疑单据已驳回后重新提交，请先点击“同步待办状态”后再重试。"
+            )
+            flush_execution_log()
+            raise ValueError(response_payload["message"])
+
     try:
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(
@@ -309,6 +335,12 @@ def approve_process_document(
                 if dry_run
                 else "EHR 已完成同意并提交。"
             )
+            if not dry_run:
+                try:
+                    permission_store.update_single_todo_process_status(document_no, "已处理")
+                    add_event("todo_process_status_updated", documentNo=document_no, todoProcessStatus="已处理")
+                except Exception as exc:  # noqa: BLE001
+                    add_event("todo_process_status_update_failed", error=str(exc), documentNo=document_no)
             execution_log["result"] = flow_result
             execution_log["response"] = response_payload
     except Exception as exc:  # noqa: BLE001

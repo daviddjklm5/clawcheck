@@ -11,6 +11,8 @@ CREATE TABLE IF NOT EXISTS "申请单基本信息" (
     "申请日期" TIMESTAMP NULL,
     "最新审批时间" TIMESTAMP NULL,
     "采集次数" INTEGER NOT NULL DEFAULT 1,
+    "待办处理状态" VARCHAR(32) NOT NULL DEFAULT '待处理',
+    "待办状态更新时间" TIMESTAMP NULL,
     "记录创建时间" TIMESTAMP NOT NULL DEFAULT NOW(),
     "记录更新时间" TIMESTAMP NOT NULL DEFAULT NOW()
 );
@@ -70,6 +72,7 @@ BEGIN
         EXECUTE 'CREATE INDEX IF NOT EXISTS idx_apply_form_basic_info_employee_no ON "申请单基本信息"("工号")';
     END IF;
 END $$;
+CREATE INDEX IF NOT EXISTS idx_apply_form_basic_info_todo_process_status ON "申请单基本信息"("待办处理状态");
 CREATE UNIQUE INDEX IF NOT EXISTS uq_apply_form_org_scope_doc_role_org
 ON "申请表组织范围"("单据编号", "角色编码", "组织编码")
 WHERE "组织编码" IS NOT NULL;

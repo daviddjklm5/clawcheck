@@ -10,6 +10,8 @@ import type {
   ProcessApprovalRequest,
   ProcessApprovalResponse,
   ProcessDetail,
+  ProcessTodoSyncRequest,
+  ProcessTodoSyncResponse,
   ProcessWorkbench,
   RuntimeSettingsSummary,
 } from "../types/dashboard";
@@ -125,6 +127,15 @@ export const dashboardApi = {
           "审批请求超过 120 秒未返回，后端可能卡在 EHR 窗口。请检查弹出的 EHR 浏览器，并查看 automation/logs 下最新 approval_*.json。",
       },
     );
+  },
+  syncProcessTodoStatus(payload: ProcessTodoSyncRequest = { dryRun: false }): Promise<ProcessTodoSyncResponse> {
+    return request<ProcessTodoSyncResponse>("/documents/process-workbench/todo-sync", {
+      method: "POST",
+      body: JSON.stringify(payload),
+      timeoutMs: 180_000,
+      timeoutMessage:
+        "待办状态同步超过 180 秒未返回，后端可能卡在 EHR 待办页。请检查弹出的 EHR 浏览器，并查看 automation/logs 下最新 run_*.log。",
+    });
   },
   startProcessAuditTask(payload: ProcessAuditRunRequest): Promise<ProcessAuditRunSummary> {
     return request<ProcessAuditRunSummary>("/documents/process-workbench/audit", {

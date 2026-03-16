@@ -29,6 +29,7 @@ import type {
   ProcessApprovalResponse,
   ProcessDetail,
   ProcessDocumentRow,
+  ProcessTodoSyncResponse,
   ProcessWorkbench,
   RiskDetailRow,
   RoleRow,
@@ -70,6 +71,11 @@ const actionTone: Record<string, Tone> = {
   manual_review: "warning",
   warning: "info",
   allow: "success",
+};
+
+const todoProcessStatusTone: Record<string, Tone> = {
+  待处理: "warning",
+  已处理: "success",
 };
 
 const detailTabs: Array<{ value: DetailTab; label: string }> = [
@@ -226,12 +232,16 @@ export function ProcessDocumentsPage() {
   const [approvalSubmittingMode, setApprovalSubmittingMode] = useState<"approve" | "dryRun" | null>(null);
   const [approvalResult, setApprovalResult] = useState<ProcessApprovalResponse | null>(null);
   const [approvalError, setApprovalError] = useState<string | null>(null);
+  const [todoSyncing, setTodoSyncing] = useState(false);
+  const [todoSyncResult, setTodoSyncResult] = useState<ProcessTodoSyncResponse | null>(null);
+  const [todoSyncError, setTodoSyncError] = useState<string | null>(null);
   const [refreshVersion, setRefreshVersion] = useState(0);
 
   const queryText = searchParams.get("q") ?? "";
   const deferredQueryText = useDeferredValue(queryText);
   const conclusionFilter = searchParams.get("conclusion") ?? "all";
   const statusFilter = searchParams.get("status") ?? "all";
+  const todoStatusFilter = searchParams.get("todoStatus") ?? "待处理";
   const selectedDocumentNo = searchParams.get("documentNo") ?? "";
   const detailDrawerOpen = selectedDocumentNo !== "";
   const activeTab: DetailTab = isDetailTab(searchParams.get("tab"))
@@ -256,11 +266,15 @@ export function ProcessDocumentsPage() {
   const statusOptions = Array.from(
     new Set(workbenchDocuments.map((item) => item.documentStatus).filter((item) => Boolean(item))),
   );
+  const isPendingOnlyTodoFilter = todoStatusFilter === "待处理";
   const filteredDocuments = workbenchDocuments.filter((item) => {
     if (conclusionFilter !== "all" && item.summaryConclusionLabel !== conclusionFilter) {
       return false;
     }
     if (statusFilter !== "all" && item.documentStatus !== statusFilter) {
+      return false;
+    }
+    if (todoStatusFilter !== "all_todo" && item.todoProcessStatus !== todoStatusFilter) {
       return false;
     }
     if (!normalizedQueryText) {
@@ -278,7 +292,9 @@ export function ProcessDocumentsPage() {
       ].join(" "),
     ).includes(normalizedQueryText);
   });
-  const hasActiveFilters = Boolean(queryText || conclusionFilter !== "all" || statusFilter !== "all");
+  const hasActiveFilters = Boolean(
+    queryText || conclusionFilter !== "all" || statusFilter !== "all" || !isPendingOnlyTodoFilter,
+  );
 
   function updateSearchParams(
     updates: Record<string, string | null>,
@@ -442,10 +458,28 @@ export function ProcessDocumentsPage() {
         dryRun,
       });
       setApprovalResult(response);
+      if (!dryRun && response.status === "succeeded") {
+        setRefreshVersion((currentValue) => currentValue + 1);
+      }
     } catch (approvalLoadError) {
       setApprovalError(approvalLoadError instanceof Error ? approvalLoadError.message : "审批执行失败");
     } finally {
       setApprovalSubmittingMode(null);
+    }
+  }
+
+  async function syncTodoStatus() {
+    try {
+      setTodoSyncing(true);
+      setTodoSyncError(null);
+      setTodoSyncResult(null);
+      const response = await dashboardApi.syncProcessTodoStatus({ dryRun: false });
+      setTodoSyncResult(response);
+      setRefreshVersion((currentValue) => currentValue + 1);
+    } catch (syncError) {
+      setTodoSyncError(syncError instanceof Error ? syncError.message : "待办状态同步失败");
+    } finally {
+      setTodoSyncing(false);
     }
   }
 
@@ -481,6 +515,17 @@ export function ProcessDocumentsPage() {
         <StatusTag
           label={String(params.value ?? "")}
           tone={documentStatusTone[String(params.value)] ?? "default"}
+        />
+      ),
+    },
+    {
+      field: "todoProcessStatus",
+      headerName: "待办处理状态",
+      minWidth: 130,
+      renderCell: (params) => (
+        <StatusTag
+          label={String(params.value ?? "")}
+          tone={todoProcessStatusTone[String(params.value)] ?? "default"}
         />
       ),
     },
@@ -527,7 +572,7 @@ export function ProcessDocumentsPage() {
     <Stack spacing={3}>
       <Box>
         <Typography variant="body1">
-          当前页面已按 `201` 方案收敛为单据处理工作台，仅保留待处理列表；批次分布与执行日志已拆到 `评估分析` 页面。
+          当前页面已按 `201 / 105B` 方案收敛为单据处理工作台；默认仅展示最近一次待办同步后仍可处理的单据，批次分布与执行日志已拆到 `评估分析` 页面。
         </Typography>
         <Stack
           direction={{ xs: "column", md: "row" }}
@@ -541,6 +586,13 @@ export function ProcessDocumentsPage() {
       </Box>
 
       {error ? <Alert severity="error">{error}</Alert> : null}
+      {todoSyncError ? <Alert severity="error">{todoSyncError}</Alert> : null}
+      {todoSyncResult ? (
+        <Alert severity={todoSyncResult.status === "succeeded" ? "success" : "warning"}>
+          {todoSyncResult.message}
+          {todoSyncResult.logFile ? ` 日志：${todoSyncResult.logFile}` : ""}
+        </Alert>
+      ) : null}
 
       <Paper
         elevation={0}
@@ -561,6 +613,18 @@ export function ProcessDocumentsPage() {
               size="small"
               sx={{ minWidth: { xs: "100%", xl: 360 } }}
             />
+            <TextField
+              select
+              label="待办处理状态"
+              value={todoStatusFilter}
+              onChange={(event) => updateSearchParams({ todoStatus: event.target.value }, { replace: true })}
+              size="small"
+              sx={{ minWidth: { xs: "100%", sm: 180 } }}
+            >
+              <MenuItem value="待处理">待处理</MenuItem>
+              <MenuItem value="all_todo">全部</MenuItem>
+              <MenuItem value="已处理">已处理</MenuItem>
+            </TextField>
             <TextField
               select
               label="单据状态"
@@ -596,6 +660,15 @@ export function ProcessDocumentsPage() {
             </Stack>
             <Stack direction="row" spacing={1}>
               <Button
+                variant="contained"
+                size="small"
+                disableElevation
+                disabled={todoSyncing || loading}
+                onClick={() => void syncTodoStatus()}
+              >
+                {todoSyncing ? "同步中..." : "同步待办状态"}
+              </Button>
+              <Button
                 variant="outlined"
                 size="small"
                 onClick={() => setRefreshVersion((currentValue) => currentValue + 1)}
@@ -612,6 +685,7 @@ export function ProcessDocumentsPage() {
                       q: null,
                       conclusion: null,
                       status: null,
+                      todoStatus: null,
                     },
                     { replace: true },
                   )
@@ -630,7 +704,7 @@ export function ProcessDocumentsPage() {
           >
             <Typography variant="body2" color="text.secondary">
               当前结果 {filteredDocuments.length} / {workbenchDocuments.length} 项
-              {hasActiveFilters ? "，已按工具栏条件过滤" : "，当前未设置额外筛选"}
+              {hasActiveFilters ? "，已按工具栏条件过滤" : "，当前默认只展示待处理单据"}
             </Typography>
             <Typography variant="caption" color="text.secondary">
               当前筛选条件与抽屉状态会同步到 URL，刷新页面后可恢复上下文。
@@ -909,6 +983,15 @@ export function ProcessDocumentsPage() {
             {activeTab === "approvalAction" ? (
               <SectionCard title="审批单据" subtitle="第一阶段仅开放批准动作；前端“批准”会映射到 EHR 的“同意 + 提交”。">
                 <Stack spacing={2}>
+                  {selectedDocumentRow?.todoProcessStatus === "已处理" ? (
+                    <Alert severity="info">
+                      该单据最近一次待办同步结果为“已处理”，当前账号 EHR 待办中未命中。
+                      {selectedDocumentRow?.todoStatusUpdatedAt && selectedDocumentRow.todoStatusUpdatedAt !== "-" ? (
+                        <> 最近同步时间：{selectedDocumentRow.todoStatusUpdatedAt}。</>
+                      ) : null}
+                      请先点击“同步待办状态”确认是否已重新进入待办后再执行审批。
+                    </Alert>
+                  ) : null}
                   <Alert severity="warning">
                     本操作会真实写回 EHR。当前实现会自动打开目标单据的 `任务处理`，将 `审批决策` 设为 `同意`，把下方审批意见写入 EHR 后点击 `提交`。
                   </Alert>
@@ -926,6 +1009,16 @@ export function ProcessDocumentsPage() {
                         label: "建议动作",
                         value: selectedDocumentRow?.suggestedActionLabel ?? "-",
                         hint: "仅作参考，不自动替代真实审批动作。",
+                      },
+                      {
+                        label: "待办处理状态",
+                        value: selectedDocumentRow?.todoProcessStatus ?? "待处理",
+                        hint: "最近一次待办同步结果，不等于业务单据终态。",
+                      },
+                      {
+                        label: "待办状态更新时间",
+                        value: selectedDocumentRow?.todoStatusUpdatedAt ?? "-",
+                        hint: "最近一次确认该单据是否仍在当前账号待办中的时间。",
                       },
                       { label: "EHR 审批决策", value: "同意", hint: "后端执行时固定选择该决策值。" },
                       { label: "EHR 执行按钮", value: "提交", hint: "EHR 实页执行按钮文案。前端按钮文案仍显示“批准”。" },
@@ -946,14 +1039,24 @@ export function ProcessDocumentsPage() {
                     <Button
                       variant="contained"
                       disableElevation
-                      disabled={!selectedDocumentNo || approvalSubmittingMode !== null || !approvalOpinion.trim()}
+                      disabled={
+                        !selectedDocumentNo ||
+                        approvalSubmittingMode !== null ||
+                        !approvalOpinion.trim() ||
+                        selectedDocumentRow?.todoProcessStatus === "已处理"
+                      }
                       onClick={() => void runApproval(false)}
                     >
                       {approvalSubmittingMode === "approve" ? "批准中..." : "批准"}
                     </Button>
                     <Button
                       variant="outlined"
-                      disabled={!selectedDocumentNo || approvalSubmittingMode !== null || !approvalOpinion.trim()}
+                      disabled={
+                        !selectedDocumentNo ||
+                        approvalSubmittingMode !== null ||
+                        !approvalOpinion.trim() ||
+                        selectedDocumentRow?.todoProcessStatus === "已处理"
+                      }
                       onClick={() => void runApproval(true)}
                     >
                       {approvalSubmittingMode === "dryRun" ? "验证中..." : "验证连通性（dry-run）"}

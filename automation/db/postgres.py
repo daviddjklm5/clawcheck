@@ -49,6 +49,8 @@ BASIC_INFO_COLUMNS = {
     "apply_time": "申请日期",
     "latest_approval_time": "最新审批时间",
     "collection_count": "采集次数",
+    "todo_process_status": "待办处理状态",
+    "todo_status_updated_at": "待办状态更新时间",
     "created_at": "记录创建时间",
     "updated_at": "记录更新时间",
 }
@@ -351,6 +353,7 @@ class PostgresPermissionStore(_PostgresStoreBase):
     schema_upgrade_sql_files = [
         Path(__file__).resolve().parents[1] / "sql" / "016_permission_apply_collect_approval_record_latest_time.sql",
         Path(__file__).resolve().parents[1] / "sql" / "017_permission_apply_collect_recollect_strategy.sql",
+        Path(__file__).resolve().parents[1] / "sql" / "024_process_workbench_todo_status.sql",
     ]
     role_org_scope_migration_sql = (
         Path(__file__).resolve().parents[1] / "sql" / "014_apply_form_org_scope_role_org_refactor.sql"
@@ -1026,7 +1029,9 @@ class PostgresPermissionStore(_PostgresStoreBase):
                         bi.{self._quote_identifier(BASIC_INFO_COLUMNS["document_no"])},
                         bi.{self._quote_identifier(BASIC_INFO_COLUMNS["latest_approval_time"])},
                         COALESCE(bi.{self._quote_identifier(BASIC_INFO_COLUMNS["collection_count"])}, 1),
-                        COALESCE(ac.approval_record_count, 0)
+                        COALESCE(ac.approval_record_count, 0),
+                        bi.{self._quote_identifier(BASIC_INFO_COLUMNS["todo_process_status"])},
+                        bi.{self._quote_identifier(BASIC_INFO_COLUMNS["todo_status_updated_at"])}
                     FROM {BASIC_INFO_TABLE} bi
                     LEFT JOIN approval_counts ac
                       ON ac.document_no = bi.{self._quote_identifier(BASIC_INFO_COLUMNS["document_no"])}
@@ -1042,10 +1047,72 @@ class PostgresPermissionStore(_PostgresStoreBase):
                 "latest_approval_time": self._normalize_timestamp_text(row[1]),
                 "collection_count": int(row[2]) if row[2] is not None else 1,
                 "approval_record_count": int(row[3]) if row[3] is not None else 0,
+                "todo_process_status": self._strip_text(row[4]) or "待处理",
+                "todo_status_updated_at": self._normalize_timestamp_text(row[5]),
             }
             for row in rows
             if row and isinstance(row[0], str) and row[0].strip()
         }
+
+    def update_todo_process_statuses(
+        self,
+        status_by_document_no: dict[str, str],
+        *,
+        status_updated_at: datetime | None = None,
+    ) -> int:
+        normalized_rows: list[tuple[str, str]] = []
+        seen_document_nos: set[str] = set()
+        for document_no, status in status_by_document_no.items():
+            normalized_document_no = self._strip_text(document_no)
+            normalized_status = self._strip_text(status)
+            if normalized_document_no is None or normalized_status is None:
+                continue
+            if normalized_document_no in seen_document_nos:
+                continue
+            seen_document_nos.add(normalized_document_no)
+            normalized_rows.append((normalized_document_no, normalized_status))
+        if not normalized_rows:
+            return 0
+
+        effective_updated_at = status_updated_at or datetime.now()
+        self.ensure_table()
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.executemany(
+                    f"""
+                    UPDATE {BASIC_INFO_TABLE}
+                    SET {self._quote_identifier(BASIC_INFO_COLUMNS["todo_process_status"])} = %s,
+                        {self._quote_identifier(BASIC_INFO_COLUMNS["todo_status_updated_at"])} = %s
+                    WHERE {self._quote_identifier(BASIC_INFO_COLUMNS["document_no"])} = %s
+                    """,
+                    [
+                        (
+                            status,
+                            effective_updated_at,
+                            document_no,
+                        )
+                        for document_no, status in normalized_rows
+                    ],
+                )
+        return len(normalized_rows)
+
+    def update_single_todo_process_status(
+        self,
+        document_no: str,
+        status: str,
+        *,
+        status_updated_at: datetime | None = None,
+    ) -> bool:
+        normalized_document_no = self._strip_text(document_no)
+        normalized_status = self._strip_text(status)
+        if normalized_document_no is None or normalized_status is None:
+            return False
+        return bool(
+            self.update_todo_process_statuses(
+                {normalized_document_no: normalized_status},
+                status_updated_at=status_updated_at,
+            )
+        )
 
     def fetch_collect_workbench(self, limit: int = 200) -> dict[str, Any]:
         query_limit = max(limit, 0)
@@ -1359,6 +1426,8 @@ class PostgresPermissionStore(_PostgresStoreBase):
         document_no = basic["document_no"]
         collection_count = self._to_int_or_none(basic.get("collection_count")) or 1
         write_mode = str(document.get("_write_mode") or "").strip()
+        todo_process_status = self._strip_text(basic.get("todo_process_status")) or "待处理"
+        todo_status_updated_at = self._null_if_blank(basic.get("todo_status_updated_at")) or datetime.now()
 
         if write_mode == "recollect":
             cursor.execute(
@@ -1379,6 +1448,8 @@ class PostgresPermissionStore(_PostgresStoreBase):
             BASIC_INFO_COLUMNS["apply_time"],
             BASIC_INFO_COLUMNS["latest_approval_time"],
             BASIC_INFO_COLUMNS["collection_count"],
+            BASIC_INFO_COLUMNS["todo_process_status"],
+            BASIC_INFO_COLUMNS["todo_status_updated_at"],
             BASIC_INFO_COLUMNS["created_at"],
             BASIC_INFO_COLUMNS["updated_at"],
         ]
@@ -1400,6 +1471,8 @@ class PostgresPermissionStore(_PostgresStoreBase):
                 %(apply_time)s,
                 %(latest_approval_time)s,
                 %(collection_count)s,
+                %(todo_process_status)s,
+                %(todo_status_updated_at)s,
                 NOW(),
                 NOW()
             )
@@ -1415,6 +1488,8 @@ class PostgresPermissionStore(_PostgresStoreBase):
                 {self._quote_identifier(BASIC_INFO_COLUMNS["apply_time"])} = EXCLUDED.{self._quote_identifier(BASIC_INFO_COLUMNS["apply_time"])},
                 {self._quote_identifier(BASIC_INFO_COLUMNS["latest_approval_time"])} = EXCLUDED.{self._quote_identifier(BASIC_INFO_COLUMNS["latest_approval_time"])},
                 {self._quote_identifier(BASIC_INFO_COLUMNS["collection_count"])} = EXCLUDED.{self._quote_identifier(BASIC_INFO_COLUMNS["collection_count"])},
+                {self._quote_identifier(BASIC_INFO_COLUMNS["todo_process_status"])} = EXCLUDED.{self._quote_identifier(BASIC_INFO_COLUMNS["todo_process_status"])},
+                {self._quote_identifier(BASIC_INFO_COLUMNS["todo_status_updated_at"])} = EXCLUDED.{self._quote_identifier(BASIC_INFO_COLUMNS["todo_status_updated_at"])},
                 {self._quote_identifier(BASIC_INFO_COLUMNS["updated_at"])} = NOW()
             """,
             {
@@ -1422,6 +1497,8 @@ class PostgresPermissionStore(_PostgresStoreBase):
                 "apply_time": self._null_if_blank(basic.get("apply_time")),
                 "latest_approval_time": self._null_if_blank(basic.get("latest_approval_time")),
                 "collection_count": collection_count,
+                "todo_process_status": todo_process_status,
+                "todo_status_updated_at": todo_status_updated_at,
             },
         )
 
@@ -1909,6 +1986,7 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
     schema_sql = Path(__file__).resolve().parents[1] / "sql" / "022_risk_trust_assessment.sql"
     schema_upgrade_sql_files = [
         Path(__file__).resolve().parents[1] / "sql" / "023_low_score_feedback_preagg.sql",
+        Path(__file__).resolve().parents[1] / "sql" / "024_process_workbench_todo_status.sql",
     ]
 
     def ensure_table(self) -> None:
@@ -2028,6 +2106,12 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                     "tone": "info",
                 },
                 {
+                    "label": "已处理单据",
+                    "value": "0",
+                    "hint": "当前尚未同步任何待办处理状态。",
+                    "tone": "default",
+                },
+                {
                     "label": "最近评估批次",
                     "value": "-",
                     "hint": "执行 `python automation/scripts/run.py audit` 后会显示最新批次。",
@@ -2047,6 +2131,8 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
         self,
         summary_rows: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
+        pending_count = sum(1 for row in summary_rows if (row.get("todo_process_status") or "待处理") == "待处理")
+        processed_count = sum(1 for row in summary_rows if (row.get("todo_process_status") or "") == "已处理")
         reject_count = sum(1 for row in summary_rows if row["summary_conclusion"] == "拒绝")
         manual_review_count = sum(1 for row in summary_rows if row["summary_conclusion"] == "人工干预")
         latest_row = (
@@ -2067,9 +2153,15 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
         return [
             {
                 "label": "待处理单据",
-                "value": str(len(summary_rows)),
-                "hint": "来自逐单最新评估结果快照的单据数。",
-                "tone": "warning" if summary_rows else "info",
+                "value": str(pending_count),
+                "hint": "最近一次待办同步后，当前账号仍在 EHR 待办中的单据数。",
+                "tone": "warning" if pending_count else "info",
+            },
+            {
+                "label": "已处理单据",
+                "value": str(processed_count),
+                "hint": "最近一次待办同步后，当前账号已不在 EHR 待办中的单据数。",
+                "tone": "success" if processed_count else "default",
             },
             {
                 "label": "拒绝",
@@ -2101,6 +2193,8 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                 "permissionTarget": row["permission_target"] or "-",
                 "department": row["department_name"] or "-",
                 "documentStatus": row["document_status"] or "-",
+                "todoProcessStatus": row.get("todo_process_status") or "待处理",
+                "todoStatusUpdatedAt": self._format_datetime_value(row.get("todo_status_updated_at")),
                 "finalScore": row["final_score"],
                 "summaryConclusion": row["summary_conclusion"] or "-",
                 "summaryConclusionLabel": display_summary_conclusion(row["summary_conclusion"]),
@@ -2125,6 +2219,17 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
             "stats": self._build_process_workbench_stats(summary_rows),
             "documents": self._build_process_document_rows(summary_rows),
         }
+
+    def fetch_process_workbench_document_nos(self) -> list[str]:
+        self.ensure_table()
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                summary_rows = self._fetch_latest_process_summary_rows(cursor)
+        return [
+            row["document_no"]
+            for row in summary_rows
+            if self._strip_text(row.get("document_no")) is not None
+        ]
 
     def fetch_process_analysis_dashboard(self) -> dict[str, Any]:
         self.ensure_table()
@@ -2208,6 +2313,8 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
             notes.append(
                 f"默认已按 104 方案聚合为 {len(feedback_overview['feedbackLines'])} 类风险摘要，原始低分明细留在“原始低分明细”页签。"
             )
+        if (summary_row.get("todo_process_status") or "待处理") == "已处理":
+            notes.append("该单据最近一次待办同步结果为“已处理”，当前账号 EHR 待办中未命中。")
         if summary_row["suggested_action"] == "reject":
             notes.append("当前建议动作为拒绝，需结合原始单据与审批链复核后再处理。")
         elif summary_row["suggested_action"] == "manual_review":
@@ -2231,6 +2338,16 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                     "label": "单据状态",
                     "value": summary_row["document_status"] or "-",
                     "hint": "当前待办单据状态。",
+                },
+                {
+                    "label": "待办处理状态",
+                    "value": summary_row.get("todo_process_status") or "待处理",
+                    "hint": "当前账号最近一次待办同步结果，不等于业务单据终态。",
+                },
+                {
+                    "label": "待办状态更新时间",
+                    "value": self._format_datetime_value(summary_row.get("todo_status_updated_at")),
+                    "hint": "最近一次确认该单据是否仍在当前账号待办中的时间。",
                 },
                 {
                     "label": "部门",
@@ -2884,6 +3001,8 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                 basic.{self._quote_identifier(BASIC_INFO_COLUMNS["position_name"])},
                 basic.{self._quote_identifier(BASIC_INFO_COLUMNS["apply_time"])},
                 basic.{self._quote_identifier(BASIC_INFO_COLUMNS["latest_approval_time"])},
+                basic.{self._quote_identifier(BASIC_INFO_COLUMNS["todo_process_status"])},
+                basic.{self._quote_identifier(BASIC_INFO_COLUMNS["todo_status_updated_at"])},
                 applicant_org.{self._quote_identifier(ORG_ATTRIBUTE_COLUMNS["org_unit_name"])},
                 assessment.{self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["assessment_batch_no"])},
                 assessment.{self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["assessment_version"])},
@@ -2941,25 +3060,27 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                 "position_name": self._strip_text(row[9]),
                 "apply_time": row[10],
                 "latest_approval_time": row[11],
-                "applicant_org_unit_name": self._strip_text(row[12]),
-                "assessment_batch_no": self._strip_text(row[13]),
-                "assessment_version": self._strip_text(row[14]),
-                "applicant_hr_type": self._strip_text(row[15]),
-                "applicant_process_level_category": self._strip_text(row[16]),
-                "final_score": self._format_score_value(row[17]),
-                "summary_conclusion": self._strip_text(row[18]),
-                "suggested_action": self._strip_text(row[19]),
-                "lowest_hit_dimension": self._strip_text(row[20]),
-                "lowest_hit_role_code": self._strip_text(row[21]),
-                "lowest_hit_org_code": self._strip_text(row[22]),
-                "hit_manual_review": bool(row[23]),
-                "has_low_score_details": bool(row[24]),
-                "low_score_detail_count": row[25],
-                "low_score_detail_conclusion": self._strip_text(row[26]),
-                "assessment_explain": self._strip_text(row[27]),
-                "assessed_at": row[28],
+                "todo_process_status": self._strip_text(row[12]) or "待处理",
+                "todo_status_updated_at": row[13],
+                "applicant_org_unit_name": self._strip_text(row[14]),
+                "assessment_batch_no": self._strip_text(row[15]),
+                "assessment_version": self._strip_text(row[16]),
+                "applicant_hr_type": self._strip_text(row[17]),
+                "applicant_process_level_category": self._strip_text(row[18]),
+                "final_score": self._format_score_value(row[19]),
+                "summary_conclusion": self._strip_text(row[20]),
+                "suggested_action": self._strip_text(row[21]),
+                "lowest_hit_dimension": self._strip_text(row[22]),
+                "lowest_hit_role_code": self._strip_text(row[23]),
+                "lowest_hit_org_code": self._strip_text(row[24]),
+                "hit_manual_review": bool(row[25]),
+                "has_low_score_details": bool(row[26]),
+                "low_score_detail_count": row[27],
+                "low_score_detail_conclusion": self._strip_text(row[28]),
+                "assessment_explain": self._strip_text(row[29]),
+                "assessed_at": row[30],
                 "applicant_identity_label": self._applicant_identity_label(
-                    hr_type=self._strip_text(row[15]),
+                    hr_type=self._strip_text(row[17]),
                     position_name=self._strip_text(row[4]) or self._strip_text(row[9]),
                     level1_function_name=self._strip_text(row[3]),
                 ),
@@ -2997,6 +3118,8 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                 basic.{self._quote_identifier(BASIC_INFO_COLUMNS["position_name"])},
                 basic.{self._quote_identifier(BASIC_INFO_COLUMNS["apply_time"])},
                 basic.{self._quote_identifier(BASIC_INFO_COLUMNS["latest_approval_time"])},
+                basic.{self._quote_identifier(BASIC_INFO_COLUMNS["todo_process_status"])},
+                basic.{self._quote_identifier(BASIC_INFO_COLUMNS["todo_status_updated_at"])},
                 applicant_org.{self._quote_identifier(ORG_ATTRIBUTE_COLUMNS["org_unit_name"])},
                 assessment.{self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["assessment_batch_no"])},
                 assessment.{self._quote_identifier(RISK_TRUST_ASSESSMENT_COLUMNS["assessment_version"])},
@@ -3054,25 +3177,27 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                 "position_name": self._strip_text(row[9]),
                 "apply_time": row[10],
                 "latest_approval_time": row[11],
-                "applicant_org_unit_name": self._strip_text(row[12]),
-                "assessment_batch_no": self._strip_text(row[13]),
-                "assessment_version": self._strip_text(row[14]),
-                "applicant_hr_type": self._strip_text(row[15]),
-                "applicant_process_level_category": self._strip_text(row[16]),
-                "final_score": self._format_score_value(row[17]),
-                "summary_conclusion": self._strip_text(row[18]),
-                "suggested_action": self._strip_text(row[19]),
-                "lowest_hit_dimension": self._strip_text(row[20]),
-                "lowest_hit_role_code": self._strip_text(row[21]),
-                "lowest_hit_org_code": self._strip_text(row[22]),
-                "hit_manual_review": bool(row[23]),
-                "has_low_score_details": bool(row[24]),
-                "low_score_detail_count": row[25],
-                "low_score_detail_conclusion": self._strip_text(row[26]),
-                "assessment_explain": self._strip_text(row[27]),
-                "assessed_at": row[28],
+                "todo_process_status": self._strip_text(row[12]) or "待处理",
+                "todo_status_updated_at": row[13],
+                "applicant_org_unit_name": self._strip_text(row[14]),
+                "assessment_batch_no": self._strip_text(row[15]),
+                "assessment_version": self._strip_text(row[16]),
+                "applicant_hr_type": self._strip_text(row[17]),
+                "applicant_process_level_category": self._strip_text(row[18]),
+                "final_score": self._format_score_value(row[19]),
+                "summary_conclusion": self._strip_text(row[20]),
+                "suggested_action": self._strip_text(row[21]),
+                "lowest_hit_dimension": self._strip_text(row[22]),
+                "lowest_hit_role_code": self._strip_text(row[23]),
+                "lowest_hit_org_code": self._strip_text(row[24]),
+                "hit_manual_review": bool(row[25]),
+                "has_low_score_details": bool(row[26]),
+                "low_score_detail_count": row[27],
+                "low_score_detail_conclusion": self._strip_text(row[28]),
+                "assessment_explain": self._strip_text(row[29]),
+                "assessed_at": row[30],
                 "applicant_identity_label": self._applicant_identity_label(
-                    hr_type=self._strip_text(row[15]),
+                    hr_type=self._strip_text(row[17]),
                     position_name=self._strip_text(row[4]) or self._strip_text(row[9]),
                     level1_function_name=self._strip_text(row[3]),
                 ),
