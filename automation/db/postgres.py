@@ -5,6 +5,7 @@ from datetime import date, datetime
 import json
 from pathlib import Path
 import re
+import threading
 from typing import Any
 
 from automation.utils.approval_record_helpers import (
@@ -338,6 +339,8 @@ class _PostgresStoreBase:
 
 
 class PostgresPermissionStore(_PostgresStoreBase):
+    _ensure_table_lock = threading.Lock()
+    _ensured_schema_keys: set[tuple[str, int, str, str]] = set()
     schema_sql = Path(__file__).resolve().parents[1] / "sql" / "001_permission_apply_collect.sql"
     bootstrap_migration_sql_files = [
         Path(__file__).resolve().parents[1] / "sql" / "010_permission_apply_collect_migrate_basic_info.sql",
@@ -686,20 +689,35 @@ class PostgresPermissionStore(_PostgresStoreBase):
         return roster_profiles
 
     def ensure_table(self) -> None:
+        schema_key = (
+            self.settings.host,
+            self.settings.port,
+            self.settings.dbname,
+            self.settings.schema,
+        )
+        if schema_key in self._ensured_schema_keys:
+            return
+
         ddl = self.schema_sql.read_text(encoding="utf-8")
-        with self.connect() as connection:
-            with connection.cursor() as cursor:
-                if self._column_exists(cursor, "申请单基本信息", "document_no"):
-                    raise RuntimeError('Detected legacy English schema for "申请单基本信息". Run automation/sql/012_rename_columns_to_cn_fixed_schema.sql first.')
-                needs_bootstrap = not self._column_exists(cursor, "申请单基本信息", BASIC_INFO_COLUMNS["document_no"])
-                cursor.execute(ddl)
-                if needs_bootstrap:
-                    for migration_sql_file in self.bootstrap_migration_sql_files:
+        with self._ensure_table_lock:
+            if schema_key in self._ensured_schema_keys:
+                return
+
+            with self.connect() as connection:
+                with connection.cursor() as cursor:
+                    if self._column_exists(cursor, "申请单基本信息", "document_no"):
+                        raise RuntimeError('Detected legacy English schema for "申请单基本信息". Run automation/sql/012_rename_columns_to_cn_fixed_schema.sql first.')
+                    needs_bootstrap = not self._column_exists(cursor, "申请单基本信息", BASIC_INFO_COLUMNS["document_no"])
+                    cursor.execute(ddl)
+                    if needs_bootstrap:
+                        for migration_sql_file in self.bootstrap_migration_sql_files:
+                            cursor.execute(migration_sql_file.read_text(encoding="utf-8"))
+                    if self._apply_form_org_scope_needs_role_refactor(cursor):
+                        cursor.execute(self.role_org_scope_migration_sql.read_text(encoding="utf-8"))
+                    for migration_sql_file in self.schema_upgrade_sql_files:
                         cursor.execute(migration_sql_file.read_text(encoding="utf-8"))
-                if self._apply_form_org_scope_needs_role_refactor(cursor):
-                    cursor.execute(self.role_org_scope_migration_sql.read_text(encoding="utf-8"))
-                for migration_sql_file in self.schema_upgrade_sql_files:
-                    cursor.execute(migration_sql_file.read_text(encoding="utf-8"))
+
+            self._ensured_schema_keys.add(schema_key)
 
     @classmethod
     def _normalize_document_locally(cls, document: dict[str, Any]) -> dict[str, Any]:
@@ -791,6 +809,168 @@ class PostgresPermissionStore(_PostgresStoreBase):
             return value.isoformat()
         return str(value).strip()
 
+    @staticmethod
+    def _format_datetime_value(value: Any) -> str:
+        if value is None:
+            return "-"
+        if isinstance(value, datetime):
+            return value.strftime("%Y-%m-%d %H:%M:%S")
+        if isinstance(value, date):
+            return value.strftime("%Y-%m-%d")
+        return str(value)
+
+    @staticmethod
+    def _format_bool_label(value: Any) -> str:
+        return "是" if bool(value) else "否"
+
+    @staticmethod
+    def _build_collect_status(permission_count: int, approval_count: int, org_scope_count: int) -> str:
+        if permission_count <= 0 or org_scope_count <= 0:
+            return "待补采"
+        if approval_count <= 0:
+            return "审批为空"
+        return "已落库"
+
+    def _empty_collect_workbench(self) -> dict[str, Any]:
+        return {
+            "stats": [
+                {
+                    "label": "已入库单据",
+                    "value": "0",
+                    "hint": "当前申请单四张表中还没有采集结果。",
+                    "tone": "info",
+                },
+                {
+                    "label": "待补采单据",
+                    "value": "0",
+                    "hint": "当角色明细或组织范围缺失时会计入待补采。",
+                    "tone": "success",
+                },
+                {
+                    "label": "审批为空单据",
+                    "value": "0",
+                    "hint": "审批记录为空时单独提示，避免与待补采混淆。",
+                    "tone": "default",
+                },
+                {
+                    "label": "最近落库时间",
+                    "value": "-",
+                    "hint": "执行采集任务后会显示最新落库时间。",
+                    "tone": "default",
+                },
+            ],
+            "documents": [],
+        }
+
+    def _fetch_collect_table_metrics(
+        self,
+        cursor,
+        document_nos: Iterable[str],
+    ) -> dict[str, dict[str, dict[str, Any]]]:
+        normalized_document_nos = [document_no for document_no in document_nos if document_no]
+        if not normalized_document_nos:
+            return {}
+
+        metrics: dict[str, dict[str, dict[str, Any]]] = {
+            document_no: {
+                "basic": {"records": 0, "updated_at": None},
+                "permission": {"records": 0, "updated_at": None},
+                "approval": {"records": 0, "updated_at": None},
+                "orgScope": {"records": 0, "updated_at": None},
+            }
+            for document_no in normalized_document_nos
+        }
+
+        cursor.execute(
+            f"""
+            SELECT
+                {self._quote_identifier(BASIC_INFO_COLUMNS["document_no"])},
+                COUNT(*)::INTEGER AS records,
+                MAX({self._quote_identifier(BASIC_INFO_COLUMNS["updated_at"])}) AS updated_at
+            FROM {BASIC_INFO_TABLE}
+            WHERE {self._quote_identifier(BASIC_INFO_COLUMNS["document_no"])} = ANY(%s)
+            GROUP BY {self._quote_identifier(BASIC_INFO_COLUMNS["document_no"])}
+            """,
+            (normalized_document_nos,),
+        )
+        for row in cursor.fetchall():
+            document_no = self._strip_text(row[0])
+            if document_no is None:
+                continue
+            metrics.setdefault(document_no, {}).setdefault("basic", {})
+            metrics[document_no]["basic"] = {
+                "records": int(row[1] or 0),
+                "updated_at": row[2],
+            }
+
+        cursor.execute(
+            f"""
+            SELECT
+                {self._quote_identifier(PERMISSION_DETAIL_COLUMNS["document_no"])},
+                COUNT(*)::INTEGER AS records,
+                MAX({self._quote_identifier(PERMISSION_DETAIL_COLUMNS["updated_at"])}) AS updated_at
+            FROM {PERMISSION_APPLY_DETAIL_TABLE}
+            WHERE {self._quote_identifier(PERMISSION_DETAIL_COLUMNS["document_no"])} = ANY(%s)
+            GROUP BY {self._quote_identifier(PERMISSION_DETAIL_COLUMNS["document_no"])}
+            """,
+            (normalized_document_nos,),
+        )
+        for row in cursor.fetchall():
+            document_no = self._strip_text(row[0])
+            if document_no is None:
+                continue
+            metrics.setdefault(document_no, {}).setdefault("permission", {})
+            metrics[document_no]["permission"] = {
+                "records": int(row[1] or 0),
+                "updated_at": row[2],
+            }
+
+        cursor.execute(
+            f"""
+            SELECT
+                {self._quote_identifier(APPROVAL_RECORD_COLUMNS["document_no"])},
+                COUNT(*)::INTEGER AS records,
+                MAX({self._quote_identifier(APPROVAL_RECORD_COLUMNS["created_at"])}) AS updated_at
+            FROM {APPROVAL_RECORD_TABLE}
+            WHERE {self._quote_identifier(APPROVAL_RECORD_COLUMNS["document_no"])} = ANY(%s)
+            GROUP BY {self._quote_identifier(APPROVAL_RECORD_COLUMNS["document_no"])}
+            """,
+            (normalized_document_nos,),
+        )
+        for row in cursor.fetchall():
+            document_no = self._strip_text(row[0])
+            if document_no is None:
+                continue
+            metrics.setdefault(document_no, {}).setdefault("approval", {})
+            metrics[document_no]["approval"] = {
+                "records": int(row[1] or 0),
+                "updated_at": row[2],
+            }
+
+        cursor.execute(
+            f"""
+            SELECT
+                {self._quote_identifier(APPLY_FORM_ORG_SCOPE_COLUMNS["document_no"])},
+                COUNT(*)::INTEGER AS records,
+                MAX({self._quote_identifier(APPLY_FORM_ORG_SCOPE_COLUMNS["created_at"])}) AS updated_at
+            FROM {APPLY_FORM_ORG_SCOPE_TABLE}
+            WHERE {self._quote_identifier(APPLY_FORM_ORG_SCOPE_COLUMNS["document_no"])} = ANY(%s)
+            GROUP BY {self._quote_identifier(APPLY_FORM_ORG_SCOPE_COLUMNS["document_no"])}
+            """,
+            (normalized_document_nos,),
+        )
+        for row in cursor.fetchall():
+            document_no = self._strip_text(row[0])
+            if document_no is None:
+                continue
+            metrics.setdefault(document_no, {}).setdefault("orgScope", {})
+            metrics[document_no]["orgScope"] = {
+                "records": int(row[1] or 0),
+                "updated_at": row[2],
+            }
+
+        return metrics
+
     def fetch_document_sync_states(self, document_nos: Iterable[str]) -> dict[str, dict[str, Any]]:
         normalized_document_nos = sorted(
             {
@@ -838,6 +1018,270 @@ class PostgresPermissionStore(_PostgresStoreBase):
             }
             for row in rows
             if row and isinstance(row[0], str) and row[0].strip()
+        }
+
+    def fetch_collect_workbench(self, limit: int = 200) -> dict[str, Any]:
+        query_limit = max(limit, 0)
+
+        self.ensure_table()
+        helper_store = PostgresRiskTrustStore(self.settings)
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                basic_rows = helper_store._fetch_basic_info_rows(cursor, document_no=None, limit=query_limit)
+                if not basic_rows:
+                    return self._empty_collect_workbench()
+
+                document_nos = [row["document_no"] for row in basic_rows]
+                table_metrics = self._fetch_collect_table_metrics(cursor, document_nos)
+                applicant_profiles = helper_store._fetch_person_attributes_map(
+                    cursor,
+                    [row["employee_no"] for row in basic_rows],
+                )
+
+        documents: list[dict[str, Any]] = []
+        pending_count = 0
+        approval_empty_count = 0
+        latest_collected_at: datetime | date | str | None = None
+
+        for basic_row in basic_rows:
+            document_no = basic_row["document_no"]
+            applicant_profile = applicant_profiles.get(basic_row["employee_no"] or "", {})
+            metrics = table_metrics.get(document_no, {})
+            permission_count = int(metrics.get("permission", {}).get("records") or 0)
+            approval_count = int(metrics.get("approval", {}).get("records") or 0)
+            org_scope_count = int(metrics.get("orgScope", {}).get("records") or 0)
+            collect_status = self._build_collect_status(permission_count, approval_count, org_scope_count)
+
+            if collect_status == "待补采":
+                pending_count += 1
+            elif collect_status == "审批为空":
+                approval_empty_count += 1
+
+            collected_at_value = metrics.get("basic", {}).get("updated_at") or basic_row.get("updated_at")
+            if collected_at_value is not None and (
+                latest_collected_at is None or collected_at_value > latest_collected_at
+            ):
+                latest_collected_at = collected_at_value
+
+            documents.append(
+                {
+                    "id": document_no,
+                    "documentNo": document_no,
+                    "applicantName": self._strip_text(applicant_profile.get("employee_name")) or "-",
+                    "applicantNo": basic_row["employee_no"] or "-",
+                    "permissionTarget": basic_row["permission_target"] or "-",
+                    "departmentName": basic_row["department_name"] or "-",
+                    "documentStatus": basic_row["document_status"] or "-",
+                    "collectStatus": collect_status,
+                    "applyTime": self._format_datetime_value(basic_row["apply_time"]),
+                    "latestApprovalTime": self._format_datetime_value(basic_row["latest_approval_time"]),
+                    "collectedAt": self._format_datetime_value(collected_at_value),
+                    "roleCount": permission_count,
+                    "approvalCount": approval_count,
+                    "orgScopeCount": org_scope_count,
+                    "collectionCount": int(basic_row["collection_count"] or 1),
+                }
+            )
+
+        return {
+            "stats": [
+                {
+                    "label": "已入库单据",
+                    "value": str(len(documents)),
+                    "hint": "来自 `申请单基本信息` 中当前可查询到的单据数。",
+                    "tone": "info" if documents else "default",
+                },
+                {
+                    "label": "待补采单据",
+                    "value": str(pending_count),
+                    "hint": "角色明细或组织范围缺失时会计入待补采。",
+                    "tone": "warning" if pending_count else "success",
+                },
+                {
+                    "label": "审批为空单据",
+                    "value": str(approval_empty_count),
+                    "hint": "审批记录为空时单独标识，避免误判为主表缺失。",
+                    "tone": "info" if approval_empty_count else "default",
+                },
+                {
+                    "label": "最近落库时间",
+                    "value": self._format_datetime_value(latest_collected_at),
+                    "hint": "取 `申请单基本信息.记录更新时间` 的最新值。",
+                    "tone": "default",
+                },
+            ],
+            "documents": documents,
+        }
+
+    def fetch_collect_document_detail(self, document_no: str) -> dict[str, Any] | None:
+        normalized_document_no = self._strip_text(document_no)
+        if normalized_document_no is None:
+            return None
+
+        self.ensure_table()
+        helper_store = PostgresRiskTrustStore(self.settings)
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                basic_rows = helper_store._fetch_basic_info_rows(cursor, document_no=normalized_document_no, limit=1)
+                if not basic_rows:
+                    return None
+
+                basic_row = basic_rows[0]
+                detail_rows = helper_store._fetch_permission_detail_rows(cursor, [normalized_document_no])
+                approval_rows = helper_store._fetch_approval_rows(cursor, [normalized_document_no])
+                org_scope_rows = helper_store._fetch_org_scope_rows(cursor, [normalized_document_no])
+                table_metrics = self._fetch_collect_table_metrics(cursor, [normalized_document_no]).get(
+                    normalized_document_no,
+                    {},
+                )
+                applicant_profiles = helper_store._fetch_person_attributes_map(
+                    cursor,
+                    [basic_row["employee_no"]],
+                )
+                permission_catalog = helper_store._fetch_permission_catalog_rows(
+                    cursor,
+                    [row["role_code"] for row in [*detail_rows, *org_scope_rows]],
+                )
+                org_attributes = helper_store._fetch_org_attributes_map(
+                    cursor,
+                    [row["org_code"] for row in org_scope_rows],
+                )
+
+        applicant_profile = applicant_profiles.get(basic_row["employee_no"] or "", {})
+        permission_count = int(table_metrics.get("permission", {}).get("records") or 0)
+        approval_count = int(table_metrics.get("approval", {}).get("records") or 0)
+        org_scope_count = int(table_metrics.get("orgScope", {}).get("records") or 0)
+        collect_status = self._build_collect_status(permission_count, approval_count, org_scope_count)
+
+        notes: list[str] = []
+        if collect_status == "待补采":
+            notes.append("当前单据仍存在待补采表，请优先重跑当前单据并核对角色明细与组织范围。")
+        if collect_status == "审批为空":
+            notes.append("当前审批记录为空，请确认该单据在 iERP 页面是否尚未产生审批轨迹。")
+        if int(basic_row["collection_count"] or 1) > 1:
+            notes.append(f"该单据已发生重采 {int(basic_row['collection_count'] or 1)} 次。")
+        if not notes:
+            notes.append("当前四张申请单表已形成可查询的采集闭环。")
+
+        return {
+            "documentNo": normalized_document_no,
+            "collectStatus": collect_status,
+            "overviewFields": [
+                {"label": "单据编号", "value": normalized_document_no, "hint": "主键来自 `申请单基本信息`。"},
+                {
+                    "label": "申请人",
+                    "value": self._strip_text(applicant_profile.get("employee_name")) or "-",
+                    "hint": "通过 `申请单基本信息.工号 -> 人员属性查询.工号` 关联得到。",
+                },
+                {"label": "工号", "value": basic_row["employee_no"] or "-", "hint": "申请人主键。"},
+                {"label": "权限对象", "value": basic_row["permission_target"] or "-", "hint": "来自主表字段。"},
+                {"label": "单据状态", "value": basic_row["document_status"] or "-", "hint": "业务单据自身状态。"},
+                {"label": "采集状态", "value": collect_status, "hint": "根据四张表当前落库情况推导。"},
+                {"label": "公司", "value": basic_row["company_name"] or "-", "hint": "来自主表。"},
+                {"label": "部门", "value": basic_row["department_name"] or "-", "hint": "来自主表。"},
+                {"label": "职位", "value": basic_row["position_name"] or "-", "hint": "来自主表。"},
+                {"label": "申请日期", "value": self._format_datetime_value(basic_row["apply_time"]), "hint": "来自 iERP 页面。"},
+                {
+                    "label": "最新审批时间",
+                    "value": self._format_datetime_value(basic_row["latest_approval_time"]),
+                    "hint": "由审批记录归一化后回填。",
+                },
+                {
+                    "label": "申请人HR类型",
+                    "value": self._strip_text(applicant_profile.get("hr_type")) or "-",
+                    "hint": "来自 `人员属性查询`。",
+                },
+                {
+                    "label": "采集次数",
+                    "value": str(int(basic_row["collection_count"] or 1)),
+                    "hint": "由 `017` 重采策略维护。",
+                },
+                {
+                    "label": "最近落库时间",
+                    "value": self._format_datetime_value(table_metrics.get("basic", {}).get("updated_at") or basic_row.get("updated_at")),
+                    "hint": "取 `申请单基本信息.记录更新时间`。",
+                },
+            ],
+            "tableStatus": [
+                {
+                    "id": "basic",
+                    "tableName": "申请单基本信息",
+                    "status": "已落库" if int(table_metrics.get("basic", {}).get("records") or 0) > 0 else "待补采",
+                    "records": int(table_metrics.get("basic", {}).get("records") or 0),
+                    "updatedAt": self._format_datetime_value(table_metrics.get("basic", {}).get("updated_at")),
+                    "remark": "主表，单据编号为业务主键。",
+                },
+                {
+                    "id": "permission",
+                    "tableName": "申请单权限列表",
+                    "status": "已落库" if permission_count > 0 else "待补采",
+                    "records": permission_count,
+                    "updatedAt": self._format_datetime_value(table_metrics.get("permission", {}).get("updated_at")),
+                    "remark": "角色级明细，包含角色编码、角色名称、申请类型。",
+                },
+                {
+                    "id": "approval",
+                    "tableName": "申请单审批记录",
+                    "status": "已落库" if approval_count > 0 else "审批为空",
+                    "records": approval_count,
+                    "updatedAt": self._format_datetime_value(table_metrics.get("approval", {}).get("updated_at")),
+                    "remark": "审批轨迹可能为空，不直接等同主表缺失。",
+                },
+                {
+                    "id": "orgScope",
+                    "tableName": "申请表组织范围",
+                    "status": "已落库" if org_scope_count > 0 else "待补采",
+                    "records": org_scope_count,
+                    "updatedAt": self._format_datetime_value(table_metrics.get("orgScope", {}).get("updated_at")),
+                    "remark": "按 `013` 方案以角色-组织粒度展开。",
+                },
+            ],
+            "roles": [
+                {
+                    "id": f"{normalized_document_no}-{row['line_no'] or index}",
+                    "lineNo": row["line_no"] or "-",
+                    "applyType": row["apply_type"] or "-",
+                    "roleCode": row["role_code"] or "-",
+                    "roleName": row["role_name"] or permission_catalog.get(row["role_code"] or "", {}).get("role_name") or "-",
+                    "permissionLevel": permission_catalog.get(row["role_code"] or "", {}).get("permission_level") or "-",
+                    "orgScopeCount": int(row["org_scope_count"] or 0),
+                    "skipOrgScopeCheck": self._format_bool_label(
+                        permission_catalog.get(row["role_code"] or "", {}).get("skip_org_scope_check"),
+                    ),
+                }
+                for index, row in enumerate(detail_rows, start=1)
+            ],
+            "approvals": [
+                {
+                    "id": f"{normalized_document_no}-{row['record_seq'] or index}",
+                    "nodeName": row["node_name"] or "-",
+                    "approver": " / ".join(
+                        item
+                        for item in [row["approver_name"] or "-", row["approver_employee_no"] or ""]
+                        if item
+                    ),
+                    "action": row["approval_action"] or "-",
+                    "finishedAt": self._format_datetime_value(row["approval_time"]),
+                    "comment": row["approval_opinion"] or row["raw_text"] or "-",
+                }
+                for index, row in enumerate(approval_rows, start=1)
+            ],
+            "orgScopes": [
+                {
+                    "id": f"{normalized_document_no}-{row['role_code'] or 'role'}-{row['org_code'] or 'null'}-{index}",
+                    "roleCode": row["role_code"] or "-",
+                    "roleName": row["role_name"] or permission_catalog.get(row["role_code"] or "", {}).get("role_name") or "-",
+                    "organizationCode": row["org_code"] or "-",
+                    "organizationName": org_attributes.get(row["org_code"] or "", {}).get("org_name") or "-",
+                    "orgUnitName": org_attributes.get(row["org_code"] or "", {}).get("org_unit_name") or "-",
+                    "physicalLevel": org_attributes.get(row["org_code"] or "", {}).get("physical_level") or "-",
+                    "skipOrgScopeCheck": self._format_bool_label(
+                        permission_catalog.get(row["role_code"] or "", {}).get("skip_org_scope_check"),
+                    ),
+                }
+                for index, row in enumerate(org_scope_rows, start=1)
+            ],
+            "notes": notes,
         }
 
     def _fetch_unique_roster_employee_no_by_names(self, cursor, approver_names: Iterable[str]) -> dict[str, str]:
@@ -1433,18 +1877,35 @@ class PostgresPersonAttributesStore(_PostgresStoreBase):
 
 
 class PostgresRiskTrustStore(_PostgresStoreBase):
+    _ensure_table_lock = threading.Lock()
+    _ensured_schema_keys: set[tuple[str, int, str, str]] = set()
     schema_sql = Path(__file__).resolve().parents[1] / "sql" / "022_risk_trust_assessment.sql"
     schema_upgrade_sql_files = [
         Path(__file__).resolve().parents[1] / "sql" / "023_low_score_feedback_preagg.sql",
     ]
 
     def ensure_table(self) -> None:
+        schema_key = (
+            self.settings.host,
+            self.settings.port,
+            self.settings.dbname,
+            self.settings.schema,
+        )
+        if schema_key in self._ensured_schema_keys:
+            return
+
         ddl = self.schema_sql.read_text(encoding="utf-8")
-        with self.connect() as connection:
-            with connection.cursor() as cursor:
-                cursor.execute(ddl)
-                for migration_sql_file in self.schema_upgrade_sql_files:
-                    cursor.execute(migration_sql_file.read_text(encoding="utf-8"))
+        with self._ensure_table_lock:
+            if schema_key in self._ensured_schema_keys:
+                return
+
+            with self.connect() as connection:
+                with connection.cursor() as cursor:
+                    cursor.execute(ddl)
+                    for migration_sql_file in self.schema_upgrade_sql_files:
+                        cursor.execute(migration_sql_file.read_text(encoding="utf-8"))
+
+            self._ensured_schema_keys.add(schema_key)
 
     @staticmethod
     def _format_datetime_value(value: Any) -> str:
@@ -2020,7 +2481,8 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                 {self._quote_identifier(BASIC_INFO_COLUMNS["position_name"])},
                 {self._quote_identifier(BASIC_INFO_COLUMNS["apply_time"])},
                 {self._quote_identifier(BASIC_INFO_COLUMNS["latest_approval_time"])},
-                {self._quote_identifier(BASIC_INFO_COLUMNS["collection_count"])}
+                {self._quote_identifier(BASIC_INFO_COLUMNS["collection_count"])},
+                {self._quote_identifier(BASIC_INFO_COLUMNS["updated_at"])}
             FROM {BASIC_INFO_TABLE}
         """
         params: list[Any] = []
@@ -2051,6 +2513,7 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                 "apply_time": row[9],
                 "latest_approval_time": row[10],
                 "collection_count": row[11],
+                "updated_at": row[12],
             }
             for row in rows
             if self._strip_text(row[0]) is not None

@@ -1,9 +1,13 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from fastapi import APIRouter, HTTPException, Query
 
-from automation.api.mock_data import get_collect_dashboard
+from automation.api.collect_workbench import (
+    get_collect_document_detail,
+    get_collect_workbench,
+    start_collect_task,
+)
 from automation.api.process_dashboard import (
     approve_process_document,
     get_process_analysis_dashboard,
@@ -23,9 +27,42 @@ class ProcessDocumentApprovalRequest(BaseModel):
     dryRun: bool = False
 
 
+class CollectRunRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    documentNo: str = ""
+    limit: int = Field(default=10, ge=1)
+    dryRun: bool = False
+
+
 @router.get("/collect-dashboard")
 def get_collect_documents() -> dict[str, object]:
-    return get_collect_dashboard()
+    return get_collect_workbench()
+
+
+@router.get("/collect-workbench")
+def get_collect_workbench_documents() -> dict[str, object]:
+    return get_collect_workbench()
+
+
+@router.get("/collect-workbench/{document_no}")
+def get_collect_workbench_document(document_no: str) -> dict[str, object]:
+    detail = get_collect_document_detail(document_no)
+    if detail is None:
+        raise HTTPException(status_code=404, detail=f"未找到单据 {document_no} 的采集详情")
+    return detail
+
+
+@router.post("/collect-workbench/run")
+def post_collect_workbench_run(payload: CollectRunRequest) -> dict[str, object]:
+    try:
+        return start_collect_task(
+            document_no=payload.documentNo,
+            limit=payload.limit,
+            dry_run=payload.dryRun,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.get("/process-dashboard")

@@ -8,6 +8,12 @@ python3 -m venv .venv
 .venv/bin/python -m playwright install chromium
 ```
 
+Install test/dev extras:
+```bash
+cd /home/shangmeilin/clawcheck
+.venv/bin/python -m pip install -r automation/requirements-dev.txt
+```
+
 Recommended runtime convention:
 - Use the repository root `.venv` as the only Python environment for this project.
 - Run Python scripts from the repository root with `.venv/bin/python ...`.
@@ -149,6 +155,19 @@ Optional API base override:
 ```bash
 cd /home/shangmeilin/clawcheck/webui
 VITE_API_BASE_URL=http://127.0.0.1:8000/api npm run dev
+```
+
+## 4.1 Tests
+Run the full Python test suite with the standardized entry:
+```bash
+cd /home/shangmeilin/clawcheck
+.venv/bin/python -m pytest -q
+```
+
+If you only want router tests:
+```bash
+cd /home/shangmeilin/clawcheck
+.venv/bin/python -m pytest tests/test_documents_router.py -q
 ```
 
 ## 5. Output

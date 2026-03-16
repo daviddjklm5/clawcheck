@@ -44,11 +44,48 @@ export interface CollectDocumentRow {
   documentNo: string;
   applicantName: string;
   applicantNo: string;
-  subject: string;
+  permissionTarget: string;
+  departmentName: string;
   documentStatus: string;
+  collectStatus: string;
+  applyTime: string;
+  latestApprovalTime: string;
   collectedAt: string;
   roleCount: number;
   approvalCount: number;
+  orgScopeCount: number;
+  collectionCount: number;
+}
+
+export interface CollectRoleRow {
+  id: string;
+  lineNo: string;
+  applyType: string;
+  roleCode: string;
+  roleName: string;
+  permissionLevel: string;
+  orgScopeCount: number;
+  skipOrgScopeCheck: string;
+}
+
+export interface CollectApprovalRow {
+  id: string;
+  nodeName: string;
+  approver: string;
+  action: string;
+  finishedAt: string;
+  comment: string;
+}
+
+export interface CollectOrgScopeRow {
+  id: string;
+  roleCode: string;
+  roleName: string;
+  organizationCode: string;
+  organizationName: string;
+  orgUnitName: string;
+  physicalLevel: string;
+  skipOrgScopeCheck: string;
 }
 
 export interface TableStatusRow {
@@ -61,16 +98,50 @@ export interface TableStatusRow {
 }
 
 export interface CollectDetail {
-  basicInfo: DetailField[];
+  documentNo: string;
+  collectStatus: string;
+  overviewFields: DetailField[];
   tableStatus: TableStatusRow[];
-  nextActions: string[];
+  roles: CollectRoleRow[];
+  approvals: CollectApprovalRow[];
+  orgScopes: CollectOrgScopeRow[];
+  notes: string[];
 }
 
-export interface CollectDashboard {
+export interface CollectRunRequest {
+  documentNo: string;
+  limit: number;
+  dryRun: boolean;
+}
+
+export interface CollectRunSummary {
+  id: string;
+  taskId: string;
+  status: string;
+  requestedAt: string;
+  startedAt: string;
+  finishedAt: string;
+  requestedDocumentNo: string;
+  requestedLimit: number;
+  dryRun: boolean;
+  requestedCount: number;
+  successCount: number;
+  skippedCount: number;
+  failedCount: number;
+  message: string;
+  dumpFile: string;
+  skippedDumpFile: string;
+  failedDumpFile: string;
+  summaryFile: string;
+  logFile: string;
+  outputTail: string;
+}
+
+export interface CollectWorkbench {
   stats: StatItem[];
-  scopes: ActionCard[];
   documents: CollectDocumentRow[];
-  detailsByDocumentNo: Record<string, CollectDetail>;
+  currentTask: CollectRunSummary | null;
+  recentRuns: CollectRunSummary[];
 }
 
 export interface ProcessDocumentRow {

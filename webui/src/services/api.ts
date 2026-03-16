@@ -1,5 +1,8 @@
 import type {
-  CollectDashboard,
+  CollectDetail,
+  CollectRunRequest,
+  CollectRunSummary,
+  CollectWorkbench,
   MasterDataDashboard,
   ProcessAnalysisDashboard,
   ProcessApprovalRequest,
@@ -88,8 +91,17 @@ export const dashboardApi = {
   getMasterData(): Promise<MasterDataDashboard> {
     return request<MasterDataDashboard>("/jobs/master-data");
   },
-  getCollectDashboard(): Promise<CollectDashboard> {
-    return request<CollectDashboard>("/documents/collect-dashboard");
+  getCollectWorkbench(): Promise<CollectWorkbench> {
+    return request<CollectWorkbench>("/documents/collect-workbench");
+  },
+  getCollectDocumentDetail(documentNo: string): Promise<CollectDetail> {
+    return request<CollectDetail>(`/documents/collect-workbench/${encodeURIComponent(documentNo)}`);
+  },
+  startCollectTask(payload: CollectRunRequest): Promise<CollectRunSummary> {
+    return request<CollectRunSummary>("/documents/collect-workbench/run", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
   },
   getProcessWorkbench(): Promise<ProcessWorkbench> {
     return request<ProcessWorkbench>("/documents/process-workbench");
