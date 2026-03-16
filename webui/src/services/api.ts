@@ -1,10 +1,11 @@
 import type {
   CollectDashboard,
   MasterDataDashboard,
+  ProcessAnalysisDashboard,
   ProcessApprovalRequest,
   ProcessApprovalResponse,
   ProcessDetail,
-  ProcessDashboard,
+  ProcessWorkbench,
   RuntimeSettingsSummary,
 } from "../types/dashboard";
 
@@ -49,15 +50,18 @@ export const dashboardApi = {
   getCollectDashboard(): Promise<CollectDashboard> {
     return request<CollectDashboard>("/documents/collect-dashboard");
   },
-  getProcessDashboard(): Promise<ProcessDashboard> {
-    return request<ProcessDashboard>("/documents/process-dashboard");
+  getProcessWorkbench(): Promise<ProcessWorkbench> {
+    return request<ProcessWorkbench>("/documents/process-workbench");
+  },
+  getProcessAnalysisDashboard(): Promise<ProcessAnalysisDashboard> {
+    return request<ProcessAnalysisDashboard>("/documents/process-analysis");
   },
   getProcessDocumentDetail(documentNo: string): Promise<ProcessDetail> {
-    return request<ProcessDetail>(`/documents/process-dashboard/${encodeURIComponent(documentNo)}`);
+    return request<ProcessDetail>(`/documents/process-workbench/${encodeURIComponent(documentNo)}`);
   },
   approveProcessDocument(documentNo: string, payload: ProcessApprovalRequest): Promise<ProcessApprovalResponse> {
     return request<ProcessApprovalResponse>(
-      `/documents/process-dashboard/${encodeURIComponent(documentNo)}/approval`,
+      `/documents/process-workbench/${encodeURIComponent(documentNo)}/approval`,
       {
         method: "POST",
         body: JSON.stringify(payload),

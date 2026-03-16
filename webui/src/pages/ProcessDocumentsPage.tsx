@@ -1,8 +1,11 @@
 import { useEffect, useState } from "react";
+import CloseOutlinedIcon from "@mui/icons-material/CloseOutlined";
 import {
   Alert,
   Box,
   Button,
+  Drawer,
+  IconButton,
   Paper,
   Stack,
   Tab,
@@ -10,29 +13,40 @@ import {
   TextField,
   Typography,
 } from "@mui/material";
-import type { GridColDef, GridRowParams } from "@mui/x-data-grid";
+import type { GridColDef, GridRenderCellParams } from "@mui/x-data-grid";
 
 import { AppDataGrid } from "../components/AppDataGrid";
 import { KeyValueList } from "../components/KeyValueList";
 import { SectionCard } from "../components/SectionCard";
-import { StatCard } from "../components/StatCard";
 import { StatusTag } from "../components/StatusTag";
+import { StatCard } from "../components/StatCard";
 import { dashboardApi } from "../services/api";
 import type {
   ApprovalRow,
-  DistributionSection,
   OrgScopeRow,
   ProcessApprovalResponse,
-  ProcessDashboard,
   ProcessDetail,
   ProcessDocumentRow,
-  ProcessExecutionLogRow,
+  ProcessWorkbench,
   RiskDetailRow,
   RoleRow,
+  StatItem,
   Tone,
 } from "../types/dashboard";
 
-type DetailTab = "overview" | "approvalAction" | "lowScoreDetails" | "roles" | "orgScopes" | "approvals";
+type DetailTab =
+  | "summary"
+  | "riskOverview"
+  | "approvalAction"
+  | "lowScoreDetails"
+  | "roles"
+  | "orgScopes"
+  | "approvals";
+
+const MAIN_GRID_PAGE_SIZE = 20;
+const DETAIL_GRID_PAGE_SIZE = 20;
+const MAIN_GRID_HEIGHT = 1180;
+const DETAIL_GRID_HEIGHT = 920;
 
 const documentStatusTone: Record<string, Tone> = {
   已提交: "warning",
@@ -56,12 +70,15 @@ const actionTone: Record<string, Tone> = {
   allow: "success",
 };
 
-function getDisplaySummaryConclusion(value: string | null | undefined): string {
-  if (!value) {
-    return "-";
-  }
-  return value === "人工干预" ? "加强审核" : value;
-}
+const detailTabs: Array<{ value: DetailTab; label: string }> = [
+  { value: "summary", label: "单据概览" },
+  { value: "riskOverview", label: "风险总览" },
+  { value: "approvalAction", label: "审批单据" },
+  { value: "lowScoreDetails", label: "原始低分明细" },
+  { value: "roles", label: "申请角色" },
+  { value: "orgScopes", label: "目标组织" },
+  { value: "approvals", label: "审批记录" },
+];
 
 function formatScoreLabel(score: number | null | undefined): string {
   if (typeof score !== "number" || Number.isNaN(score)) {
@@ -86,29 +103,13 @@ function getScoreTone(score: number | null | undefined): Tone {
   return "success";
 }
 
-function getDistributionTone(sectionId: string, label: string): Tone {
-  if (sectionId === "summary-conclusion") {
-    return conclusionTone[label] ?? "default";
-  }
-  if (sectionId === "score-distribution") {
-    return getScoreTone(Number(label));
-  }
-  return "default";
-}
-
-function isProcessDashboardResponse(value: unknown): value is ProcessDashboard {
+function isProcessWorkbenchResponse(value: unknown): value is ProcessWorkbench {
   if (!value || typeof value !== "object") {
     return false;
   }
 
-  const candidate = value as Partial<ProcessDashboard>;
-  return (
-    Array.isArray(candidate.stats) &&
-    Array.isArray(candidate.documents) &&
-    Array.isArray(candidate.distributionSections) &&
-    Array.isArray(candidate.executionLogs) &&
-    "latestBatch" in candidate
-  );
+  const candidate = value as Partial<ProcessWorkbench>;
+  return Array.isArray(candidate.stats) && Array.isArray(candidate.documents);
 }
 
 function isProcessDetailResponse(value: unknown): value is ProcessDetail {
@@ -129,61 +130,32 @@ function isProcessDetailResponse(value: unknown): value is ProcessDetail {
   );
 }
 
-const documentColumns: GridColDef<ProcessDocumentRow>[] = [
-  { field: "documentNo", headerName: "单据编号", minWidth: 180, flex: 1.1 },
-  { field: "permissionTarget", headerName: "权限对象", minWidth: 130, flex: 0.9 },
-  { field: "applicantName", headerName: "申请人", minWidth: 110 },
-  { field: "applicantNo", headerName: "工号", minWidth: 100 },
-  { field: "department", headerName: "部门", minWidth: 180, flex: 1 },
-  {
-    field: "documentStatus",
-    headerName: "单据状态",
-    minWidth: 110,
-    renderCell: (params) => (
-      <StatusTag
-        label={String(params.value ?? "")}
-        tone={documentStatusTone[String(params.value)] ?? "default"}
-      />
-    ),
-  },
-  {
-    field: "finalScore",
-    headerName: "最终信任分",
-    minWidth: 110,
-    renderCell: (params) => (
-      <StatusTag label={formatScoreLabel(params.value as number)} tone={getScoreTone(params.value as number)} />
-    ),
-  },
-  {
-    field: "summaryConclusion",
-    headerName: "总结论",
-    minWidth: 120,
-    renderCell: (params) => (
-      <StatusTag
-        label={String(params.row.summaryConclusionLabel ?? params.value ?? "")}
-        tone={conclusionTone[String(params.row.summaryConclusionLabel ?? params.value)] ?? "default"}
-      />
-    ),
-  },
-  {
-    field: "suggestedActionLabel",
-    headerName: "建议动作",
-    minWidth: 140,
-    renderCell: (params) => (
-      <StatusTag
-        label={String(params.value ?? "")}
-        tone={actionTone[params.row.suggestedAction] ?? "default"}
-      />
-    ),
-  },
-  {
-    field: "lowScoreDetailCount",
-    headerName: "原始低分明细数",
-    minWidth: 140,
-    type: "number",
-  },
-  { field: "assessedAt", headerName: "评估时间", minWidth: 170 },
-];
+function WorkbenchStat({ item }: { item: StatItem }) {
+  return (
+    <Paper
+      elevation={0}
+      sx={{
+        minWidth: 0,
+        px: 1.5,
+        py: 1.25,
+        border: "1px solid",
+        borderColor: "divider",
+        backgroundColor: "rgba(255,255,255,0.78)",
+      }}
+    >
+      <Typography variant="caption" color="text.secondary">
+        {item.label}
+      </Typography>
+      <Box sx={{ mt: 0.75, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 1.5 }}>
+        <Typography variant="subtitle2">{item.value}</Typography>
+        <StatusTag label={item.value} tone={item.tone} />
+      </Box>
+      <Typography variant="caption" color="text.secondary" sx={{ mt: 0.75, display: "block" }}>
+        {item.hint}
+      </Typography>
+    </Paper>
+  );
+}
 
 const roleColumns: GridColDef<RoleRow>[] = [
   { field: "lineNo", headerName: "明细行号", minWidth: 100 },
@@ -230,81 +202,25 @@ const riskColumns: GridColDef<RiskDetailRow>[] = [
   { field: "detailConclusion", headerName: "明细结论", minWidth: 320, flex: 1.5 },
 ];
 
-const executionLogColumns: GridColDef<ProcessExecutionLogRow>[] = [
-  { field: "batchNo", headerName: "批次号", minWidth: 180, flex: 1 },
-  { field: "assessmentVersion", headerName: "版本", minWidth: 100 },
-  { field: "executedAt", headerName: "执行时间", minWidth: 170 },
-  { field: "documentCount", headerName: "单据数", minWidth: 90, type: "number" },
-  { field: "detailCount", headerName: "明细数", minWidth: 90, type: "number" },
-  {
-    field: "persistedToDatabase",
-    headerName: "落库状态",
-    minWidth: 110,
-    renderCell: (params) => (
-      <StatusTag label={params.value ? "已落库" : "仅日志"} tone={params.value ? "success" : "info"} />
-    ),
-  },
-  { field: "sampleDocumentNo", headerName: "样例单据", minWidth: 160 },
-  { field: "sourceFile", headerName: "日志文件", minWidth: 240, flex: 1.2 },
-];
-
-const detailTabs: Array<{ value: DetailTab; label: string }> = [
-  { value: "overview", label: "风险总览" },
-  { value: "approvalAction", label: "审批单据" },
-  { value: "lowScoreDetails", label: "原始低分明细" },
-  { value: "roles", label: "申请角色" },
-  { value: "orgScopes", label: "目标组织" },
-  { value: "approvals", label: "审批记录" },
-];
-
-function DistributionSectionCard({ section }: { section: DistributionSection }) {
-  return (
-    <SectionCard title={section.title} subtitle={section.subtitle}>
-      <Stack spacing={1.25}>
-        {section.items.map((item) => (
-          <Box
-            key={item.id}
-            sx={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              gap: 2,
-              px: 1.5,
-              py: 1.25,
-              border: "1px solid",
-              borderColor: "divider",
-              backgroundColor: "rgba(255,255,255,0.68)",
-            }}
-          >
-            <Typography variant="body2">{getDisplaySummaryConclusion(item.label)}</Typography>
-            <StatusTag label={`${item.count} 条`} tone={getDistributionTone(section.id, item.label)} />
-          </Box>
-        ))}
-      </Stack>
-    </SectionCard>
-  );
-}
-
 export function ProcessDocumentsPage() {
-  const [dashboard, setDashboard] = useState<ProcessDashboard | null>(null);
+  const [workbench, setWorkbench] = useState<ProcessWorkbench | null>(null);
   const [detail, setDetail] = useState<ProcessDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [selectedDocumentNo, setSelectedDocumentNo] = useState("");
-  const [activeTab, setActiveTab] = useState<DetailTab>("overview");
+  const [detailDrawerOpen, setDetailDrawerOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState<DetailTab>("summary");
   const [approvalOpinion, setApprovalOpinion] = useState("同意");
   const [approvalSubmittingMode, setApprovalSubmittingMode] = useState<"approve" | "dryRun" | null>(null);
   const [approvalResult, setApprovalResult] = useState<ProcessApprovalResponse | null>(null);
   const [approvalError, setApprovalError] = useState<string | null>(null);
 
-  const dashboardStats = dashboard?.stats ?? [];
-  const dashboardDocuments = dashboard?.documents ?? [];
+  const workbenchStats = workbench?.stats ?? [];
+  const workbenchDocuments = workbench?.documents ?? [];
   const selectedDocumentRow =
-    dashboardDocuments.find((item) => item.documentNo === selectedDocumentNo) ?? null;
-  const dashboardDistributionSections = dashboard?.distributionSections ?? [];
-  const dashboardExecutionLogs = dashboard?.executionLogs ?? [];
+    workbenchDocuments.find((item) => item.documentNo === selectedDocumentNo) ?? null;
   const detailOverviewFields = detail?.overviewFields ?? [];
   const detailFeedbackOverview = detail?.feedbackOverview ?? null;
   const detailFeedbackStats = detailFeedbackOverview?.feedbackStats ?? [];
@@ -321,28 +237,21 @@ export function ProcessDocumentsPage() {
     async function load() {
       try {
         setLoading(true);
-        const response = (await dashboardApi.getProcessDashboard()) as unknown;
-        if (!isProcessDashboardResponse(response)) {
+        const response = (await dashboardApi.getProcessWorkbench()) as unknown;
+        if (!isProcessWorkbenchResponse(response)) {
           throw new Error(
-            "处理单据接口返回的不是 200 方案正式结构。请重启 FastAPI 服务，确保 `/documents/process-dashboard` 已切换到 PostgreSQL 实时接口。",
+            "处理工作台接口返回的不是 201 方案正式结构。请重启 FastAPI 服务，确保 `/documents/process-workbench` 已切换到 PostgreSQL 实时接口。",
           );
         }
         if (!active) {
           return;
         }
 
-        setDashboard(response);
-        setSelectedDocumentNo((currentValue) => {
-          if (currentValue && response.documents.some((item) => item.documentNo === currentValue)) {
-            return currentValue;
-          }
-          return response.documents[0]?.documentNo ?? "";
-        });
+        setWorkbench(response);
         setError(null);
       } catch (loadError) {
         if (active) {
-          setDashboard(null);
-          setSelectedDocumentNo("");
+          setWorkbench(null);
           setError(loadError instanceof Error ? loadError.message : "加载处理单据页失败");
         }
       } finally {
@@ -360,9 +269,7 @@ export function ProcessDocumentsPage() {
   }, []);
 
   useEffect(() => {
-    if (!selectedDocumentNo) {
-      setDetail(null);
-      setDetailError(null);
+    if (!detailDrawerOpen || !selectedDocumentNo) {
       return;
     }
 
@@ -376,7 +283,7 @@ export function ProcessDocumentsPage() {
         const response = (await dashboardApi.getProcessDocumentDetail(selectedDocumentNo)) as unknown;
         if (!isProcessDetailResponse(response)) {
           throw new Error(
-            "单据详情接口返回的不是 200 方案正式结构。请重启 FastAPI 服务，确保 `/documents/process-dashboard/{documentNo}` 已切换到 PostgreSQL 实时查询。",
+            "单据详情接口返回的不是 201 方案正式结构。请重启 FastAPI 服务，确保 `/documents/process-workbench/{documentNo}` 已切换到 PostgreSQL 实时查询。",
           );
         }
         if (active) {
@@ -406,7 +313,7 @@ export function ProcessDocumentsPage() {
     return () => {
       active = false;
     };
-  }, [selectedDocumentNo]);
+  }, [detailDrawerOpen, selectedDocumentNo]);
 
   useEffect(() => {
     setApprovalOpinion("同意");
@@ -414,6 +321,16 @@ export function ProcessDocumentsPage() {
     setApprovalError(null);
     setApprovalSubmittingMode(null);
   }, [selectedDocumentNo]);
+
+  function openDetail(documentNo: string) {
+    setSelectedDocumentNo(documentNo);
+    setActiveTab("summary");
+    setDetailDrawerOpen(true);
+  }
+
+  function closeDetail() {
+    setDetailDrawerOpen(false);
+  }
 
   async function runApproval(dryRun: boolean) {
     if (!selectedDocumentNo) {
@@ -444,81 +361,232 @@ export function ProcessDocumentsPage() {
     }
   }
 
+  const documentColumns: GridColDef<ProcessDocumentRow>[] = [
+    {
+      field: "documentNo",
+      headerName: "单据编号",
+      minWidth: 180,
+      flex: 1.1,
+      renderCell: (params: GridRenderCellParams<ProcessDocumentRow>) => (
+        <Button
+          color="primary"
+          size="small"
+          onClick={(event) => {
+            event.stopPropagation();
+            openDetail(params.row.documentNo);
+          }}
+          sx={{ minWidth: 0, px: 0, justifyContent: "flex-start", textTransform: "none", fontWeight: 700 }}
+        >
+          {params.row.documentNo}
+        </Button>
+      ),
+    },
+    { field: "permissionTarget", headerName: "权限对象", minWidth: 130, flex: 0.9 },
+    { field: "applicantName", headerName: "申请人", minWidth: 110 },
+    { field: "applicantNo", headerName: "工号", minWidth: 100 },
+    { field: "department", headerName: "部门", minWidth: 180, flex: 1 },
+    {
+      field: "documentStatus",
+      headerName: "单据状态",
+      minWidth: 110,
+      renderCell: (params) => (
+        <StatusTag
+          label={String(params.value ?? "")}
+          tone={documentStatusTone[String(params.value)] ?? "default"}
+        />
+      ),
+    },
+    {
+      field: "finalScore",
+      headerName: "最终信任分",
+      minWidth: 110,
+      renderCell: (params) => (
+        <StatusTag label={formatScoreLabel(params.value as number)} tone={getScoreTone(params.value as number)} />
+      ),
+    },
+    {
+      field: "summaryConclusion",
+      headerName: "总结论",
+      minWidth: 120,
+      renderCell: (params) => (
+        <StatusTag
+          label={String(params.row.summaryConclusionLabel ?? params.value ?? "")}
+          tone={conclusionTone[String(params.row.summaryConclusionLabel ?? params.value)] ?? "default"}
+        />
+      ),
+    },
+    {
+      field: "suggestedActionLabel",
+      headerName: "建议动作",
+      minWidth: 140,
+      renderCell: (params) => (
+        <StatusTag
+          label={String(params.value ?? "")}
+          tone={actionTone[params.row.suggestedAction] ?? "default"}
+        />
+      ),
+    },
+    {
+      field: "lowScoreDetailCount",
+      headerName: "原始低分明细数",
+      minWidth: 140,
+      type: "number",
+    },
+    { field: "assessedAt", headerName: "评估时间", minWidth: 170 },
+  ];
+
   return (
     <Stack spacing={3}>
       <Box>
         <Typography variant="body1">
-          当前处理单据页直接读取 PostgreSQL 最新评估批次，默认按 `104` 方案展示风险总览，并保留审批单据、原始低分明细、批次分布与最近执行日志。
+          当前页面已按 `201` 方案收敛为单据处理工作台，仅保留待处理列表；批次分布与执行日志已拆到 `评估分析` 页面。
         </Typography>
+        <Stack
+          direction={{ xs: "column", md: "row" }}
+          spacing={1.5}
+          sx={{ mt: 1.5, flexWrap: "wrap" }}
+        >
+          {workbenchStats.map((item) => (
+            <WorkbenchStat key={item.label} item={item} />
+          ))}
+        </Stack>
       </Box>
 
       {error ? <Alert severity="error">{error}</Alert> : null}
 
-      <Box
-        sx={{
-          display: "grid",
-          gridTemplateColumns: { xs: "1fr", sm: "repeat(2, minmax(0, 1fr))", xl: "repeat(4, minmax(0, 1fr))" },
-          gap: 2,
+      <AppDataGrid<ProcessDocumentRow>
+        title="待处理单据列表"
+        subtitle="默认每页 20 项，仅点击单据编号打开右侧详情抽屉；关闭抽屉后保留列表上下文。"
+        rows={workbenchDocuments}
+        columns={documentColumns}
+        loading={loading}
+        rowCount={workbenchDocuments.length}
+        minHeight={MAIN_GRID_HEIGHT}
+        pageSizeOptions={[20, 50, 100]}
+        initialState={{
+          sorting: {
+            sortModel: [{ field: "finalScore", sort: "asc" }],
+          },
+          pagination: {
+            paginationModel: {
+              pageSize: MAIN_GRID_PAGE_SIZE,
+              page: 0,
+            },
+          },
+        }}
+      />
+
+      <Drawer
+        anchor="right"
+        open={detailDrawerOpen}
+        onClose={closeDetail}
+        ModalProps={{ keepMounted: true }}
+        PaperProps={{
+          sx: {
+            width: { xs: "100%", lg: "min(1120px, 72vw)" },
+            maxWidth: "100%",
+            background: "linear-gradient(180deg, rgba(248,250,252,0.98) 0%, rgba(255,255,255,0.98) 100%)",
+          },
         }}
       >
-        {dashboardStats.map((item) => (
-          <StatCard key={item.label} item={item} />
-        ))}
-      </Box>
-
-      <Box
-        sx={{
-          display: "grid",
-          gridTemplateColumns: { xs: "1fr", xl: "minmax(0, 1.5fr) minmax(420px, 1fr)" },
-          gap: 2,
-        }}
-      >
-        <AppDataGrid<ProcessDocumentRow>
-          title="待处理单据列表"
-          subtitle="主表展示最新批次的单据级结论；点击后在右侧默认查看 104 聚合反馈，并可展开原始低分明细。"
-          rows={dashboardDocuments}
-          columns={documentColumns}
-          loading={loading}
-          rowCount={dashboardDocuments.length}
-          onRowClick={(params: GridRowParams<ProcessDocumentRow>) => {
-            setSelectedDocumentNo(params.row.documentNo);
-            setActiveTab("overview");
-          }}
-          initialState={{
-            sorting: {
-              sortModel: [{ field: "finalScore", sort: "asc" }],
-            },
-            pagination: {
-              paginationModel: {
-                pageSize: 10,
-                page: 0,
-              },
-            },
-          }}
-        />
-
-        <Stack spacing={2}>
-          <Paper
-            elevation={0}
+        <Box sx={{ display: "flex", flexDirection: "column", height: "100%" }}>
+          <Box
             sx={{
-              p: { xs: 2, md: 2.5 },
-              border: "1px solid",
+              px: { xs: 2, md: 2.5 },
+              py: 2.5,
+              borderBottom: "1px solid",
               borderColor: "divider",
-              background: "linear-gradient(180deg, rgba(255,255,255,0.97) 0%, rgba(248,250,252,0.92) 100%)",
+              backgroundColor: "rgba(255,255,255,0.9)",
             }}
           >
-            <Typography variant="h6">
-              {selectedDocumentNo ? `单据详情：${selectedDocumentNo}` : "单据详情"}
-            </Typography>
-            <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 2 }}>
-              右侧详情默认按 `104` 方案展示风险总览，并补充审批单据、原始低分明细、申请角色、目标组织、审批记录联查信息。
-            </Typography>
+            <Stack direction="row" alignItems="flex-start" justifyContent="space-between" spacing={2}>
+              <Box sx={{ minWidth: 0 }}>
+                <Typography variant="overline" color="text.secondary">
+                  单据详情抽屉
+                </Typography>
+                <Typography variant="h5" sx={{ mt: 0.5, wordBreak: "break-all" }}>
+                  {selectedDocumentNo || "未选择单据"}
+                </Typography>
+                <Typography variant="body2" color="text.secondary" sx={{ mt: 0.75 }}>
+                  详情按需从右侧打开，关闭后保留当前列表的筛选、排序和分页状态。
+                </Typography>
+              </Box>
+              <IconButton onClick={closeDetail} aria-label="关闭单据详情">
+                <CloseOutlinedIcon />
+              </IconButton>
+            </Stack>
+
+            <Stack
+              direction={{ xs: "column", sm: "row" }}
+              spacing={1}
+              sx={{ mt: 2, flexWrap: "wrap" }}
+            >
+              <Paper
+                elevation={0}
+                sx={{
+                  px: 1.25,
+                  py: 1,
+                  border: "1px solid",
+                  borderColor: "divider",
+                  backgroundColor: "rgba(255,255,255,0.72)",
+                }}
+              >
+                <Typography variant="caption" color="text.secondary">
+                  权限对象
+                </Typography>
+                <Typography variant="body2" sx={{ mt: 0.5 }}>
+                  {selectedDocumentRow?.permissionTarget ?? "-"}
+                </Typography>
+              </Paper>
+              <Paper
+                elevation={0}
+                sx={{
+                  px: 1.25,
+                  py: 1,
+                  border: "1px solid",
+                  borderColor: "divider",
+                  backgroundColor: "rgba(255,255,255,0.72)",
+                }}
+              >
+                <Typography variant="caption" color="text.secondary">
+                  当前总结论
+                </Typography>
+                <Box sx={{ mt: 0.5 }}>
+                  <StatusTag
+                    label={selectedDocumentRow?.summaryConclusionLabel ?? "-"}
+                    tone={conclusionTone[selectedDocumentRow?.summaryConclusionLabel ?? "-"] ?? "default"}
+                  />
+                </Box>
+              </Paper>
+              <Paper
+                elevation={0}
+                sx={{
+                  px: 1.25,
+                  py: 1,
+                  border: "1px solid",
+                  borderColor: "divider",
+                  backgroundColor: "rgba(255,255,255,0.72)",
+                }}
+              >
+                <Typography variant="caption" color="text.secondary">
+                  最终信任分
+                </Typography>
+                <Box sx={{ mt: 0.5 }}>
+                  <StatusTag
+                    label={formatScoreLabel(selectedDocumentRow?.finalScore)}
+                    tone={getScoreTone(selectedDocumentRow?.finalScore)}
+                  />
+                </Box>
+              </Paper>
+            </Stack>
 
             <Tabs
               value={activeTab}
               onChange={(_, value: DetailTab) => setActiveTab(value)}
-              variant="fullWidth"
+              variant="scrollable"
+              allowScrollButtonsMobile
               sx={{
+                mt: 2.5,
                 minHeight: 54,
                 "& .MuiTabs-flexContainer": {
                   gap: 0.75,
@@ -545,329 +613,280 @@ export function ProcessDocumentsPage() {
                 />
               ))}
             </Tabs>
-          </Paper>
+          </Box>
 
-          {detailError ? <Alert severity="error">{detailError}</Alert> : null}
+          <Box sx={{ flex: 1, overflowY: "auto", px: { xs: 2, md: 2.5 }, py: 2.5 }}>
+            {detailError ? <Alert severity="error" sx={{ mb: 2 }}>{detailError}</Alert> : null}
 
-          {!selectedDocumentNo && !loading ? (
-            <SectionCard title="暂无单据" subtitle="当前没有可查看的评估结果。">
-              <Typography variant="body2" color="text.secondary">
-                请先执行 `audit`，并确认最新评估批次已成功写入 `申请单风险信任评估`。
-              </Typography>
-            </SectionCard>
-          ) : null}
+            {detailLoading ? (
+              <SectionCard title="加载中" subtitle="正在读取单据详情。">
+                <Typography variant="body2" color="text.secondary">
+                  正在从 PostgreSQL 读取该单据的单据概览、聚合反馈、原始低分明细、组织范围与审批记录。
+                </Typography>
+              </SectionCard>
+            ) : null}
 
-          {detailLoading ? (
-            <SectionCard title="加载中" subtitle="正在读取单据详情。">
-              <Typography variant="body2" color="text.secondary">
-                正在从 PostgreSQL 读取该单据的聚合反馈、原始低分明细、组织范围与审批记录。
-              </Typography>
-            </SectionCard>
-          ) : null}
+            {!detailLoading && !detail && selectedDocumentNo ? (
+              <SectionCard title="暂无详情" subtitle="当前尚未读取到该单据的详情数据。">
+                <Typography variant="body2" color="text.secondary">
+                  请确认该单据已完成评估并成功落库。
+                </Typography>
+              </SectionCard>
+            ) : null}
 
-          {detail && activeTab === "overview" ? (
-            <SectionCard title="风险总览" subtitle="默认按 104 方案聚合展示风险摘要，避免把角色 x 组织展开条数误读为风险点数量。">
-              <Stack spacing={2}>
-                <Box
-                  sx={{
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    gap: 2,
-                    p: 1.5,
-                    border: "1px solid",
-                    borderColor: "divider",
-                    backgroundColor: "rgba(255,255,255,0.75)",
-                  }}
-                >
-                  <Box>
-                    <Typography variant="body2" color="text.secondary">
-                      当前展示结论
-                    </Typography>
-                    <Typography variant="h6" sx={{ mt: 0.75 }}>
-                      {detailFeedbackOverview?.summaryConclusionLabel ?? "-"}
-                    </Typography>
-                  </Box>
-                  <StatusTag
-                    label={detailFeedbackOverview?.summaryConclusionLabel ?? "-"}
-                    tone={conclusionTone[detailFeedbackOverview?.summaryConclusionLabel ?? "-"] ?? "default"}
-                  />
-                </Box>
+            {detail && activeTab === "summary" ? (
+              <SectionCard title="单据概览" subtitle="先看单据基础事实，再进入风险判断与审批动作。">
+                <KeyValueList items={detailOverviewFields} />
+              </SectionCard>
+            ) : null}
 
-                <Box
-                  sx={{
-                    display: "grid",
-                    gridTemplateColumns: { xs: "1fr", sm: "repeat(2, minmax(0, 1fr))", xl: "repeat(5, minmax(0, 1fr))" },
-                    gap: 2,
-                  }}
-                >
-                  {detailFeedbackStats.map((item) => (
-                    <StatCard key={item.label} item={item} />
-                  ))}
-                </Box>
-
-                <Stack spacing={1.25}>
-                  {detailFeedbackGroups.map((group) => (
-                    <Box
-                      key={group.id}
-                      sx={{
-                        p: 1.75,
-                        border: "1px solid",
-                        borderColor: "divider",
-                        backgroundColor: "rgba(255,255,255,0.7)",
-                      }}
-                    >
-                      <Typography variant="subtitle2">{group.title}</Typography>
-                      <Typography variant="body2" sx={{ mt: 1, lineHeight: 1.75 }}>
-                        {group.summary}
+            {detail && activeTab === "riskOverview" ? (
+              <SectionCard title="风险总览" subtitle="默认按 104 方案聚合展示风险摘要，避免把角色 x 组织展开条数误读为风险点数量。">
+                <Stack spacing={2}>
+                  <Box
+                    sx={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: 2,
+                      p: 1.5,
+                      border: "1px solid",
+                      borderColor: "divider",
+                      backgroundColor: "rgba(255,255,255,0.75)",
+                    }}
+                  >
+                    <Box>
+                      <Typography variant="body2" color="text.secondary">
+                        当前展示结论
                       </Typography>
-                      <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: "block" }}>
-                        影响组织单位 {group.affectedOrgUnitCount} 个，影响组织 {group.affectedOrgCount} 个，
-                        影响角色 {group.affectedRoleCount} 个，原始低分明细 {group.rawDetailCount} 条。
-                      </Typography>
-                      <Typography variant="caption" color="text.secondary" sx={{ mt: 0.75, display: "block" }}>
-                        {group.hint}
+                      <Typography variant="h6" sx={{ mt: 0.75 }}>
+                        {detailFeedbackOverview?.summaryConclusionLabel ?? "-"}
                       </Typography>
                     </Box>
-                  ))}
-                </Stack>
-              </Stack>
-
-              <Typography variant="subtitle2" sx={{ mt: 2.5 }}>
-                单据概览
-              </Typography>
-              <Box sx={{ mt: 1.5 }}>
-                <KeyValueList items={detailOverviewFields} />
-              </Box>
-
-              <Typography variant="subtitle2" sx={{ mt: 2.5 }}>
-                处理提示
-              </Typography>
-              <Stack spacing={1} sx={{ mt: 1.5 }}>
-                {detailNotes.map((item, index) => (
-                  <Typography key={`${index}-${item}`} variant="body2" color="text.secondary">
-                    • {item}
-                  </Typography>
-                ))}
-              </Stack>
-            </SectionCard>
-          ) : null}
-
-          {activeTab === "approvalAction" ? (
-            <SectionCard title="审批单据" subtitle="第一阶段仅开放批准动作；前端“批准”会映射到 EHR 的“同意 + 提交”。">
-              <Stack spacing={2}>
-                <Alert severity="warning">
-                  本操作会真实写回 EHR。当前实现会自动打开目标单据的 `任务处理`，将 `审批决策` 设为 `同意`，把下方审批意见写入 EHR 后点击 `提交`。
-                </Alert>
-
-                <KeyValueList
-                  items={[
-                    { label: "单据编号", value: selectedDocumentNo || "-", hint: "当前将对该单据执行审批动作。" },
-                    { label: "权限对象", value: selectedDocumentRow?.permissionTarget ?? "-", hint: "来自处理单据主表。" },
-                    {
-                      label: "当前总结论",
-                      value: selectedDocumentRow?.summaryConclusionLabel ?? "-",
-                      hint: "展示层沿用 104 方案结论文案。",
-                    },
-                    {
-                      label: "建议动作",
-                      value: selectedDocumentRow?.suggestedActionLabel ?? "-",
-                      hint: "仅作参考，不自动替代真实审批动作。",
-                    },
-                    { label: "EHR 审批决策", value: "同意", hint: "后端执行时固定选择该决策值。" },
-                    { label: "EHR 执行按钮", value: "提交", hint: "EHR 实页执行按钮文案。前端按钮文案仍显示“批准”。" },
-                  ]}
-                />
-
-                <TextField
-                  label="审批意见"
-                  multiline
-                  minRows={4}
-                  value={approvalOpinion}
-                  onChange={(event) => setApprovalOpinion(event.target.value)}
-                  disabled={!selectedDocumentNo || approvalSubmittingMode !== null}
-                  placeholder="请输入要带到 EHR 的审批意见。"
-                />
-
-                <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5}>
-                  <Button
-                    variant="contained"
-                    disableElevation
-                    disabled={!selectedDocumentNo || approvalSubmittingMode !== null || !approvalOpinion.trim()}
-                    onClick={() => void runApproval(false)}
-                  >
-                    {approvalSubmittingMode === "approve" ? "批准中..." : "批准"}
-                  </Button>
-                  <Button
-                    variant="outlined"
-                    disabled={!selectedDocumentNo || approvalSubmittingMode !== null || !approvalOpinion.trim()}
-                    onClick={() => void runApproval(true)}
-                  >
-                    {approvalSubmittingMode === "dryRun" ? "验证中..." : "验证连通性（dry-run）"}
-                  </Button>
-                </Stack>
-
-                {approvalError ? <Alert severity="error">{approvalError}</Alert> : null}
-
-                {approvalResult ? (
-                  <Stack spacing={1.5}>
-                    <Alert severity={approvalResult.dryRun ? "info" : "success"}>{approvalResult.message}</Alert>
-                    <KeyValueList
-                      items={[
-                        { label: "执行状态", value: approvalResult.status, hint: approvalResult.dryRun ? "当前只做连通性验证，不点击提交。" : "已按返回结果完成执行。" },
-                        { label: "开始时间", value: approvalResult.startedAt || "-", hint: "后端开始执行审批的时间。" },
-                        { label: "结束时间", value: approvalResult.finishedAt || "-", hint: "后端完成执行或返回结果的时间。" },
-                        { label: "EHR 决策", value: approvalResult.ehrDecision || "-", hint: "当前固定为“同意”。" },
-                        { label: "EHR 提交按钮", value: approvalResult.ehrSubmitLabel || "-", hint: "实际点击的 EHR 页面按钮文案。" },
-                        { label: "日志文件", value: approvalResult.logFile || "-", hint: "审批执行 JSON 日志，可用于排障。" },
-                        {
-                          label: "异常截图",
-                          value: approvalResult.screenshotFile || "-",
-                          hint: approvalResult.screenshotFile ? "失败时自动抓取。" : "本次执行未产生异常截图。",
-                        },
-                      ]}
+                    <StatusTag
+                      label={detailFeedbackOverview?.summaryConclusionLabel ?? "-"}
+                      tone={conclusionTone[detailFeedbackOverview?.summaryConclusionLabel ?? "-"] ?? "default"}
                     />
+                  </Box>
+
+                  <Box
+                    sx={{
+                      display: "grid",
+                      gridTemplateColumns: { xs: "1fr", sm: "repeat(2, minmax(0, 1fr))", xl: "repeat(5, minmax(0, 1fr))" },
+                      gap: 2,
+                    }}
+                  >
+                    {detailFeedbackStats.map((item) => (
+                      <StatCard key={item.label} item={item} />
+                    ))}
+                  </Box>
+
+                  <Stack spacing={1.25}>
+                    {detailFeedbackGroups.map((group) => (
+                      <Box
+                        key={group.id}
+                        sx={{
+                          p: 1.75,
+                          border: "1px solid",
+                          borderColor: "divider",
+                          backgroundColor: "rgba(255,255,255,0.7)",
+                        }}
+                      >
+                        <Typography variant="subtitle2">{group.title}</Typography>
+                        <Typography variant="body2" sx={{ mt: 1, lineHeight: 1.75 }}>
+                          {group.summary}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: "block" }}>
+                          影响组织单位 {group.affectedOrgUnitCount} 个，影响组织 {group.affectedOrgCount} 个，
+                          影响角色 {group.affectedRoleCount} 个，原始低分明细 {group.rawDetailCount} 条。
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary" sx={{ mt: 0.75, display: "block" }}>
+                          {group.hint}
+                        </Typography>
+                      </Box>
+                    ))}
                   </Stack>
-                ) : null}
-              </Stack>
-            </SectionCard>
-          ) : null}
 
-          {detail && activeTab === "lowScoreDetails" ? (
-            <AppDataGrid<RiskDetailRow>
-              title="原始低分明细"
-              subtitle="保留原始 `<= 1.0` 明细作为审计与回放证据；默认用户视角请查看“聚合反馈”。"
-              rows={detailRiskDetails}
-              columns={riskColumns}
-              loading={detailLoading}
-              rowCount={detailRiskDetails.length}
-              initialState={{
-                pagination: {
-                  paginationModel: {
-                    pageSize: 10,
-                    page: 0,
-                  },
-                },
-              }}
-            />
-          ) : null}
+                  <Box>
+                    <Typography variant="subtitle2">处理提示</Typography>
+                    <Stack spacing={1} sx={{ mt: 1.5 }}>
+                      {detailNotes.map((item, index) => (
+                        <Typography key={`${index}-${item}`} variant="body2" color="text.secondary">
+                          • {item}
+                        </Typography>
+                      ))}
+                    </Stack>
+                  </Box>
+                </Stack>
+              </SectionCard>
+            ) : null}
 
-          {detail && activeTab === "roles" ? (
-            <AppDataGrid<RoleRow>
-              title="申请角色"
-              subtitle="按角色维度展示明细行号、权限级别、申请类型与组织范围数量。"
-              rows={detailRoles}
-              columns={roleColumns}
-              loading={detailLoading}
-              rowCount={detailRoles.length}
-              initialState={{
-                pagination: {
-                  paginationModel: {
-                    pageSize: 10,
-                    page: 0,
-                  },
-                },
-              }}
-            />
-          ) : null}
+            {activeTab === "approvalAction" ? (
+              <SectionCard title="审批单据" subtitle="第一阶段仅开放批准动作；前端“批准”会映射到 EHR 的“同意 + 提交”。">
+                <Stack spacing={2}>
+                  <Alert severity="warning">
+                    本操作会真实写回 EHR。当前实现会自动打开目标单据的 `任务处理`，将 `审批决策` 设为 `同意`，把下方审批意见写入 EHR 后点击 `提交`。
+                  </Alert>
 
-          {detail && activeTab === "orgScopes" ? (
-            <AppDataGrid<OrgScopeRow>
-              title="目标组织"
-              subtitle="结合 013 与 104 方案查看角色、组织、组织单位与物理层级。"
-              rows={detailOrgScopes}
-              columns={orgScopeColumns}
-              loading={detailLoading}
-              rowCount={detailOrgScopes.length}
-              initialState={{
-                pagination: {
-                  paginationModel: {
-                    pageSize: 10,
-                    page: 0,
-                  },
-                },
-              }}
-            />
-          ) : null}
+                  <KeyValueList
+                    items={[
+                      { label: "单据编号", value: selectedDocumentNo || "-", hint: "当前将对该单据执行审批动作。" },
+                      { label: "权限对象", value: selectedDocumentRow?.permissionTarget ?? "-", hint: "来自处理单据主表。" },
+                      {
+                        label: "当前总结论",
+                        value: selectedDocumentRow?.summaryConclusionLabel ?? "-",
+                        hint: "展示层沿用 104 方案结论文案。",
+                      },
+                      {
+                        label: "建议动作",
+                        value: selectedDocumentRow?.suggestedActionLabel ?? "-",
+                        hint: "仅作参考，不自动替代真实审批动作。",
+                      },
+                      { label: "EHR 审批决策", value: "同意", hint: "后端执行时固定选择该决策值。" },
+                      { label: "EHR 执行按钮", value: "提交", hint: "EHR 实页执行按钮文案。前端按钮文案仍显示“批准”。" },
+                    ]}
+                  />
 
-          {detail && activeTab === "approvals" ? (
-            <AppDataGrid<ApprovalRow>
-              title="审批记录"
-              subtitle="展示当前审批轨迹，后续审批动作页可继续复用这里的数据结构。"
-              rows={detailApprovals}
-              columns={approvalColumns}
-              loading={detailLoading}
-              rowCount={detailApprovals.length}
-              initialState={{
-                pagination: {
-                  paginationModel: {
-                    pageSize: 10,
-                    page: 0,
-                  },
-                },
-              }}
-            />
-          ) : null}
-        </Stack>
-      </Box>
+                  <TextField
+                    label="审批意见"
+                    multiline
+                    minRows={4}
+                    value={approvalOpinion}
+                    onChange={(event) => setApprovalOpinion(event.target.value)}
+                    disabled={!selectedDocumentNo || approvalSubmittingMode !== null}
+                    placeholder="请输入要带到 EHR 的审批意见。"
+                  />
 
-      <Box
-        sx={{
-          display: "grid",
-          gridTemplateColumns: { xs: "1fr", xl: "minmax(0, 1.05fr) minmax(0, 1.2fr)" },
-          gap: 2,
-        }}
-      >
-        <Stack spacing={2}>
-          {dashboard?.latestBatch ? (
-            <SectionCard title="最新评估批次" subtitle="处理单据页当前默认读取该批次。">
-              <KeyValueList
-                items={[
-                  { label: "批次号", value: dashboard.latestBatch.batchNo, hint: "来自评估总表最新批次。" },
-                  { label: "评估版本", value: dashboard.latestBatch.assessmentVersion, hint: "与 YAML 规则版本保持一致。" },
-                  { label: "单据数", value: String(dashboard.latestBatch.documentCount), hint: "本批次评估到的单据数。" },
-                  { label: "明细数", value: String(dashboard.latestBatch.detailCount), hint: "总明细条数，包含非低分项。" },
-                  {
-                    label: "原始低分明细数",
-                    value: String(dashboard.latestBatch.lowScoreDetailCount),
-                    hint: "所有单据原始低分明细条数汇总，不等于风险类型数。",
+                  <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5}>
+                    <Button
+                      variant="contained"
+                      disableElevation
+                      disabled={!selectedDocumentNo || approvalSubmittingMode !== null || !approvalOpinion.trim()}
+                      onClick={() => void runApproval(false)}
+                    >
+                      {approvalSubmittingMode === "approve" ? "批准中..." : "批准"}
+                    </Button>
+                    <Button
+                      variant="outlined"
+                      disabled={!selectedDocumentNo || approvalSubmittingMode !== null || !approvalOpinion.trim()}
+                      onClick={() => void runApproval(true)}
+                    >
+                      {approvalSubmittingMode === "dryRun" ? "验证中..." : "验证连通性（dry-run）"}
+                    </Button>
+                  </Stack>
+
+                  {approvalError ? <Alert severity="error">{approvalError}</Alert> : null}
+
+                  {approvalResult ? (
+                    <Stack spacing={1.5}>
+                      <Alert severity={approvalResult.dryRun ? "info" : "success"}>{approvalResult.message}</Alert>
+                      <KeyValueList
+                        items={[
+                          { label: "执行状态", value: approvalResult.status, hint: approvalResult.dryRun ? "当前只做连通性验证，不点击提交。" : "已按返回结果完成执行。" },
+                          { label: "开始时间", value: approvalResult.startedAt || "-", hint: "后端开始执行审批的时间。" },
+                          { label: "结束时间", value: approvalResult.finishedAt || "-", hint: "后端完成执行或返回结果的时间。" },
+                          { label: "EHR 决策", value: approvalResult.ehrDecision || "-", hint: "当前固定为“同意”。" },
+                          { label: "EHR 提交按钮", value: approvalResult.ehrSubmitLabel || "-", hint: "实际点击的 EHR 页面按钮文案。" },
+                          { label: "日志文件", value: approvalResult.logFile || "-", hint: "审批执行 JSON 日志，可用于排障。" },
+                          {
+                            label: "异常截图",
+                            value: approvalResult.screenshotFile || "-",
+                            hint: approvalResult.screenshotFile ? "失败时自动抓取。" : "本次执行未产生异常截图。",
+                          },
+                        ]}
+                      />
+                    </Stack>
+                  ) : null}
+                </Stack>
+              </SectionCard>
+            ) : null}
+
+            {detail && activeTab === "lowScoreDetails" ? (
+              <AppDataGrid<RiskDetailRow>
+                title="原始低分明细"
+                subtitle="保留原始 `<= 1.0` 明细作为审计与回放证据；默认用户视角请查看“风险总览”。"
+                rows={detailRiskDetails}
+                columns={riskColumns}
+                loading={detailLoading}
+                rowCount={detailRiskDetails.length}
+                minHeight={DETAIL_GRID_HEIGHT}
+                pageSizeOptions={[20, 50]}
+                initialState={{
+                  pagination: {
+                    paginationModel: {
+                      pageSize: DETAIL_GRID_PAGE_SIZE,
+                      page: 0,
+                    },
                   },
-                  { label: "评估时间", value: dashboard.latestBatch.assessedAt, hint: "最近一次成功写入该批次的时间。" },
-                ]}
+                }}
               />
-            </SectionCard>
-          ) : (
-            <SectionCard title="最新评估批次" subtitle="当前未读取到批次摘要。">
-              <Typography variant="body2" color="text.secondary">
-                请先执行 `audit`，并确认结果已成功写入 PostgreSQL 后再刷新页面。
-              </Typography>
-            </SectionCard>
-          )}
+            ) : null}
 
-          {dashboardDistributionSections.map((section) => (
-            <DistributionSectionCard key={section.id} section={section} />
-          ))}
-        </Stack>
+            {detail && activeTab === "roles" ? (
+              <AppDataGrid<RoleRow>
+                title="申请角色"
+                subtitle="按角色维度展示明细行号、权限级别、申请类型与组织范围数量。"
+                rows={detailRoles}
+                columns={roleColumns}
+                loading={detailLoading}
+                rowCount={detailRoles.length}
+                minHeight={DETAIL_GRID_HEIGHT}
+                pageSizeOptions={[20, 50]}
+                initialState={{
+                  pagination: {
+                    paginationModel: {
+                      pageSize: DETAIL_GRID_PAGE_SIZE,
+                      page: 0,
+                    },
+                  },
+                }}
+              />
+            ) : null}
 
-        <AppDataGrid<ProcessExecutionLogRow>
-          title="最近执行日志"
-          subtitle="扫描 `automation/logs/audit_*.json`，用于区分“已落库批次”和“仅日志结果 / dry-run”。"
-          rows={dashboardExecutionLogs}
-          columns={executionLogColumns}
-          loading={loading}
-          rowCount={dashboardExecutionLogs.length}
-          pageSizeOptions={[6, 10, 20]}
-          minHeight={540}
-          initialState={{
-            pagination: {
-              paginationModel: {
-                pageSize: 6,
-                page: 0,
-              },
-            },
-          }}
-        />
-      </Box>
+            {detail && activeTab === "orgScopes" ? (
+              <AppDataGrid<OrgScopeRow>
+                title="目标组织"
+                subtitle="结合 013 与 104 方案查看角色、组织、组织单位与物理层级。"
+                rows={detailOrgScopes}
+                columns={orgScopeColumns}
+                loading={detailLoading}
+                rowCount={detailOrgScopes.length}
+                minHeight={DETAIL_GRID_HEIGHT}
+                pageSizeOptions={[20, 50]}
+                initialState={{
+                  pagination: {
+                    paginationModel: {
+                      pageSize: DETAIL_GRID_PAGE_SIZE,
+                      page: 0,
+                    },
+                  },
+                }}
+              />
+            ) : null}
+
+            {detail && activeTab === "approvals" ? (
+              <AppDataGrid<ApprovalRow>
+                title="审批记录"
+                subtitle="展示当前审批轨迹，后续审批动作页可继续复用这里的数据结构。"
+                rows={detailApprovals}
+                columns={approvalColumns}
+                loading={detailLoading}
+                rowCount={detailApprovals.length}
+                minHeight={DETAIL_GRID_HEIGHT}
+                pageSizeOptions={[20, 50]}
+                initialState={{
+                  pagination: {
+                    paginationModel: {
+                      pageSize: DETAIL_GRID_PAGE_SIZE,
+                      page: 0,
+                    },
+                  },
+                }}
+              />
+            ) : null}
+          </Box>
+        </Box>
+      </Drawer>
     </Stack>
   );
 }

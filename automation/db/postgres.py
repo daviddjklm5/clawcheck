@@ -1530,36 +1530,38 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                     if (batch_no := self._strip_text(row[0])) is not None
                 }
 
-    def fetch_process_dashboard(self) -> dict[str, Any]:
-        self.ensure_table()
-        with self.connect() as connection:
-            with connection.cursor() as cursor:
-                latest_batch_no = self._fetch_latest_assessment_batch_no(cursor)
-                if latest_batch_no is None:
-                    return {
-                        "stats": [
-                            {
-                                "label": "待处理单据",
-                                "value": "0",
-                                "hint": "当前尚未写入任何风险信任评估结果。",
-                                "tone": "info",
-                            },
-                            {
-                                "label": "最新评估批次",
-                                "value": "-",
-                                "hint": "执行 `python automation/scripts/run.py audit` 后会显示最新批次。",
-                                "tone": "default",
-                            },
-                        ],
-                        "latestBatch": None,
-                        "distributionSections": [],
-                        "documents": [],
-                    }
+    def _empty_process_workbench(self) -> dict[str, Any]:
+        return {
+            "stats": [
+                {
+                    "label": "待处理单据",
+                    "value": "0",
+                    "hint": "当前尚未写入任何风险信任评估结果。",
+                    "tone": "info",
+                },
+                {
+                    "label": "最新评估批次",
+                    "value": "-",
+                    "hint": "执行 `python automation/scripts/run.py audit` 后会显示最新批次。",
+                    "tone": "default",
+                },
+            ],
+            "documents": [],
+        }
 
-                batch_summary = self._fetch_process_batch_summary(cursor, latest_batch_no)
-                summary_rows = self._fetch_process_summary_rows(cursor, latest_batch_no)
-                distribution_sections = self._fetch_process_distribution_sections(cursor, latest_batch_no)
+    def _empty_process_analysis_dashboard(self) -> dict[str, Any]:
+        return {
+            "latestBatch": None,
+            "distributionSections": [],
+        }
 
+    def _build_process_workbench_stats(
+        self,
+        *,
+        latest_batch_no: str,
+        batch_summary: dict[str, Any],
+        distribution_sections: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
         reject_count = next(
             (item["count"] for item in distribution_sections[0]["items"] if item["label"] == "拒绝"),
             0,
@@ -1568,60 +1570,101 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
             (item["count"] for item in distribution_sections[0]["items"] if item["label"] == "人工干预"),
             0,
         ) if distribution_sections else 0
-        latest_batch = {
-            "batchNo": latest_batch_no,
-            **batch_summary,
-        }
+        return [
+            {
+                "label": "待处理单据",
+                "value": str(batch_summary["documentCount"]),
+                "hint": "来自最新已落库评估批次的单据数。",
+                "tone": "warning" if batch_summary["documentCount"] else "info",
+            },
+            {
+                "label": "拒绝",
+                "value": str(reject_count),
+                "hint": "最新批次中总结论为“拒绝”的单据数。",
+                "tone": "danger" if reject_count else "success",
+            },
+            {
+                "label": display_summary_conclusion("人工干预"),
+                "value": str(manual_review_count),
+                "hint": "需要加强审核的单据数。",
+                "tone": "warning" if manual_review_count else "success",
+            },
+            {
+                "label": "最新评估批次",
+                "value": latest_batch_no,
+                "hint": f"评估版本 {batch_summary['assessmentVersion']}，评估时间 {batch_summary['assessedAt']}。",
+                "tone": "default",
+            },
+        ]
+
+    def _build_process_document_rows(self, summary_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [
+            {
+                "id": row["document_no"],
+                "documentNo": row["document_no"],
+                "applicantName": row["applicant_name"] or "-",
+                "applicantNo": row["employee_no"] or "-",
+                "permissionTarget": row["permission_target"] or "-",
+                "department": row["department_name"] or "-",
+                "documentStatus": row["document_status"] or "-",
+                "finalScore": row["final_score"],
+                "summaryConclusion": row["summary_conclusion"] or "-",
+                "summaryConclusionLabel": display_summary_conclusion(row["summary_conclusion"]),
+                "suggestedAction": row["suggested_action"] or "",
+                "suggestedActionLabel": self._suggested_action_label(row["suggested_action"]),
+                "lowScoreDetailCount": int(row["low_score_detail_count"] or 0),
+                "assessedAt": self._format_datetime_value(row["assessed_at"]),
+                "latestBatchNo": row["assessment_batch_no"] or "-",
+            }
+            for row in summary_rows
+        ]
+
+    def fetch_process_workbench(self) -> dict[str, Any]:
+        self.ensure_table()
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                latest_batch_no = self._fetch_latest_assessment_batch_no(cursor)
+                if latest_batch_no is None:
+                    return self._empty_process_workbench()
+
+                batch_summary = self._fetch_process_batch_summary(cursor, latest_batch_no)
+                summary_rows = self._fetch_process_summary_rows(cursor, latest_batch_no)
+                distribution_sections = self._fetch_process_distribution_sections(cursor, latest_batch_no)
 
         return {
-            "stats": [
-                {
-                    "label": "待处理单据",
-                    "value": str(batch_summary["documentCount"]),
-                    "hint": "来自最新已落库评估批次的单据数。",
-                    "tone": "warning" if batch_summary["documentCount"] else "info",
-                },
-                {
-                    "label": "拒绝",
-                    "value": str(reject_count),
-                    "hint": "最新批次中总结论为“拒绝”的单据数。",
-                    "tone": "danger" if reject_count else "success",
-                },
-                {
-                    "label": display_summary_conclusion("人工干预"),
-                    "value": str(manual_review_count),
-                    "hint": "需要加强审核的单据数。",
-                    "tone": "warning" if manual_review_count else "success",
-                },
-                {
-                    "label": "最新评估批次",
-                    "value": latest_batch_no,
-                    "hint": f"评估版本 {batch_summary['assessmentVersion']}，评估时间 {batch_summary['assessedAt']}。",
-                    "tone": "default",
-                },
-            ],
-            "latestBatch": latest_batch,
+            "stats": self._build_process_workbench_stats(
+                latest_batch_no=latest_batch_no,
+                batch_summary=batch_summary,
+                distribution_sections=distribution_sections,
+            ),
+            "documents": self._build_process_document_rows(summary_rows),
+        }
+
+    def fetch_process_analysis_dashboard(self) -> dict[str, Any]:
+        self.ensure_table()
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                latest_batch_no = self._fetch_latest_assessment_batch_no(cursor)
+                if latest_batch_no is None:
+                    return self._empty_process_analysis_dashboard()
+
+                batch_summary = self._fetch_process_batch_summary(cursor, latest_batch_no)
+                distribution_sections = self._fetch_process_distribution_sections(cursor, latest_batch_no)
+
+        return {
+            "latestBatch": {
+                "batchNo": latest_batch_no,
+                **batch_summary,
+            },
             "distributionSections": distribution_sections,
-            "documents": [
-                {
-                    "id": row["document_no"],
-                    "documentNo": row["document_no"],
-                    "applicantName": row["applicant_name"] or "-",
-                    "applicantNo": row["employee_no"] or "-",
-                    "permissionTarget": row["permission_target"] or "-",
-                    "department": row["department_name"] or "-",
-                    "documentStatus": row["document_status"] or "-",
-                    "finalScore": row["final_score"],
-                    "summaryConclusion": row["summary_conclusion"] or "-",
-                    "summaryConclusionLabel": display_summary_conclusion(row["summary_conclusion"]),
-                    "suggestedAction": row["suggested_action"] or "",
-                    "suggestedActionLabel": self._suggested_action_label(row["suggested_action"]),
-                    "lowScoreDetailCount": int(row["low_score_detail_count"] or 0),
-                    "assessedAt": self._format_datetime_value(row["assessed_at"]),
-                    "latestBatchNo": row["assessment_batch_no"] or "-",
-                }
-                for row in summary_rows
-            ],
+        }
+
+    def fetch_process_dashboard(self) -> dict[str, Any]:
+        workbench = self.fetch_process_workbench()
+        analysis = self.fetch_process_analysis_dashboard()
+        return {
+            **workbench,
+            **analysis,
         }
 
     def fetch_process_document_detail(

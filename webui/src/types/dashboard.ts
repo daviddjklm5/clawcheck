@@ -220,6 +220,17 @@ export interface ProcessExecutionLogRow {
   persistedToDatabase: boolean;
 }
 
+export interface ProcessWorkbench {
+  stats: StatItem[];
+  documents: ProcessDocumentRow[];
+}
+
+export interface ProcessAnalysisDashboard {
+  latestBatch: ProcessBatchSummary | null;
+  distributionSections: DistributionSection[];
+  executionLogs: ProcessExecutionLogRow[];
+}
+
 export interface ProcessDashboard {
   stats: StatItem[];
   latestBatch: ProcessBatchSummary | null;

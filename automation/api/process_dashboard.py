@@ -110,6 +110,21 @@ def _load_execution_logs(store: PostgresRiskTrustStore, logs_dir: Path, limit: i
     ]
 
 
+def get_process_workbench() -> dict[str, Any]:
+    _, settings = _load_runtime_settings()
+    store = PostgresRiskTrustStore(settings.db)
+    return store.fetch_process_workbench()
+
+
+def get_process_analysis_dashboard() -> dict[str, Any]:
+    _, settings = _load_runtime_settings()
+    store = PostgresRiskTrustStore(settings.db)
+    dashboard = store.fetch_process_analysis_dashboard()
+    logs_dir = _resolve_runtime_path(settings.runtime.logs_dir)
+    dashboard["executionLogs"] = _load_execution_logs(store, logs_dir)
+    return dashboard
+
+
 def get_process_dashboard() -> dict[str, Any]:
     _, settings = _load_runtime_settings()
     store = PostgresRiskTrustStore(settings.db)

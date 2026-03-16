@@ -18,6 +18,7 @@ import SettingsSuggestOutlinedIcon from "@mui/icons-material/SettingsSuggestOutl
 import SyncAltOutlinedIcon from "@mui/icons-material/SyncAltOutlined";
 import DescriptionOutlinedIcon from "@mui/icons-material/DescriptionOutlined";
 import FactCheckOutlinedIcon from "@mui/icons-material/FactCheckOutlined";
+import InsightsOutlinedIcon from "@mui/icons-material/InsightsOutlined";
 import GridViewOutlinedIcon from "@mui/icons-material/GridViewOutlined";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 
@@ -39,8 +40,14 @@ const navItems = [
   {
     path: "/process-documents",
     label: "处理单据",
-    description: "查看待办、风险与信任度评估结果",
+    description: "待处理列表与抽屉化单据详情",
     icon: <FactCheckOutlinedIcon />,
+  },
+  {
+    path: "/process-analysis",
+    label: "评估分析",
+    description: "批次分布、规则热点与执行日志",
+    icon: <InsightsOutlinedIcon />,
   },
   {
     path: "/runtime-settings",
@@ -146,7 +153,7 @@ export function AppShell() {
         >
           <Typography variant="subtitle2">当前范围</Typography>
           <Typography variant="body2" sx={{ mt: 1, color: "rgba(226, 232, 240, 0.74)" }}>
-            第一阶段先完成操作台与查询台，不直接执行 iERP 审批回写。
+            当前已拆分处理工作台与评估分析页，并保留单据级审批连通能力。
           </Typography>
         </Paper>
       </Box>

@@ -3,6 +3,7 @@ import { Navigate, createBrowserRouter } from "react-router-dom";
 import { AppShell } from "./layout/AppShell";
 import { CollectDocumentsPage } from "./pages/CollectDocumentsPage";
 import { MasterDataPage } from "./pages/MasterDataPage";
+import { ProcessAnalysisPage } from "./pages/ProcessAnalysisPage";
 import { ProcessDocumentsPage } from "./pages/ProcessDocumentsPage";
 import { RuntimeSettingsPage } from "./pages/RuntimeSettingsPage";
 
@@ -26,6 +27,10 @@ export const router = createBrowserRouter([
       {
         path: "process-documents",
         element: <ProcessDocumentsPage />,
+      },
+      {
+        path: "process-analysis",
+        element: <ProcessAnalysisPage />,
       },
       {
         path: "runtime-settings",
