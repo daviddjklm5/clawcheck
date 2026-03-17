@@ -19,6 +19,9 @@ ORG_HEADERS = ["组织编码", "组织名称", "所属公司", "组织长名称"
 APPROVAL_TIMESTAMP_RE = re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}")
 DETAIL_COUNT_RE = re.compile(r"查看详情\((\d+)\)")
 APPROVAL_TABPAGE_SELECTOR = "#tabpageap_approvalrecord"
+APPROVAL_HEADER_WITH_NODE_RE = re.compile(r"^(?P<node_name>.*?)\s+(?P<approver_info>[^\s]+\|[^\s]+)\s+(?P<approval_action>.*?)$")
+APPROVAL_HEADER_WITHOUT_NODE_RE = re.compile(r"^(?P<approver_info>[^\s]+\|[^\s]+)\s+(?P<approval_action>.*?)$")
+MANUAL_ADDED_SIGN_NODE_NAME = "加签"
 
 
 class PermissionCollectFlow:
@@ -821,18 +824,11 @@ class PermissionCollectFlow:
         normalized: list[dict[str, str]] = []
         for item in records:
             header_text = item.get("header_text", "")
-            match = re.match(r"^(.*?)\s+([^\s]+\|[^\s]+)\s+(.*?)$", header_text)
-            node_name = ""
-            approver_info = ""
-            approval_action = ""
+            node_name, approver_info, approval_action = PermissionCollectFlow._parse_approval_record_header(header_text)
             approver_name = ""
             approver_org_or_position = ""
-            if match:
-                node_name = match.group(1).strip()
-                approver_info = match.group(2).strip()
-                approval_action = match.group(3).strip()
-                if "|" in approver_info:
-                    approver_name, approver_org_or_position = approver_info.split("|", 1)
+            if "|" in approver_info:
+                approver_name, approver_org_or_position = approver_info.split("|", 1)
             normalized.append(
                 {
                     "record_seq": item.get("record_seq", ""),
@@ -846,6 +842,27 @@ class PermissionCollectFlow:
                 }
             )
         return normalized
+
+    @staticmethod
+    def _parse_approval_record_header(header_text: str) -> tuple[str, str, str]:
+        header_text = str(header_text or "").strip()
+        with_node_match = APPROVAL_HEADER_WITH_NODE_RE.match(header_text)
+        if with_node_match:
+            return (
+                with_node_match.group("node_name").strip(),
+                with_node_match.group("approver_info").strip(),
+                with_node_match.group("approval_action").strip(),
+            )
+
+        without_node_match = APPROVAL_HEADER_WITHOUT_NODE_RE.match(header_text)
+        if without_node_match:
+            return (
+                MANUAL_ADDED_SIGN_NODE_NAME,
+                without_node_match.group("approver_info").strip(),
+                without_node_match.group("approval_action").strip(),
+            )
+
+        return "", "", ""
 
     def _wait_for_grid_headers(self, required_headers: Sequence[str]) -> None:
         deadline = time.monotonic() + (self.timeout_ms / 1000)

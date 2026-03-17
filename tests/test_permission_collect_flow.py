@@ -220,6 +220,34 @@ class PermissionCollectFlowTest(unittest.TestCase):
         self.assertEqual(normalized[0]["approval_time"], "2026-03-12 09:42:23")
         self.assertEqual(normalized[1]["approval_time"], "2026-03-13 15:46:49")
 
+    def test_parse_approval_record_cards_fills_manual_added_sign_node(self) -> None:
+        records = [
+            {
+                "record_seq": "3",
+                "header_text": "简思婷|薪酬福利 同意",
+                "approval_time": "2026-03-17 09:05:53",
+                "approval_opinion": "同意",
+                "raw_text": "简思婷|薪酬福利 同意 2026-03-17 09:05:53 同意",
+            },
+            {
+                "record_seq": "4",
+                "header_text": "蔡蟒生|深圳人力资源与行政服务部总监 同意",
+                "approval_time": "2026-03-17 09:25:34",
+                "approval_opinion": "同意",
+                "raw_text": "蔡蟒生|深圳人力资源与行政服务部总监 同意 2026-03-17 09:25:34 同意",
+            },
+        ]
+
+        normalized = self.flow._parse_approval_record_cards(records)
+
+        self.assertEqual(len(normalized), 2)
+        self.assertEqual(normalized[0]["node_name"], "加签")
+        self.assertEqual(normalized[0]["approver_name"], "简思婷")
+        self.assertEqual(normalized[0]["approval_action"], "同意")
+        self.assertEqual(normalized[1]["node_name"], "加签")
+        self.assertEqual(normalized[1]["approver_name"], "蔡蟒生")
+        self.assertEqual(normalized[1]["approval_action"], "同意")
+
     def test_wait_for_todo_list_ready_continues_without_page_size_selector(self) -> None:
         grid_collection = MagicMock()
         grid_locator = MagicMock()
