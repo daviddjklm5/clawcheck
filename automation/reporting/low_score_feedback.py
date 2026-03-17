@@ -731,7 +731,7 @@ def _build_fallback_groups(
         )
         if role_count:
             summary = f"{summary} 涉及角色：{_format_role_sample_text(group['role_codes'], base_groups=[group])}。"
-        elif org_count:
+        if org_count:
             summary = f"{summary} 涉及组织：{_format_org_sample_text(group['org_meta'])}。"
         result.append(
             {

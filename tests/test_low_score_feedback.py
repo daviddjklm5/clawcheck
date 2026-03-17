@@ -171,6 +171,74 @@ class LowScoreFeedbackTest(unittest.TestCase):
             ],
         )
 
+    def test_fallback_target_org_summary_contains_role_and_organization(self) -> None:
+        overview = build_low_score_feedback(
+            summary_row={
+                "summary_conclusion": "拒绝",
+                "applicant_hr_type": "H1",
+                "applicant_position_name": "招聘经理",
+                "level1_function_name": "人力资源",
+                "applicant_org_unit_name": "万御安防",
+            },
+            role_rows=[
+                {
+                    "role_code": "HMC003",
+                    "role_name": "花名册薪酬版",
+                    "permission_level": "B1类-涉薪",
+                    "line_no": "1",
+                },
+                {
+                    "role_code": "YG001",
+                    "role_name": "人员档案-可查看引出-有定薪有绩效",
+                    "permission_level": "B1类-涉薪",
+                    "line_no": "2",
+                },
+            ],
+            org_scope_rows=[
+                {
+                    "org_code": "50920136",
+                    "organization_name": "Z贵阳三和电梯",
+                    "org_unit_name": "万御安防",
+                    "physical_level": "4",
+                }
+            ],
+            low_score_rows=[
+                {
+                    "document_no": "RA-20260316-00020057",
+                    "role_code": "HMC003",
+                    "role_name": "花名册薪酬版",
+                    "org_code": "50920136",
+                    "dimension_name": "申请的组织",
+                    "rule_id": "TARGET_ORG_L2_NOT_ALLOWED",
+                    "rule_summary": "非允许组织申请二级授权范围",
+                    "score": 0.0,
+                    "detail_conclusion": "申请二级授权范围，但申请人组织分类不在允许范围内",
+                    "intervention_action": "",
+                    "evidence_summary": "申请二级授权范围，但申请人组织分类不在允许范围内",
+                },
+                {
+                    "document_no": "RA-20260316-00020057",
+                    "role_code": "YG001",
+                    "role_name": "人员档案-可查看引出-有定薪有绩效",
+                    "org_code": "50920136",
+                    "dimension_name": "申请的组织",
+                    "rule_id": "TARGET_ORG_L2_NOT_ALLOWED",
+                    "rule_summary": "非允许组织申请二级授权范围",
+                    "score": 0.0,
+                    "detail_conclusion": "申请二级授权范围，但申请人组织分类不在允许范围内",
+                    "intervention_action": "",
+                    "evidence_summary": "申请二级授权范围，但申请人组织分类不在允许范围内",
+                },
+            ],
+        )
+
+        self.assertEqual(len(overview["feedbackGroups"]), 1)
+        group = overview["feedbackGroups"][0]
+        self.assertEqual(group["category"], "fallback")
+        self.assertIn("涉及角色：", group["summary"])
+        self.assertIn("涉及组织：", group["summary"])
+        self.assertIn("Z贵阳三和电梯", group["summary"])
+
 
 if __name__ == "__main__":
     unittest.main()
