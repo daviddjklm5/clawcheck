@@ -1756,29 +1756,40 @@ class PostgresPermissionCatalogStore(_PostgresStoreBase):
                     return
                 cursor.execute(ddl)
 
-    def seed_catalog(self) -> dict[str, Any]:
-        self.ensure_table()
-        with self.connect() as connection:
-            with connection.cursor() as cursor:
-                cursor.execute(f"SELECT COUNT(*) FROM {self.table_name}")
-                total_rows = int(cursor.fetchone()[0])
-                cursor.execute(
-                    f"""
-                    SELECT {self._quote_identifier(PERMISSION_CATALOG_COLUMNS["permission_level"])}, COUNT(*)
-                    FROM {self.table_name}
-                    GROUP BY {self._quote_identifier(PERMISSION_CATALOG_COLUMNS["permission_level"])}
-                    ORDER BY {self._quote_identifier(PERMISSION_CATALOG_COLUMNS["permission_level"])}
-                    """
-                )
-                counts_by_permission_level = [
-                    {"permission_level": row[0], "count": int(row[1])}
-                    for row in cursor.fetchall()
-                ]
+    def _fetch_catalog_summary(self, cursor) -> dict[str, Any]:
+        cursor.execute(f"SELECT COUNT(*) FROM {self.table_name}")
+        total_rows = int(cursor.fetchone()[0])
+        cursor.execute(
+            f"""
+            SELECT {self._quote_identifier(PERMISSION_CATALOG_COLUMNS["permission_level"])}, COUNT(*)
+            FROM {self.table_name}
+            GROUP BY {self._quote_identifier(PERMISSION_CATALOG_COLUMNS["permission_level"])}
+            ORDER BY {self._quote_identifier(PERMISSION_CATALOG_COLUMNS["permission_level"])}
+            """
+        )
+        counts_by_permission_level = [
+            {"permission_level": row[0], "count": int(row[1])}
+            for row in cursor.fetchall()
+        ]
         return {
             "table_name": self.table_name.strip('"'),
             "total_rows": total_rows,
             "counts_by_permission_level": counts_by_permission_level,
         }
+
+    def seed_catalog(self) -> dict[str, Any]:
+        ddl = self.schema_sql.read_text(encoding="utf-8")
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                self._needs_schema_update(cursor)
+                cursor.execute(ddl)
+                return self._fetch_catalog_summary(cursor)
+
+    def fetch_catalog_summary(self) -> dict[str, Any]:
+        self.ensure_table()
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                return self._fetch_catalog_summary(cursor)
 
     def fetch_by_role_codes(self, role_codes: Iterable[str]) -> dict[str, dict[str, Any]]:
         normalized_codes = sorted({code.strip() for code in role_codes if isinstance(code, str) and code.strip()})
@@ -1829,6 +1840,198 @@ class PostgresPermissionCatalogStore(_PostgresStoreBase):
             for row in rows
             if row and isinstance(row[0], str) and row[0].strip()
         }
+
+
+class PostgresMasterDataStore(_PostgresStoreBase):
+    @staticmethod
+    def _format_temporal_value(value: Any) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, datetime):
+            return value.strftime("%Y-%m-%d %H:%M:%S")
+        if isinstance(value, date):
+            return value.isoformat()
+        return str(value).strip()
+
+    def fetch_master_data_workbench(self) -> dict[str, Any]:
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                return {
+                    "roster": self._fetch_roster_summary(cursor),
+                    "orglist": self._fetch_orglist_summary(cursor),
+                    "rolecatalog": self._fetch_rolecatalog_summary(cursor),
+                }
+
+    def _fetch_roster_summary(self, cursor) -> dict[str, Any]:
+        summary = {
+            "tableName": "在职花名册表",
+            "totalRows": 0,
+            "latestImportBatchNo": "",
+            "sourceFileName": "",
+            "latestQueryDate": "",
+            "latestDownloadedAt": "",
+            "latestImportedAt": "",
+            "latestUpdatedAt": "",
+            "personAttributesTableName": "人员属性查询",
+            "personAttributeRows": 0,
+            "personAttributesUpdatedAt": "",
+            "personAttributesImportBatchNo": "",
+        }
+
+        if self._table_exists(cursor, "在职花名册表") and self._column_exists(cursor, "在职花名册表", "人员编号"):
+            cursor.execute(
+                """
+                SELECT
+                    COUNT(*),
+                    MAX("导入批次号"),
+                    MAX("来源文件名"),
+                    MAX("查询日期"),
+                    MAX("下载时间"),
+                    MAX("导入时间"),
+                    MAX("记录更新时间")
+                FROM "在职花名册表"
+                """
+            )
+            row = cursor.fetchone()
+            if row is not None:
+                summary.update(
+                    {
+                        "totalRows": int(row[0] or 0),
+                        "latestImportBatchNo": self._strip_text(row[1]) or "",
+                        "sourceFileName": self._strip_text(row[2]) or "",
+                        "latestQueryDate": self._format_temporal_value(row[3]),
+                        "latestDownloadedAt": self._format_temporal_value(row[4]),
+                        "latestImportedAt": self._format_temporal_value(row[5]),
+                        "latestUpdatedAt": self._format_temporal_value(row[6]),
+                    }
+                )
+
+        if self._table_exists(cursor, "人员属性查询") and self._column_exists(cursor, "人员属性查询", "工号"):
+            cursor.execute(
+                """
+                SELECT
+                    COUNT(*),
+                    MAX("记录更新时间"),
+                    MAX("花名册导入批次号")
+                FROM "人员属性查询"
+                """
+            )
+            row = cursor.fetchone()
+            if row is not None:
+                summary.update(
+                    {
+                        "personAttributeRows": int(row[0] or 0),
+                        "personAttributesUpdatedAt": self._format_temporal_value(row[1]),
+                        "personAttributesImportBatchNo": self._strip_text(row[2]) or "",
+                    }
+                )
+
+        return summary
+
+    def _fetch_orglist_summary(self, cursor) -> dict[str, Any]:
+        summary = {
+            "tableName": "组织列表",
+            "totalRows": 0,
+            "latestImportBatchNo": "",
+            "sourceFileName": "",
+            "sourceRootOrg": "",
+            "includeAllChildren": False,
+            "latestUpdatedAt": "",
+            "orgAttributesTableName": "组织属性查询",
+            "orgAttributeRows": 0,
+            "orgAttributesUpdatedAt": "",
+        }
+
+        if self._table_exists(cursor, "组织列表") and self._column_exists(cursor, "组织列表", "行政组织编码"):
+            cursor.execute(
+                """
+                SELECT
+                    COUNT(*),
+                    MAX("导入批次号"),
+                    MAX("来源文件名"),
+                    MAX("来源根组织"),
+                    BOOL_OR(COALESCE("包含所有下级", FALSE)),
+                    MAX("记录更新时间")
+                FROM "组织列表"
+                """
+            )
+            row = cursor.fetchone()
+            if row is not None:
+                summary.update(
+                    {
+                        "totalRows": int(row[0] or 0),
+                        "latestImportBatchNo": self._strip_text(row[1]) or "",
+                        "sourceFileName": self._strip_text(row[2]) or "",
+                        "sourceRootOrg": self._strip_text(row[3]) or "",
+                        "includeAllChildren": bool(row[4]),
+                        "latestUpdatedAt": self._format_temporal_value(row[5]),
+                    }
+                )
+
+        if self._table_exists(cursor, "组织属性查询") and self._column_exists(cursor, "组织属性查询", "行政组织编码"):
+            cursor.execute(
+                """
+                SELECT
+                    COUNT(*),
+                    MAX("记录更新时间")
+                FROM "组织属性查询"
+                """
+            )
+            row = cursor.fetchone()
+            if row is not None:
+                summary.update(
+                    {
+                        "orgAttributeRows": int(row[0] or 0),
+                        "orgAttributesUpdatedAt": self._format_temporal_value(row[1]),
+                    }
+                )
+
+        return summary
+
+    def _fetch_rolecatalog_summary(self, cursor) -> dict[str, Any]:
+        summary = {
+            "tableName": "权限列表",
+            "totalRows": 0,
+            "latestUpdatedAt": "",
+            "countsByPermissionLevel": [],
+        }
+
+        if not self._table_exists(cursor, "权限列表") or not self._column_exists(cursor, "权限列表", "角色编码"):
+            return summary
+
+        cursor.execute(
+            """
+            SELECT
+                COUNT(*),
+                MAX("记录更新时间")
+            FROM "权限列表"
+            """
+        )
+        row = cursor.fetchone()
+        if row is not None:
+            summary.update(
+                {
+                    "totalRows": int(row[0] or 0),
+                    "latestUpdatedAt": self._format_temporal_value(row[1]),
+                }
+            )
+
+        cursor.execute(
+            """
+            SELECT "权限级别", COUNT(*)
+            FROM "权限列表"
+            GROUP BY "权限级别"
+            ORDER BY "权限级别"
+            """
+        )
+        summary["countsByPermissionLevel"] = [
+            {
+                "permissionLevel": str(level),
+                "count": int(count),
+            }
+            for level, count in cursor.fetchall()
+        ]
+        return summary
 
 
 class PostgresPersonAttributesStore(_PostgresStoreBase):

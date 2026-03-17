@@ -4,6 +4,8 @@ import type {
   CollectRunSummary,
   CollectWorkbench,
   MasterDataDashboard,
+  MasterDataRunRequest,
+  MasterDataRunSummary,
   ProcessAnalysisDashboard,
   ProcessAuditRunRequest,
   ProcessAuditRunSummary,
@@ -94,6 +96,12 @@ async function request<T>(path: string, init?: RequestOptions): Promise<T> {
 export const dashboardApi = {
   getMasterData(): Promise<MasterDataDashboard> {
     return request<MasterDataDashboard>("/jobs/master-data");
+  },
+  startMasterDataTask(payload: MasterDataRunRequest): Promise<MasterDataRunSummary> {
+    return request<MasterDataRunSummary>("/jobs/master-data/run", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
   },
   getCollectWorkbench(): Promise<CollectWorkbench> {
     return request<CollectWorkbench>("/documents/collect-workbench");

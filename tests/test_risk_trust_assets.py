@@ -56,11 +56,11 @@ class RiskTrustStoreEnsureTableTest(unittest.TestCase):
     def test_runs_ddl(self) -> None:
         with (
             patch.object(self.store, "connect", self._fake_connect),
-            patch("pathlib.Path.read_text", side_effect=["DDL SQL 022", "DDL SQL 023"]),
+            patch("pathlib.Path.read_text", side_effect=["DDL SQL 022", "DDL SQL 023", "DDL SQL 024"]),
         ):
             self.store.ensure_table()
 
-        self.assertEqual(self.cursor.executed_sql, ["DDL SQL 022", "DDL SQL 023"])
+        self.assertEqual(self.cursor.executed_sql, ["DDL SQL 022", "DDL SQL 023", "DDL SQL 024"])
 
 
 class RiskTrustYamlAssetsTest(unittest.TestCase):

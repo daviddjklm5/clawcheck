@@ -9,10 +9,10 @@ export interface StatItem {
 
 export interface ActionCard {
   id: string;
+  taskType?: "roster" | "orglist" | "rolecatalog";
   title: string;
   description: string;
   buttonLabel: string;
-  command: string;
   status: string;
 }
 
@@ -36,7 +36,58 @@ export interface JobRow {
 export interface MasterDataDashboard {
   stats: StatItem[];
   actions: ActionCard[];
-  jobs: JobRow[];
+  currentTask: MasterDataRunSummary | null;
+  recentRuns: MasterDataRunSummary[];
+}
+
+export interface MasterDataRunRequest {
+  taskType: "roster" | "orglist" | "rolecatalog";
+  headed: boolean | null;
+  dryRun: boolean;
+  inputFile: string;
+  skipExport: boolean;
+  skipImport: boolean;
+  queryTimeoutSeconds: number;
+  downloadTimeoutMinutes: number;
+  scheme: string;
+  employmentType: string;
+  forceRefresh: boolean;
+}
+
+export interface MasterDataPermissionLevelCount {
+  permissionLevel: string;
+  count: number;
+}
+
+export interface MasterDataRunSummary {
+  id: string;
+  taskId: string;
+  taskType: string;
+  status: string;
+  requestedAt: string;
+  startedAt: string;
+  finishedAt: string;
+  headed: boolean;
+  dryRun: boolean;
+  inputFile: string;
+  skipExport: boolean;
+  skipImport: boolean;
+  queryTimeoutSeconds: number;
+  downloadTimeoutMinutes: number;
+  scheme: string;
+  employmentType: string;
+  forceRefresh: boolean;
+  tableName: string;
+  importBatchNo: string;
+  sourceFileName: string;
+  insertedCount: number;
+  totalRows: number;
+  countsByPermissionLevel: MasterDataPermissionLevelCount[];
+  message: string;
+  dumpFile: string;
+  summaryFile: string;
+  logFile: string;
+  outputTail: string;
 }
 
 export interface CollectDocumentRow {

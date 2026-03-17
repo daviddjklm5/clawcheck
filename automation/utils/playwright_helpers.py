@@ -47,8 +47,13 @@ def timestamp_slug() -> str:
     return datetime.now().strftime("%Y%m%d_%H%M%S")
 
 
-def save_screenshot(page: Page, screenshots_dir: Path, prefix: str) -> Path:
+def save_screenshot(page: Page, screenshots_dir: Path, prefix: str) -> Path | None:
     screenshots_dir.mkdir(parents=True, exist_ok=True)
     file_path = screenshots_dir / f"{prefix}_{timestamp_slug()}.png"
-    page.screenshot(path=str(file_path), full_page=True)
-    return file_path
+    try:
+        if page.is_closed():
+            return None
+        page.screenshot(path=str(file_path), full_page=True)
+        return file_path
+    except Exception:  # noqa: BLE001
+        return None

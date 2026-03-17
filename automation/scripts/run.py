@@ -167,17 +167,33 @@ def _resolve_credentials(settings) -> tuple[str, str]:
     return username, password
 
 
-def ensure_login(login_page, settings, retries: int, wait_sec: float, retry_call) -> None:
+def ensure_login(login_page, settings, retries: int, wait_sec: float, retry_call, bound_pages: list[object] | None = None):
     username, password = _resolve_credentials(settings)
+    managed_pages = bound_pages or [login_page]
 
-    def _do_login() -> None:
-        login_page.login(
-            username=username,
-            password=password,
-            require_manual_captcha=settings.auth.require_manual_captcha,
-        )
+    def _refresh_closed_page() -> None:
+        page = login_page.page
+        if not page.is_closed():
+            return
+        new_page = page.context.new_page()
+        for candidate in managed_pages:
+            if hasattr(candidate, "set_page"):
+                candidate.set_page(new_page)
+        login_page.logger.warning("Detected closed Playwright page during login retry; created a fresh page in the same context")
 
-    retry_call(_do_login, retries=retries, wait_sec=wait_sec)
+    def _do_login():
+        try:
+            login_page.login(
+                username=username,
+                password=password,
+                require_manual_captcha=settings.auth.require_manual_captcha,
+            )
+            return login_page.page
+        except Exception:
+            _refresh_closed_page()
+            raise
+
+    return retry_call(_do_login, retries=retries, wait_sec=wait_sec)
 
 
 def main() -> int:
@@ -510,12 +526,13 @@ def main() -> int:
                     logger.info("Check passed. Screenshot: %s", check_shot)
 
                 elif args.action == "login":
-                    ensure_login(
+                    page = ensure_login(
                         login_page,
                         settings,
                         settings.runtime.retries,
                         settings.runtime.retry_wait_sec,
                         retry_call,
+                        bound_pages=[login_page, home_page],
                     )
                     context.storage_state(path=str(state_file))
                     logger.info("Auth state saved: %s", state_file)
@@ -524,12 +541,13 @@ def main() -> int:
                     home_page.open()
                     if not login_page.is_logged_in():
                         logger.info("Stored session is not valid, relogin required")
-                        ensure_login(
+                        page = ensure_login(
                             login_page,
                             settings,
                             settings.runtime.retries,
                             settings.runtime.retry_wait_sec,
                             retry_call,
+                            bound_pages=[login_page, home_page],
                         )
                         context.storage_state(path=str(state_file))
                         logger.info("Auth state refreshed: %s", state_file)
@@ -561,12 +579,13 @@ def main() -> int:
                     home_page.open()
                     if not login_page.is_logged_in():
                         logger.info("Stored session is not valid, relogin required")
-                        ensure_login(
+                        page = ensure_login(
                             login_page,
                             settings,
                             settings.runtime.retries,
                             settings.runtime.retry_wait_sec,
                             retry_call,
+                            bound_pages=[login_page, home_page],
                         )
                         context.storage_state(path=str(state_file))
                         logger.info("Auth state refreshed: %s", state_file)
@@ -857,12 +876,13 @@ def main() -> int:
                         home_page.open()
                         if not login_page.is_logged_in():
                             logger.info("Stored session is not valid, relogin required")
-                            ensure_login(
+                            page = ensure_login(
                                 login_page,
                                 settings,
                                 settings.runtime.retries,
                                 settings.runtime.retry_wait_sec,
                                 retry_call,
+                                bound_pages=[login_page, home_page],
                             )
                             context.storage_state(path=str(state_file))
                             logger.info("Auth state refreshed: %s", state_file)
@@ -962,12 +982,13 @@ def main() -> int:
                     home_page.open()
                     if not login_page.is_logged_in():
                         logger.info("Stored session is not valid, relogin required")
-                        ensure_login(
+                        page = ensure_login(
                             login_page,
                             settings,
                             settings.runtime.retries,
                             settings.runtime.retry_wait_sec,
                             retry_call,
+                            bound_pages=[login_page, home_page],
                         )
                         context.storage_state(path=str(state_file))
                         logger.info("Auth state refreshed: %s", state_file)
@@ -1015,12 +1036,13 @@ def main() -> int:
                     home_page.open()
                     if not login_page.is_logged_in():
                         logger.info("Stored session is not valid, relogin required")
-                        ensure_login(
+                        page = ensure_login(
                             login_page,
                             settings,
                             settings.runtime.retries,
                             settings.runtime.retry_wait_sec,
                             retry_call,
+                            bound_pages=[login_page, home_page],
                         )
                         context.storage_state(path=str(state_file))
                         logger.info("Auth state refreshed: %s", state_file)

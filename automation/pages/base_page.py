@@ -27,6 +27,9 @@ class BasePage:
             raise KeyError(f"Missing selectors for '{section}.{key}'")
         return values
 
+    def set_page(self, page: Page) -> None:
+        self.page = page
+
     def wait_and_get(self, section: str, key: str) -> tuple[str, Locator]:
         candidates = self._candidate_selectors(section, key)
         selector, locator = wait_for_first_visible(self.page, candidates, self.timeout_ms)
