@@ -25,6 +25,7 @@ import { StatCard } from "../components/StatCard";
 import { dashboardApi } from "../services/api";
 import type {
   ApprovalRow,
+  FeedbackGroupRow,
   OrgScopeRow,
   ProcessApprovalResponse,
   ProcessDetail,
@@ -119,6 +120,13 @@ function getScoreTone(score: number | null | undefined): Tone {
     return "info";
   }
   return "success";
+}
+
+function getFeedbackSummaryLines(group: FeedbackGroupRow): string[] {
+  if (Array.isArray(group.summaryLines) && group.summaryLines.length > 0) {
+    return group.summaryLines;
+  }
+  return [group.summary];
 }
 
 function getApprovalResultSeverity(result: ProcessApprovalResponse): "success" | "warning" | "info" {
@@ -972,9 +980,23 @@ export function ProcessDocumentsPage() {
                         }}
                       >
                         <Typography variant="subtitle2">{group.title}</Typography>
-                        <Typography variant="body2" sx={{ mt: 1, lineHeight: 1.75 }}>
-                          {group.summary}
-                        </Typography>
+                        <Box sx={{ mt: 1, display: "grid", rowGap: 0.5 }}>
+                          {getFeedbackSummaryLines(group).map((line, index, lines) => (
+                            <Typography
+                              key={`${group.id}-${index}`}
+                              variant="body2"
+                              sx={{
+                                lineHeight: 1.75,
+                                mt:
+                                  group.category === "cross_org" && lines.length > 2 && index === lines.length - 1
+                                    ? 1
+                                    : 0,
+                              }}
+                            >
+                              {line}
+                            </Typography>
+                          ))}
+                        </Box>
                         <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: "block" }}>
                           影响组织单位 {group.affectedOrgUnitCount} 个，影响组织 {group.affectedOrgCount} 个，
                           影响角色 {group.affectedRoleCount} 个，原始低分明细 {group.rawDetailCount} 条。

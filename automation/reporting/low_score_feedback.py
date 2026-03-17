@@ -479,11 +479,21 @@ def _build_cross_org_groups(
         role_sample_text = _format_role_sample_text(current["role_codes"], base_groups=current["unit_groups"])
         prefix = f'申请人属“{applicant_org_unit_name}”，' if applicant_org_unit_name else ""
         if len(unit_groups) > 1:
+            summary_lines = [
+                f"{prefix}本次申请组织范围跨 {len(unit_groups)} 个组织单位：",
+                *[f"{segment}；" for segment in segments],
+                f"共影响：{role_sample_text}；需明确跨组织单位申请理由。",
+            ]
             summary = (
                 f"{prefix}本次申请组织范围跨 {len(unit_groups)} 个组织单位："
                 f"{'；'.join(segments)}；共影响：{role_sample_text}；需明确跨组织单位申请理由。"
             )
         else:
+            summary_lines = [
+                f"{prefix}申请组织范围涉“{unit_groups[0]['target_org_unit_name']}”："
+                f"{_format_org_sample_text(unit_groups[0]['org_meta'])}；",
+                f"共影响：{role_sample_text}；需明确跨组织单位申请理由。",
+            ]
             summary = (
                 f"{prefix}申请组织范围涉“{unit_groups[0]['target_org_unit_name']}”："
                 f"{_format_org_sample_text(unit_groups[0]['org_meta'])}；共影响：{role_sample_text}；"
@@ -495,6 +505,7 @@ def _build_cross_org_groups(
                 "category": current["category"],
                 "title": current["title"],
                 "summary": summary,
+                "summaryLines": summary_lines,
                 "hint": "默认按组织单位聚合展示，原始明细保留在下方审计页签。",
                 "ruleIds": current["rule_ids"],
                 "rawDetailCount": current["raw_detail_count"],

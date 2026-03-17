@@ -270,6 +270,7 @@ export interface FeedbackGroupRow {
   category: string;
   title: string;
   summary: string;
+  summaryLines?: string[];
   hint: string;
   rawDetailCount: number;
   affectedOrgUnitCount: number;

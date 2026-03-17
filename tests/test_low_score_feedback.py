@@ -108,6 +108,32 @@ class LowScoreFeedbackTest(unittest.TestCase):
                     ],
                 },
                 {
+                    "group_key": "cross-org-2",
+                    "dimension_name": "申请的组织",
+                    "rule_id": "TARGET_ORG_CROSS_UNIT_LOW",
+                    "score": 0.5,
+                    "evidence_summary": "申请组织范围跨组织单位",
+                    "intervention_action": "明确申请理由",
+                    "applicant_org_unit_name": "人力资源与行政服务中心",
+                    "target_org_unit_name": "万御安防",
+                    "raw_detail_count": 1,
+                    "role_meta": [
+                        {
+                            "role_code": "R-2",
+                            "role_name": "定薪申请",
+                            "permission_level": "B1类-涉薪",
+                            "line_no": "2",
+                        }
+                    ],
+                    "org_meta": [
+                        {
+                            "org_code": "ORG-3",
+                            "organization_name": "成都金域名邸",
+                            "physical_level": "1",
+                        }
+                    ],
+                },
+                {
                     "group_key": "permission-b1-hr",
                     "dimension_name": "申请的权限",
                     "rule_id": "PERMISSION_B1_HR_STAFF",
@@ -133,8 +159,17 @@ class LowScoreFeedbackTest(unittest.TestCase):
         self.assertEqual(overview["summaryConclusionLabel"], "加强审核")
         self.assertEqual(len(overview["feedbackGroups"]), 1)
         self.assertEqual(overview["feedbackGroups"][0]["category"], "cross_org")
-        self.assertIn("申请组织范围涉", overview["feedbackGroups"][0]["summary"])
+        self.assertIn("本次申请组织范围跨 2 个组织单位", overview["feedbackGroups"][0]["summary"])
         self.assertIn("需明确跨组织单位申请理由", overview["feedbackGroups"][0]["summary"])
+        self.assertEqual(
+            overview["feedbackGroups"][0]["summaryLines"],
+            [
+                "申请人属“人力资源与行政服务中心”，本次申请组织范围跨 2 个组织单位：",
+                "涉“万科物业”：成都公园都会、成都万科公园传奇，共 2 个组织；",
+                "涉“万御安防”：成都金域名邸，共 1 个组织；",
+                "共影响：人员档案-可查看引出-有定薪有绩效、定薪申请 2 个角色；需明确跨组织单位申请理由。",
+            ],
+        )
 
 
 if __name__ == "__main__":
