@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import traceback
 import re
+import time
 from typing import Any
 
 from playwright.sync_api import sync_playwright
@@ -216,6 +217,8 @@ def approve_process_document(
     }
 
     response_payload: dict[str, Any] | None = None
+    started_perf = time.perf_counter()
+    last_event_perf = started_perf
 
     def flush_execution_log() -> None:
         if response_payload is not None:
@@ -226,10 +229,16 @@ def approve_process_document(
         )
 
     def add_event(message: str, **extra: Any) -> None:
+        nonlocal last_event_perf
+        now_dt = datetime.now()
+        now_perf = time.perf_counter()
         event = {
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "timestamp": now_dt.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],
+            "elapsedMs": round((now_perf - started_perf) * 1000, 1),
+            "deltaMs": round((now_perf - last_event_perf) * 1000, 1),
             "message": message,
         }
+        last_event_perf = now_perf
         if extra:
             event.update(extra)
         execution_log["events"].append(event)
@@ -248,6 +257,7 @@ def approve_process_document(
         "status": "running",
         "startedAt": started_at.strftime("%Y-%m-%d %H:%M:%S"),
         "finishedAt": "",
+        "durationMs": 0.0,
         "logFile": _to_repo_relative(log_path),
         "screenshotFile": "",
         "confirmationType": "",
@@ -276,6 +286,7 @@ def approve_process_document(
         if todo_process_status == "已处理":
             response_payload["status"] = "failed"
             response_payload["finishedAt"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            response_payload["durationMs"] = round((time.perf_counter() - started_perf) * 1000, 1)
             response_payload["message"] = (
                 "该单据最近一次待办同步结果为“已处理”，当前账号待办列表中未找到。"
                 "若怀疑单据已驳回后重新提交，请先点击“同步待办状态”后再重试。"
@@ -361,6 +372,7 @@ def approve_process_document(
                 response_payload["confirmationMessage"] = str(flow_result.get("confirmationMessage") or "")
                 response_payload["status"] = flow_status
                 response_payload["finishedAt"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                response_payload["durationMs"] = round((time.perf_counter() - started_perf) * 1000, 1)
                 response_payload["message"] = (
                     "已完成 EHR 写入验证，未点击提交。"
                     if dry_run
@@ -390,6 +402,7 @@ def approve_process_document(
     except Exception as exc:  # noqa: BLE001
         response_payload["status"] = "failed"
         response_payload["finishedAt"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        response_payload["durationMs"] = round((time.perf_counter() - started_perf) * 1000, 1)
         response_payload["message"] = (
             f"审批执行失败：{exc}。详见 {response_payload['logFile']}"
         )

@@ -40,6 +40,7 @@ class DocumentApprovalFlow:
             timeout_ms=timeout_ms,
             home_url=home_url,
         )
+        self._todo_page_size_applied = False
 
     @staticmethod
     def _normalize_text(value: Any) -> str:
@@ -78,13 +79,26 @@ class DocumentApprovalFlow:
         except Exception as exc:  # noqa: BLE001
             self.logger.warning("Failed to emit approval event %s: %s", message, exc)
 
-    def _open_todo_list_ready(self) -> None:
+    def _remember_todo_page_size_state(self, page_size_applied: bool) -> bool:
+        self._todo_page_size_applied = self._todo_page_size_applied or bool(page_size_applied)
+        return bool(page_size_applied)
+
+    def _open_todo_list_ready(self, page_size_timeout_ms: int | None = None) -> bool:
+        started_at = time.monotonic()
+        self._emit_event("approval_open_todo_started")
         todo_trigger = self.page.locator("div[id^='processflexpanelap_']").filter(has_text="待办任务").first
         todo_trigger.wait_for(state="visible", timeout=self.timeout_ms)
         todo_trigger.click(force=True)
         # Reuse the collect path's todo-list readiness flow so approval can see
         # the full pending set instead of only the current 10-row page.
-        self.collector._wait_for_todo_list_ready()
+        page_size_applied = self.collector._wait_for_todo_list_ready(page_size_timeout_ms=page_size_timeout_ms)
+        page_size_applied = self._remember_todo_page_size_state(page_size_applied)
+        self._emit_event(
+            "approval_open_todo_finished",
+            pageSizeApplied=page_size_applied,
+            durationMs=round((time.monotonic() - started_at) * 1000, 1),
+        )
+        return page_size_applied
 
     def _list_visible_tabs(self) -> list[str]:
         tabs = self.page.evaluate(
@@ -325,9 +339,16 @@ class DocumentApprovalFlow:
         return self._normalize_text(message)
 
     def capture_approval_records(self) -> list[dict[str, Any]]:
+        started_at = time.monotonic()
+        self._emit_event("approval_record_capture_started")
         self._open_approval_record_tab()
         records = self.collector.extract_approval_records()
         self._open_task_tab()
+        self._emit_event(
+            "approval_record_capture_finished",
+            approvalRecordCount=len(records),
+            durationMs=round((time.monotonic() - started_at) * 1000, 1),
+        )
         return records
 
     def _inspect_submission_state(self) -> dict[str, Any]:
@@ -409,11 +430,13 @@ class DocumentApprovalFlow:
         self,
         document_no: str,
         timeout_ms: int = 8000,
+        todo_ready_timeout_ms: int | None = None,
     ) -> dict[str, Any]:
         probe: dict[str, Any] = {
             "todoListVisible": False,
             "documentStillInTodo": None,
             "probeError": "",
+            "pageSizeApplied": False,
         }
         grid_visible = False
         try:
@@ -427,17 +450,18 @@ class DocumentApprovalFlow:
             if grid_visible:
                 # When submit brings us back to todo grid directly, avoid relying on
                 # the left-panel "待办任务" trigger visibility.
-                self.collector._wait_for_todo_list_ready()
+                page_size_applied = self.collector._wait_for_todo_list_ready(page_size_timeout_ms=todo_ready_timeout_ms)
             else:
                 try:
-                    self.collector.return_to_todo_list()
+                    page_size_applied = self.collector.return_to_todo_list(page_size_timeout_ms=todo_ready_timeout_ms)
                 except Exception:
-                    self._open_todo_list_ready()
+                    page_size_applied = self._open_todo_list_ready(page_size_timeout_ms=todo_ready_timeout_ms)
         except Exception as exc:  # noqa: BLE001
             probe["probeError"] = f"open_todo_list_failed: {exc}"
             return probe
 
         probe["todoListVisible"] = True
+        probe["pageSizeApplied"] = self._remember_todo_page_size_state(page_size_applied)
         try:
             grid = self.collector._extract_best_grid(TODO_HEADERS)
         except Exception as exc:  # noqa: BLE001
@@ -505,6 +529,42 @@ class DocumentApprovalFlow:
             )
         )
 
+    @staticmethod
+    def _should_prioritize_todo_probe(state: dict[str, Any]) -> bool:
+        if state.get("todoListVisible", False):
+            return True
+        return (
+            not state.get("submitButtonVisible", False)
+            and not state.get("documentDetailVisible", True)
+            and not state.get("taskTabVisible", False)
+            and not state.get("approvalTabVisible", False)
+        )
+
+    def _build_pending_confirmation_result(
+        self,
+        document_no: str,
+        state_before_todo_probe: dict[str, Any],
+        todo_probe: dict[str, Any],
+    ) -> dict[str, Any]:
+        self._emit_event(
+            "approval_confirmation_uncertain",
+            documentNo=document_no,
+            submitButtonVisible=state_before_todo_probe.get("submitButtonVisible", False),
+            taskTabVisible=state_before_todo_probe.get("taskTabVisible", False),
+            approvalTabVisible=state_before_todo_probe.get("approvalTabVisible", False),
+            todoListVisible=state_before_todo_probe.get("todoListVisible", False),
+            documentDetailVisible=state_before_todo_probe.get("documentDetailVisible", False),
+            probeError=todo_probe.get("probeError", ""),
+        )
+        return {
+            "status": "submitted_pending_confirmation",
+            "confirmationType": "submitted_pending_confirmation",
+            "confirmationMessage": (
+                "提交动作已发出，但当前未拿到强成功回执。"
+                "请先不要重复点击批准，可先查看最新审批日志或执行一次“同步待办状态”确认。"
+            ),
+        }
+
     def wait_for_submission_confirmation(
         self,
         document_no: str,
@@ -528,6 +588,7 @@ class DocumentApprovalFlow:
             waitTimeoutMs=total_timeout_ms,
         )
 
+        should_run_todo_probe = False
         while time.monotonic() < feedback_deadline:
             error_message = self.visible_feedback_message(self._ERROR_KEYWORDS)
             if error_message:
@@ -553,6 +614,11 @@ class DocumentApprovalFlow:
                     "confirmationMessage": success_message,
                 }
 
+            state = self._inspect_submission_state()
+            if self._should_prioritize_todo_probe(state):
+                should_run_todo_probe = True
+                break
+
             self.page.wait_for_timeout(500)
 
         state_before_todo_probe = self._inspect_submission_state()
@@ -564,25 +630,62 @@ class DocumentApprovalFlow:
             approvalTabVisible=state_before_todo_probe.get("approvalTabVisible", False),
             todoListVisible=state_before_todo_probe.get("todoListVisible", False),
             documentDetailVisible=state_before_todo_probe.get("documentDetailVisible", False),
+            earlyTriggered=should_run_todo_probe,
         )
-        todo_probe = self._probe_todo_document_presence(document_no=document_no, timeout_ms=8000)
+        todo_probe = self._probe_todo_document_presence(
+            document_no=document_no,
+            timeout_ms=8000,
+            todo_ready_timeout_ms=min(self.timeout_ms, 2000),
+        )
         last_todo_probe = todo_probe
         self._emit_event(
             "approval_todo_reprobe_result",
             documentNo=document_no,
             todoListVisible=todo_probe.get("todoListVisible", False),
             documentStillInTodo=todo_probe.get("documentStillInTodo"),
+            pageSizeApplied=todo_probe.get("pageSizeApplied", False),
             submitButtonVisible=state_before_todo_probe.get("submitButtonVisible", False),
             taskTabVisible=state_before_todo_probe.get("taskTabVisible", False),
             approvalTabVisible=state_before_todo_probe.get("approvalTabVisible", False),
             probeError=todo_probe.get("probeError", ""),
         )
         if todo_probe.get("documentStillInTodo") is False:
-            return {
-                "status": "succeeded",
-                "confirmationType": "todo_disappeared",
-                "confirmationMessage": "提交后目标单据已不在当前账号待办中。",
-            }
+            if todo_probe.get("pageSizeApplied", False):
+                return {
+                    "status": "succeeded",
+                    "confirmationType": "todo_disappeared",
+                    "confirmationMessage": "提交后目标单据已不在当前账号待办中。",
+                }
+            self._emit_event(
+                "approval_todo_reprobe_retry_full_scan_started",
+                documentNo=document_no,
+                reason="page_size_not_confirmed",
+            )
+            todo_probe = self._probe_todo_document_presence(
+                document_no=document_no,
+                timeout_ms=8000,
+                todo_ready_timeout_ms=min(self.timeout_ms, 5000),
+            )
+            last_todo_probe = todo_probe
+            self._emit_event(
+                "approval_todo_reprobe_result",
+                documentNo=document_no,
+                todoListVisible=todo_probe.get("todoListVisible", False),
+                documentStillInTodo=todo_probe.get("documentStillInTodo"),
+                pageSizeApplied=todo_probe.get("pageSizeApplied", False),
+                submitButtonVisible=state_before_todo_probe.get("submitButtonVisible", False),
+                taskTabVisible=state_before_todo_probe.get("taskTabVisible", False),
+                approvalTabVisible=state_before_todo_probe.get("approvalTabVisible", False),
+                probeError=todo_probe.get("probeError", ""),
+            )
+            if todo_probe.get("documentStillInTodo") is False and todo_probe.get("pageSizeApplied", False):
+                return {
+                    "status": "succeeded",
+                    "confirmationType": "todo_disappeared",
+                    "confirmationMessage": "提交后目标单据已不在当前账号待办中。",
+                }
+            if todo_probe.get("documentStillInTodo") is False:
+                return self._build_pending_confirmation_result(document_no, state_before_todo_probe, todo_probe)
 
         while time.monotonic() < approval_record_deadline:
             error_message = self.visible_feedback_message(self._ERROR_KEYWORDS)
@@ -660,40 +763,81 @@ class DocumentApprovalFlow:
             documentDetailVisible=state_before_todo_probe.get("documentDetailVisible", False),
         )
 
-        todo_probe = self._probe_todo_document_presence(document_no=document_no, timeout_ms=8000)
+        todo_probe = self._probe_todo_document_presence(
+            document_no=document_no,
+            timeout_ms=8000,
+            todo_ready_timeout_ms=min(self.timeout_ms, 2000),
+        )
         last_todo_probe = todo_probe
         self._emit_event(
             "approval_todo_reprobe_result",
             documentNo=document_no,
             todoListVisible=todo_probe.get("todoListVisible", False),
             documentStillInTodo=todo_probe.get("documentStillInTodo"),
+            pageSizeApplied=todo_probe.get("pageSizeApplied", False),
             submitButtonVisible=state_before_todo_probe.get("submitButtonVisible", False),
             taskTabVisible=state_before_todo_probe.get("taskTabVisible", False),
             approvalTabVisible=state_before_todo_probe.get("approvalTabVisible", False),
             probeError=todo_probe.get("probeError", ""),
         )
         if todo_probe.get("documentStillInTodo") is False:
-            return {
-                "status": "succeeded",
-                "confirmationType": "todo_disappeared",
-                "confirmationMessage": "提交后目标单据已不在当前账号待办中。",
-            }
-
-        if todo_probe.get("documentStillInTodo") is True and time.monotonic() < final_deadline:
-            self.page.wait_for_timeout(3000)
-            todo_probe = self._probe_todo_document_presence(document_no=document_no, timeout_ms=6000)
+            if todo_probe.get("pageSizeApplied", False):
+                return {
+                    "status": "succeeded",
+                    "confirmationType": "todo_disappeared",
+                    "confirmationMessage": "提交后目标单据已不在当前账号待办中。",
+                }
+            self._emit_event(
+                "approval_todo_reprobe_retry_full_scan_started",
+                documentNo=document_no,
+                reason="page_size_not_confirmed",
+            )
+            todo_probe = self._probe_todo_document_presence(
+                document_no=document_no,
+                timeout_ms=8000,
+                todo_ready_timeout_ms=min(self.timeout_ms, 5000),
+            )
             last_todo_probe = todo_probe
             self._emit_event(
                 "approval_todo_reprobe_result",
                 documentNo=document_no,
                 todoListVisible=todo_probe.get("todoListVisible", False),
                 documentStillInTodo=todo_probe.get("documentStillInTodo"),
+                pageSizeApplied=todo_probe.get("pageSizeApplied", False),
                 submitButtonVisible=state_before_todo_probe.get("submitButtonVisible", False),
                 taskTabVisible=state_before_todo_probe.get("taskTabVisible", False),
                 approvalTabVisible=state_before_todo_probe.get("approvalTabVisible", False),
                 probeError=todo_probe.get("probeError", ""),
             )
+            if todo_probe.get("documentStillInTodo") is False and todo_probe.get("pageSizeApplied", False):
+                return {
+                    "status": "succeeded",
+                    "confirmationType": "todo_disappeared",
+                    "confirmationMessage": "提交后目标单据已不在当前账号待办中。",
+                }
             if todo_probe.get("documentStillInTodo") is False:
+                return self._build_pending_confirmation_result(document_no, state_before_todo_probe, todo_probe)
+
+        if todo_probe.get("documentStillInTodo") is True and time.monotonic() < final_deadline:
+            self.page.wait_for_timeout(3000)
+            todo_probe = self._probe_todo_document_presence(
+                document_no=document_no,
+                timeout_ms=6000,
+                todo_ready_timeout_ms=min(self.timeout_ms, 2000),
+            )
+            last_todo_probe = todo_probe
+            self._emit_event(
+                "approval_todo_reprobe_result",
+                documentNo=document_no,
+                todoListVisible=todo_probe.get("todoListVisible", False),
+                documentStillInTodo=todo_probe.get("documentStillInTodo"),
+                pageSizeApplied=todo_probe.get("pageSizeApplied", False),
+                submitButtonVisible=state_before_todo_probe.get("submitButtonVisible", False),
+                taskTabVisible=state_before_todo_probe.get("taskTabVisible", False),
+                approvalTabVisible=state_before_todo_probe.get("approvalTabVisible", False),
+                probeError=todo_probe.get("probeError", ""),
+            )
+            if todo_probe.get("documentStillInTodo") is False and todo_probe.get("pageSizeApplied", False):
                 return {
                     "status": "succeeded",
                     "confirmationType": "todo_disappeared",
@@ -707,24 +851,7 @@ class DocumentApprovalFlow:
             )
 
         if self._should_return_pending_confirmation(state_before_todo_probe, todo_probe):
-            self._emit_event(
-                "approval_confirmation_uncertain",
-                documentNo=document_no,
-                submitButtonVisible=state_before_todo_probe.get("submitButtonVisible", False),
-                taskTabVisible=state_before_todo_probe.get("taskTabVisible", False),
-                approvalTabVisible=state_before_todo_probe.get("approvalTabVisible", False),
-                todoListVisible=state_before_todo_probe.get("todoListVisible", False),
-                documentDetailVisible=state_before_todo_probe.get("documentDetailVisible", False),
-                probeError=todo_probe.get("probeError", ""),
-            )
-            return {
-                "status": "submitted_pending_confirmation",
-                "confirmationType": "submitted_pending_confirmation",
-                "confirmationMessage": (
-                    "提交动作已发出，但当前未拿到强成功回执。"
-                    "请先不要重复点击批准，可先查看最新审批日志或执行一次“同步待办状态”确认。"
-                ),
-            }
+            return self._build_pending_confirmation_result(document_no, state_before_todo_probe, todo_probe)
 
         raise RuntimeError(
             "点击提交后未在预期时间内观察到成功反馈。"
@@ -737,9 +864,35 @@ class DocumentApprovalFlow:
         )
 
     def prepare_document_for_approval(self, document_no: str) -> dict[str, Any]:
-        self._open_todo_list_ready()
-        self.collector.open_document(document_no)
+        started_at = time.monotonic()
+        self._emit_event("approval_prepare_started", documentNo=document_no)
+        self._open_todo_list_ready(page_size_timeout_ms=min(self.timeout_ms, 2000))
+        open_started_at = time.monotonic()
+        try:
+            self.collector.open_document(document_no, link_timeout_ms=min(self.timeout_ms, 2000))
+        except PlaywrightTimeoutError as exc:
+            if self._todo_page_size_applied:
+                raise
+            self._emit_event(
+                "approval_document_open_retry_full_scan_started",
+                documentNo=document_no,
+                error=str(exc),
+            )
+            self._open_todo_list_ready(page_size_timeout_ms=self.timeout_ms)
+            self.collector.open_document(document_no)
+        self._emit_event(
+            "approval_document_opened",
+            documentNo=document_no,
+            durationMs=round((time.monotonic() - open_started_at) * 1000, 1),
+        )
+        basic_info_started_at = time.monotonic()
         basic_info = self.collector.extract_basic_info()
+        self._emit_event(
+            "approval_basic_info_loaded",
+            documentNo=document_no,
+            loadedDocumentNo=self._normalize_text(basic_info.get("单据编号")),
+            durationMs=round((time.monotonic() - basic_info_started_at) * 1000, 1),
+        )
         current_document_no = self._normalize_text(basic_info.get("单据编号"))
         if current_document_no != document_no:
             raise RuntimeError(
@@ -748,6 +901,12 @@ class DocumentApprovalFlow:
 
         detail_tabs = self._list_visible_tabs()
         self._open_task_tab()
+        self._emit_event(
+            "approval_prepare_finished",
+            documentNo=document_no,
+            detailTabCount=len(detail_tabs),
+            durationMs=round((time.monotonic() - started_at) * 1000, 1),
+        )
         return {
             "basicInfo": basic_info,
             "detailTabs": detail_tabs,
@@ -757,16 +916,38 @@ class DocumentApprovalFlow:
         preparation = self.prepare_document_for_approval(document_no)
         baseline_records = self.capture_approval_records()
 
+        decision_probe_started_at = time.monotonic()
         decision_before = self.read_decision_value()
         decision_options = self.list_decision_options()
+        self._emit_event(
+            "approval_decision_state_loaded",
+            documentNo=document_no,
+            decisionBefore=decision_before,
+            decisionOptionCount=len(decision_options),
+            durationMs=round((time.monotonic() - decision_probe_started_at) * 1000, 1),
+        )
         if "同意" not in decision_options and decision_before != "同意":
             raise RuntimeError(f"当前审批决策不支持“同意”，可用选项={decision_options}")
 
+        opinion_probe_started_at = time.monotonic()
         opinion_before = self.read_approval_opinion()
         decision_after = self.set_decision_value("同意")
         opinion_after = self.write_approval_opinion(approval_opinion)
+        self._emit_event(
+            "approval_form_filled",
+            documentNo=document_no,
+            decisionAfter=decision_after,
+            approvalOpinionBefore=opinion_before,
+            approvalOpinionAfter=opinion_after,
+            durationMs=round((time.monotonic() - opinion_probe_started_at) * 1000, 1),
+        )
         submit_button = self.submit_button_locator()
         submit_label = self._normalize_text(submit_button.inner_text())
+        self._emit_event(
+            "approval_submit_button_ready",
+            documentNo=document_no,
+            submitLabel=submit_label,
+        )
 
         response = {
             "basicInfo": preparation["basicInfo"],

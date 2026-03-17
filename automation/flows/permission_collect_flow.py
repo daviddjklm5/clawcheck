@@ -61,11 +61,11 @@ class PermissionCollectFlow:
             )
         return documents
 
-    def open_todo_list(self) -> None:
+    def open_todo_list(self, page_size_timeout_ms: int | None = None) -> bool:
         trigger = self.page.locator("div[id^='processflexpanelap_']").filter(has_text="待办任务").first
         trigger.wait_for(state="visible", timeout=self.timeout_ms)
         trigger.click(force=True)
-        self._wait_for_todo_list_ready()
+        return self._wait_for_todo_list_ready(page_size_timeout_ms=page_size_timeout_ms)
 
     def collect_document_from_todo(
         self,
@@ -93,17 +93,17 @@ class PermissionCollectFlow:
             self.return_to_todo_list()
         return document
 
-    def open_document(self, document_no: str) -> None:
-        subject_link = self._wait_for_todo_document_link_ready(document_no)
+    def open_document(self, document_no: str, link_timeout_ms: int | None = None) -> None:
+        subject_link = self._wait_for_todo_document_link_ready(document_no, timeout_ms=link_timeout_ms)
         subject_link.click(force=True)
         self._wait_for_document_loaded(document_no)
         self._remember_current_document_tab(document_no)
 
-    def return_to_todo_list(self) -> None:
+    def return_to_todo_list(self, page_size_timeout_ms: int | None = None) -> bool:
         tab = self.page.locator("li[data-splitscreen-pageid$='hrobs_pc_messagecenter']").first
         tab.wait_for(state="visible", timeout=self.timeout_ms)
         tab.click(force=True)
-        self._wait_for_todo_list_ready()
+        return self._wait_for_todo_list_ready(page_size_timeout_ms=page_size_timeout_ms)
 
     def collect_current_document(self, probe: dict[str, Any] | None = None) -> dict[str, Any]:
         probe = probe or self.collect_current_document_probe()
@@ -412,7 +412,7 @@ class PermissionCollectFlow:
             f"Permission detail row not ready. grid_selector={grid_selector!r}, row_idx={row_idx}, line_no={line_no!r}"
         )
 
-    def _wait_for_todo_document_link_ready(self, document_no: str):
+    def _wait_for_todo_document_link_ready(self, document_no: str, timeout_ms: int | None = None):
         grid = self._extract_best_grid(TODO_HEADERS)
         grid_selector = str(grid.get("selector") or "")
         headers = list(grid.get("headers") or [])
@@ -420,7 +420,8 @@ class PermissionCollectFlow:
             raise RuntimeError(f"Todo grid not ready for document lookup: {document_no}")
 
         self._set_grid_vertical_position(grid_selector, 0)
-        deadline = time.monotonic() + (self.timeout_ms / 1000)
+        effective_timeout_ms = max(int(timeout_ms or self.timeout_ms), 1)
+        deadline = time.monotonic() + (effective_timeout_ms / 1000)
         stagnant_rounds = 0
         last_error = ""
         subject_text = f"单据编号：{document_no}"
@@ -878,14 +879,15 @@ class PermissionCollectFlow:
             self.page.wait_for_timeout(200)
         raise PlaywrightTimeoutError(f"Grid headers not ready: {required_headers}. Last headers={last_headers}")
 
-    def _ensure_todo_page_size(self, page_size: int) -> None:
+    def _ensure_todo_page_size(self, page_size: int, timeout_ms: int | None = None) -> None:
         target_text = f"{page_size}条/页"
+        effective_timeout_ms = max(int(timeout_ms or self.timeout_ms), 1)
         trigger = self.page.locator(
             "#gridview .kd-pagination-selector button.kd-dropdown-trigger.kd-pagination-selector-size.kd-pagination-options-dropdown"
         ).first
-        trigger.wait_for(state="visible", timeout=self.timeout_ms)
+        trigger.wait_for(state="visible", timeout=effective_timeout_ms)
 
-        deadline = time.monotonic() + (self.timeout_ms / 1000)
+        deadline = time.monotonic() + (effective_timeout_ms / 1000)
         last_text = ""
         while time.monotonic() < deadline:
             last_text = re.sub(r"\s+", "", trigger.inner_text() or "")
@@ -904,16 +906,19 @@ class PermissionCollectFlow:
             f"Todo page size did not become {target_text}. last_text={last_text}"
         )
 
-    def _wait_for_todo_list_ready(self) -> None:
+    def _wait_for_todo_list_ready(self, page_size_timeout_ms: int | None = None) -> bool:
         self.page.locator("#gridview").first.wait_for(state="visible", timeout=self.timeout_ms)
+        page_size_applied = False
         try:
-            self._ensure_todo_page_size(1000)
+            self._ensure_todo_page_size(1000, timeout_ms=page_size_timeout_ms)
+            page_size_applied = True
         except PlaywrightTimeoutError as exc:
             self.logger.warning(
                 "Todo page size selector not ready, continue with current pagination: %s",
                 exc,
             )
         self._wait_for_grid_headers(TODO_HEADERS)
+        return page_size_applied
 
     def _remember_current_document_tab(self, document_no: str) -> None:
         tab_info = self.page.evaluate(
