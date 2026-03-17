@@ -341,6 +341,8 @@ export interface ProcessApprovalResponse {
   finishedAt: string;
   logFile: string;
   screenshotFile: string;
+  confirmationType?: string;
+  confirmationMessage?: string;
   message: string;
 }
 

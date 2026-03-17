@@ -121,6 +121,26 @@ function getScoreTone(score: number | null | undefined): Tone {
   return "success";
 }
 
+function getApprovalResultSeverity(result: ProcessApprovalResponse): "success" | "warning" | "info" {
+  if (result.dryRun) {
+    return "info";
+  }
+  if (result.status === "submitted_pending_confirmation") {
+    return "warning";
+  }
+  return "success";
+}
+
+function getApprovalStatusHint(result: ProcessApprovalResponse): string {
+  if (result.dryRun) {
+    return "当前只做连通性验证，不点击提交。";
+  }
+  if (result.status === "submitted_pending_confirmation") {
+    return "提交动作已发出，但当前仍处于待确认状态；请先不要重复点击批准。";
+  }
+  return "已按返回结果完成执行，并已命中成功确认信号。";
+}
+
 function isProcessWorkbenchResponse(value: unknown): value is ProcessWorkbench {
   if (!value || typeof value !== "object") {
     return false;
@@ -572,7 +592,7 @@ export function ProcessDocumentsPage() {
     <Stack spacing={3}>
       <Box>
         <Typography variant="body1">
-          当前页面已按 `201 / 105B` 方案收敛为单据处理工作台；默认仅展示最近一次待办同步后仍可处理的单据，批次分布与执行日志已拆到 `评估分析` 页面。
+          当前页面已按 `201 / 105B / 105C` 方案收敛为单据处理工作台；默认仅展示最近一次待办同步后仍可处理的单据，批次分布与执行日志已拆到 `评估分析` 页面。
         </Typography>
         <Stack
           direction={{ xs: "column", md: "row" }}
@@ -1067,14 +1087,27 @@ export function ProcessDocumentsPage() {
 
                   {approvalResult ? (
                     <Stack spacing={1.5}>
-                      <Alert severity={approvalResult.dryRun ? "info" : "success"}>{approvalResult.message}</Alert>
+                      <Alert severity={getApprovalResultSeverity(approvalResult)}>{approvalResult.message}</Alert>
                       <KeyValueList
                         items={[
-                          { label: "执行状态", value: approvalResult.status, hint: approvalResult.dryRun ? "当前只做连通性验证，不点击提交。" : "已按返回结果完成执行。" },
+                          { label: "执行状态", value: approvalResult.status, hint: getApprovalStatusHint(approvalResult) },
                           { label: "开始时间", value: approvalResult.startedAt || "-", hint: "后端开始执行审批的时间。" },
                           { label: "结束时间", value: approvalResult.finishedAt || "-", hint: "后端完成执行或返回结果的时间。" },
                           { label: "EHR 决策", value: approvalResult.ehrDecision || "-", hint: "当前固定为“同意”。" },
                           { label: "EHR 提交按钮", value: approvalResult.ehrSubmitLabel || "-", hint: "实际点击的 EHR 页面按钮文案。" },
+                          {
+                            label: "确认方式",
+                            value: approvalResult.confirmationType || "-",
+                            hint:
+                              approvalResult.confirmationType === "submitted_pending_confirmation"
+                                ? "当前未拿到强成功回执，请结合日志与待办同步结果继续确认。"
+                                : "后端用于判定这次审批结果的确认路径。",
+                          },
+                          {
+                            label: "确认说明",
+                            value: approvalResult.confirmationMessage || "-",
+                            hint: "用于说明这次返回结果是如何被确认出来的。",
+                          },
                           { label: "日志文件", value: approvalResult.logFile || "-", hint: "审批执行 JSON 日志，可用于排障。" },
                           {
                             label: "异常截图",

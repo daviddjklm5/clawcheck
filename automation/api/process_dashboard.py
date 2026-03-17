@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime
 import json
 import logging
@@ -148,6 +149,30 @@ def get_process_document_detail(document_no: str, assessment_batch_no: str | Non
     )
 
 
+def _capture_failure_screenshot(
+    page: Any,
+    screenshot_path: Path,
+    response_payload: dict[str, Any],
+    add_event: Callable[..., None],
+) -> None:
+    if page is None:
+        return
+
+    try:
+        if hasattr(page, "is_closed") and page.is_closed():
+            add_event("page_already_closed_before_screenshot")
+            return
+    except Exception as exc:  # noqa: BLE001
+        add_event("page_closed_probe_failed", error=str(exc))
+
+    try:
+        page.screenshot(path=str(screenshot_path), full_page=True)
+        response_payload["screenshotFile"] = _to_repo_relative(screenshot_path)
+        add_event("error_screenshot_saved", screenshotFile=response_payload["screenshotFile"])
+    except Exception as exc:  # noqa: BLE001
+        add_event("screenshot_failed", error=str(exc))
+
+
 def approve_process_document(
     document_no: str,
     action: str,
@@ -225,6 +250,8 @@ def approve_process_document(
         "finishedAt": "",
         "logFile": _to_repo_relative(log_path),
         "screenshotFile": "",
+        "confirmationType": "",
+        "confirmationMessage": "",
         "message": "",
     }
     flush_execution_log()
@@ -295,66 +322,77 @@ def approve_process_document(
                 logger=logger,
                 timeout_ms=settings.browser.timeout_ms,
                 home_url=settings.app.home_url,
+                event_callback=add_event,
             )
-
-            add_event("open_home_page", homeUrl=settings.app.home_url)
-            home_page.open()
             try:
-                home_page.wait_ready()
-                add_event("home_ready")
-            except Exception as exc:  # noqa: BLE001
-                add_event("home_ready_probe_failed", error=str(exc))
-
-            if not login_page.is_logged_in():
-                if not settings.auth.username.strip() or not settings.auth.password.strip():
-                    raise RuntimeError("当前登录态失效，且未配置可用账号密码，无法执行审批。")
-                add_event("login_required")
-                login_page.login(
-                    username=settings.auth.username.strip(),
-                    password=settings.auth.password.strip(),
-                    require_manual_captcha=False,
-                )
-                context.storage_state(path=str(state_file))
-                add_event("login_refreshed", stateFile=_to_repo_relative(state_file))
-            else:
-                add_event("reuse_existing_login_state")
-
-            add_event("approval_flow_started", documentNo=document_no, dryRun=dry_run)
-            flow_result = approval_flow.execute_approve(
-                document_no=document_no,
-                approval_opinion=approval_opinion,
-                dry_run=dry_run,
-            )
-            add_event("approval_flow_finished", result=flow_result)
-
-            response_payload["ehrSubmitLabel"] = str(flow_result.get("submitLabel") or "提交")
-            response_payload["status"] = "succeeded"
-            response_payload["finishedAt"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            response_payload["message"] = (
-                "已完成 EHR 写入验证，未点击提交。"
-                if dry_run
-                else "EHR 已完成同意并提交。"
-            )
-            if not dry_run:
+                add_event("open_home_page", homeUrl=settings.app.home_url)
+                home_page.open()
                 try:
-                    permission_store.update_single_todo_process_status(document_no, "已处理")
-                    add_event("todo_process_status_updated", documentNo=document_no, todoProcessStatus="已处理")
+                    home_page.wait_ready()
+                    add_event("home_ready")
                 except Exception as exc:  # noqa: BLE001
-                    add_event("todo_process_status_update_failed", error=str(exc), documentNo=document_no)
-            execution_log["result"] = flow_result
-            execution_log["response"] = response_payload
+                    add_event("home_ready_probe_failed", error=str(exc))
+
+                if not login_page.is_logged_in():
+                    if not settings.auth.username.strip() or not settings.auth.password.strip():
+                        raise RuntimeError("当前登录态失效，且未配置可用账号密码，无法执行审批。")
+                    add_event("login_required")
+                    login_page.login(
+                        username=settings.auth.username.strip(),
+                        password=settings.auth.password.strip(),
+                        require_manual_captcha=False,
+                    )
+                    context.storage_state(path=str(state_file))
+                    add_event("login_refreshed", stateFile=_to_repo_relative(state_file))
+                else:
+                    add_event("reuse_existing_login_state")
+
+                add_event("approval_flow_started", documentNo=document_no, dryRun=dry_run)
+                flow_result = approval_flow.execute_approve(
+                    document_no=document_no,
+                    approval_opinion=approval_opinion,
+                    dry_run=dry_run,
+                )
+                add_event("approval_flow_finished", result=flow_result)
+
+                flow_status = str(flow_result.get("status") or "succeeded")
+                response_payload["ehrSubmitLabel"] = str(flow_result.get("submitLabel") or "提交")
+                response_payload["confirmationType"] = str(flow_result.get("confirmationType") or "")
+                response_payload["confirmationMessage"] = str(flow_result.get("confirmationMessage") or "")
+                response_payload["status"] = flow_status
+                response_payload["finishedAt"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                response_payload["message"] = (
+                    "已完成 EHR 写入验证，未点击提交。"
+                    if dry_run
+                    else (
+                        response_payload["confirmationMessage"]
+                        or "提交动作已发出，但当前未拿到强成功回执。请先不要重复点击批准。"
+                    )
+                    if flow_status == "submitted_pending_confirmation"
+                    else "EHR 已完成同意并提交。"
+                )
+                if not dry_run and flow_status == "succeeded":
+                    try:
+                        permission_store.update_single_todo_process_status(document_no, "已处理")
+                        add_event("todo_process_status_updated", documentNo=document_no, todoProcessStatus="已处理")
+                    except Exception as exc:  # noqa: BLE001
+                        add_event("todo_process_status_update_failed", error=str(exc), documentNo=document_no)
+                execution_log["result"] = flow_result
+                execution_log["response"] = response_payload
+            except Exception:
+                _capture_failure_screenshot(
+                    page=page,
+                    screenshot_path=screenshot_path,
+                    response_payload=response_payload,
+                    add_event=add_event,
+                )
+                raise
     except Exception as exc:  # noqa: BLE001
         response_payload["status"] = "failed"
         response_payload["finishedAt"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         response_payload["message"] = (
             f"审批执行失败：{exc}。详见 {response_payload['logFile']}"
         )
-        if page is not None:
-            try:
-                page.screenshot(path=str(screenshot_path), full_page=True)
-                response_payload["screenshotFile"] = _to_repo_relative(screenshot_path)
-            except Exception as screenshot_exc:  # noqa: BLE001
-                add_event("screenshot_failed", error=str(screenshot_exc))
 
         execution_log["error"] = {
             "type": type(exc).__name__,

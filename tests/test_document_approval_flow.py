@@ -62,6 +62,152 @@ class DocumentApprovalFlowTest(unittest.TestCase):
         todo_trigger.click.assert_called_once_with(force=True)
         self.flow.collector._wait_for_todo_list_ready.assert_called_once_with()
 
+    def test_wait_for_submission_confirmation_returns_todo_disappeared_success(self) -> None:
+        with (
+            patch("automation.flows.document_approval_flow.time.monotonic", side_effect=[0.0, 1.0, 9.0, 10.0, 26.0]),
+            patch.object(self.flow, "visible_feedback_message", return_value=""),
+            patch.object(self.flow, "capture_approval_records", side_effect=RuntimeError("approval tab hidden")),
+            patch.object(
+                self.flow,
+                "_inspect_submission_state",
+                return_value={
+                    "submitButtonVisible": False,
+                    "taskTabVisible": False,
+                    "approvalTabVisible": False,
+                    "todoListVisible": False,
+                    "documentDetailVisible": False,
+                },
+            ),
+            patch.object(
+                self.flow,
+                "_probe_todo_document_presence",
+                return_value={
+                    "todoListVisible": True,
+                    "documentStillInTodo": False,
+                    "probeError": "",
+                },
+            ),
+        ):
+            result = self.flow.wait_for_submission_confirmation(
+                document_no="RA-TEST-001",
+                expected_opinion="同意",
+                approval_count_before=1,
+                wait_timeout_ms=30_000,
+            )
+
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual(result["confirmationType"], "todo_disappeared")
+
+    def test_wait_for_submission_confirmation_returns_pending_when_structure_changed_but_todo_probe_is_uncertain(self) -> None:
+        with (
+            patch("automation.flows.document_approval_flow.time.monotonic", side_effect=[0.0, 1.0, 9.0, 10.0, 26.0]),
+            patch.object(self.flow, "visible_feedback_message", return_value=""),
+            patch.object(self.flow, "capture_approval_records", side_effect=RuntimeError("approval tab hidden")),
+            patch.object(
+                self.flow,
+                "_inspect_submission_state",
+                return_value={
+                    "submitButtonVisible": False,
+                    "taskTabVisible": False,
+                    "approvalTabVisible": False,
+                    "todoListVisible": True,
+                    "documentDetailVisible": False,
+                },
+            ),
+            patch.object(
+                self.flow,
+                "_probe_todo_document_presence",
+                return_value={
+                    "todoListVisible": True,
+                    "documentStillInTodo": None,
+                    "probeError": "todo_grid_snapshot_missing",
+                },
+            ),
+        ):
+            result = self.flow.wait_for_submission_confirmation(
+                document_no="RA-TEST-001",
+                expected_opinion="同意",
+                approval_count_before=1,
+                wait_timeout_ms=30_000,
+            )
+
+        self.assertEqual(result["status"], "submitted_pending_confirmation")
+        self.assertEqual(result["confirmationType"], "submitted_pending_confirmation")
+
+    def test_wait_for_submission_confirmation_raises_when_document_still_in_todo(self) -> None:
+        with (
+            patch("automation.flows.document_approval_flow.time.monotonic", side_effect=[0.0, 1.0, 9.0, 10.0, 26.0, 27.0]),
+            patch.object(self.flow, "visible_feedback_message", return_value=""),
+            patch.object(self.flow, "capture_approval_records", side_effect=RuntimeError("approval tab hidden")),
+            patch.object(
+                self.flow,
+                "_inspect_submission_state",
+                return_value={
+                    "submitButtonVisible": True,
+                    "taskTabVisible": True,
+                    "approvalTabVisible": True,
+                    "todoListVisible": False,
+                    "documentDetailVisible": True,
+                },
+            ),
+            patch.object(
+                self.flow,
+                "_probe_todo_document_presence",
+                side_effect=[
+                    {
+                        "todoListVisible": True,
+                        "documentStillInTodo": True,
+                        "probeError": "",
+                    },
+                    {
+                        "todoListVisible": True,
+                        "documentStillInTodo": True,
+                        "probeError": "",
+                    },
+                    {
+                        "todoListVisible": True,
+                        "documentStillInTodo": True,
+                        "probeError": "",
+                    },
+                ],
+            ),
+        ):
+            with self.assertRaises(RuntimeError) as context:
+                self.flow.wait_for_submission_confirmation(
+                    document_no="RA-TEST-001",
+                    expected_opinion="同意",
+                    approval_count_before=1,
+                    wait_timeout_ms=30_000,
+                )
+
+        self.assertIn("仍在当前账号待办中", str(context.exception))
+
+    def test_probe_todo_document_presence_uses_existing_grid_without_trigger_click(self) -> None:
+        grid_locator = MagicMock()
+        grid_locator.count.return_value = 1
+        grid_locator.is_visible.return_value = True
+        self.page.locator.return_value.first = grid_locator
+
+        self.flow.collector._wait_for_todo_list_ready = MagicMock()
+        self.flow.collector._extract_best_grid = MagicMock(
+            return_value={"selector": "#gridview", "headers": ["单据", "单据编号"]},
+        )
+        self.flow.collector._set_grid_vertical_position = MagicMock()
+        self.flow.collector._focus_todo_row = MagicMock(return_value=False)
+        self.flow.collector._get_grid_virtual_snapshot = MagicMock(
+            return_value={
+                "scrollHeight": 1000,
+                "clientHeight": 500,
+                "scrollTop": 500,
+            },
+        )
+
+        result = self.flow._probe_todo_document_presence("RA-TEST-001", timeout_ms=500)
+
+        self.flow.collector._wait_for_todo_list_ready.assert_called_once_with()
+        self.assertEqual(result["todoListVisible"], True)
+        self.assertEqual(result["documentStillInTodo"], False)
+
 
 if __name__ == "__main__":
     unittest.main()
