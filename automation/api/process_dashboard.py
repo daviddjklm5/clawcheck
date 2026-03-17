@@ -11,8 +11,10 @@ import re
 import time
 from typing import Any
 
-from playwright.sync_api import sync_playwright
-
+from automation.api.approval_browser_session import (
+    acquire_approval_browser_session,
+    release_approval_browser_session,
+)
 from automation.api.config_summary import REPO_ROOT, _load_runtime_settings
 from automation.api.audit_workbench import get_audit_task_overview
 from automation.db.postgres import PostgresPermissionStore, PostgresRiskTrustStore
@@ -247,6 +249,7 @@ def approve_process_document(
     page = None
     browser = None
     context = None
+    browser_session_acquired = False
     response_payload = {
         "documentNo": document_no,
         "action": action,
@@ -295,110 +298,126 @@ def approve_process_document(
             raise ValueError(response_payload["message"])
 
     try:
-        with sync_playwright() as playwright:
-            browser = playwright.chromium.launch(
-                headless=not settings.browser.headed,
-                slow_mo=settings.browser.slow_mo_ms,
-            )
-            context_kwargs: dict[str, Any] = {
-                "ignore_https_errors": settings.browser.ignore_https_errors,
-                "viewport": {"width": 1600, "height": 960},
-                "accept_downloads": False,
-            }
-            if state_file.exists():
-                context_kwargs["storage_state"] = str(state_file)
+        browser, context, page, browser_session_meta = acquire_approval_browser_session(
+            settings=settings,
+            state_file=state_file,
+            event_callback=add_event,
+        )
+        browser_session_acquired = True
+        add_event(
+            "browser_context_ready",
+            stateFile=_to_repo_relative(state_file),
+            sessionReused=bool(browser_session_meta.get("reused", False)),
+            sessionAgeMs=browser_session_meta.get("sessionAgeMs", 0.0),
+            sessionIdleMs=browser_session_meta.get("sessionIdleMs", 0.0),
+            pageRecreated=bool(browser_session_meta.get("pageRecreated", False)),
+        )
 
-            context = browser.new_context(**context_kwargs)
-            context.set_default_timeout(settings.browser.timeout_ms)
-            context.set_default_navigation_timeout(settings.browser.navigation_timeout_ms)
-            page = context.new_page()
-            add_event("browser_context_ready", stateFile=_to_repo_relative(state_file))
-
-            home_page = HomePage(
-                home_url=settings.app.home_url,
-                page=page,
-                selectors=selectors,
-                logger=logger,
-                timeout_ms=settings.browser.timeout_ms,
-            )
-            login_page = LoginPage(
-                home_url=settings.app.home_url,
-                page=page,
-                selectors=selectors,
-                logger=logger,
-                timeout_ms=settings.browser.timeout_ms,
-            )
-            approval_flow = DocumentApprovalFlow(
-                page=page,
-                logger=logger,
-                timeout_ms=settings.browser.timeout_ms,
-                home_url=settings.app.home_url,
-                event_callback=add_event,
-            )
-            try:
-                add_event("open_home_page", homeUrl=settings.app.home_url)
-                home_page.open()
+        home_page = HomePage(
+            home_url=settings.app.home_url,
+            page=page,
+            selectors=selectors,
+            logger=logger,
+            timeout_ms=settings.browser.timeout_ms,
+        )
+        login_page = LoginPage(
+            home_url=settings.app.home_url,
+            page=page,
+            selectors=selectors,
+            logger=logger,
+            timeout_ms=settings.browser.timeout_ms,
+        )
+        approval_flow = DocumentApprovalFlow(
+            page=page,
+            logger=logger,
+            timeout_ms=settings.browser.timeout_ms,
+            home_url=settings.app.home_url,
+            event_callback=add_event,
+        )
+        home_probe_page = HomePage(
+            home_url=settings.app.home_url,
+            page=page,
+            selectors=selectors,
+            logger=logger,
+            timeout_ms=min(settings.browser.timeout_ms, 1500),
+        )
+        try:
+            if browser_session_meta.get("reused", False):
                 try:
+                    home_probe_page.wait_ready()
+                    add_event("reuse_existing_home_page")
+                except Exception as exc:  # noqa: BLE001
+                    add_event("open_home_page", homeUrl=settings.app.home_url, reason="reuse_probe_failed", error=str(exc))
+                    home_page.open()
+                    try:
+                        home_page.wait_ready()
+                        add_event("home_ready")
+                    except Exception as wait_exc:  # noqa: BLE001
+                        add_event("home_ready_probe_failed", error=str(wait_exc))
+            else:
+                try:
+                    add_event("open_home_page", homeUrl=settings.app.home_url)
+                    home_page.open()
                     home_page.wait_ready()
                     add_event("home_ready")
                 except Exception as exc:  # noqa: BLE001
                     add_event("home_ready_probe_failed", error=str(exc))
 
-                if not login_page.is_logged_in():
-                    if not settings.auth.username.strip() or not settings.auth.password.strip():
-                        raise RuntimeError("当前登录态失效，且未配置可用账号密码，无法执行审批。")
-                    add_event("login_required")
-                    login_page.login(
-                        username=settings.auth.username.strip(),
-                        password=settings.auth.password.strip(),
-                        require_manual_captcha=False,
-                    )
-                    context.storage_state(path=str(state_file))
-                    add_event("login_refreshed", stateFile=_to_repo_relative(state_file))
-                else:
-                    add_event("reuse_existing_login_state")
+            if not login_page.is_logged_in():
+                if not settings.auth.username.strip() or not settings.auth.password.strip():
+                    raise RuntimeError("当前登录态失效，且未配置可用账号密码，无法执行审批。")
+                add_event("login_required")
+                login_page.login(
+                    username=settings.auth.username.strip(),
+                    password=settings.auth.password.strip(),
+                    require_manual_captcha=False,
+                )
+                context.storage_state(path=str(state_file))
+                add_event("login_refreshed", stateFile=_to_repo_relative(state_file))
+            else:
+                add_event("reuse_existing_login_state")
 
-                add_event("approval_flow_started", documentNo=document_no, dryRun=dry_run)
-                flow_result = approval_flow.execute_approve(
-                    document_no=document_no,
-                    approval_opinion=approval_opinion,
-                    dry_run=dry_run,
-                )
-                add_event("approval_flow_finished", result=flow_result)
+            add_event("approval_flow_started", documentNo=document_no, dryRun=dry_run)
+            flow_result = approval_flow.execute_approve(
+                document_no=document_no,
+                approval_opinion=approval_opinion,
+                dry_run=dry_run,
+            )
+            add_event("approval_flow_finished", result=flow_result)
 
-                flow_status = str(flow_result.get("status") or "succeeded")
-                response_payload["ehrSubmitLabel"] = str(flow_result.get("submitLabel") or "提交")
-                response_payload["confirmationType"] = str(flow_result.get("confirmationType") or "")
-                response_payload["confirmationMessage"] = str(flow_result.get("confirmationMessage") or "")
-                response_payload["status"] = flow_status
-                response_payload["finishedAt"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                response_payload["durationMs"] = round((time.perf_counter() - started_perf) * 1000, 1)
-                response_payload["message"] = (
-                    "已完成 EHR 写入验证，未点击提交。"
-                    if dry_run
-                    else (
-                        response_payload["confirmationMessage"]
-                        or "提交动作已发出，但当前未拿到强成功回执。请先不要重复点击批准。"
-                    )
-                    if flow_status == "submitted_pending_confirmation"
-                    else "EHR 已完成同意并提交。"
+            flow_status = str(flow_result.get("status") or "succeeded")
+            response_payload["ehrSubmitLabel"] = str(flow_result.get("submitLabel") or "提交")
+            response_payload["confirmationType"] = str(flow_result.get("confirmationType") or "")
+            response_payload["confirmationMessage"] = str(flow_result.get("confirmationMessage") or "")
+            response_payload["status"] = flow_status
+            response_payload["finishedAt"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            response_payload["durationMs"] = round((time.perf_counter() - started_perf) * 1000, 1)
+            response_payload["message"] = (
+                "已完成 EHR 写入验证，未点击提交。"
+                if dry_run
+                else (
+                    response_payload["confirmationMessage"]
+                    or "提交动作已发出，但当前未拿到强成功回执。请先不要重复点击批准。"
                 )
-                if not dry_run and flow_status == "succeeded":
-                    try:
-                        permission_store.update_single_todo_process_status(document_no, "已处理")
-                        add_event("todo_process_status_updated", documentNo=document_no, todoProcessStatus="已处理")
-                    except Exception as exc:  # noqa: BLE001
-                        add_event("todo_process_status_update_failed", error=str(exc), documentNo=document_no)
-                execution_log["result"] = flow_result
-                execution_log["response"] = response_payload
-            except Exception:
-                _capture_failure_screenshot(
-                    page=page,
-                    screenshot_path=screenshot_path,
-                    response_payload=response_payload,
-                    add_event=add_event,
-                )
-                raise
+                if flow_status == "submitted_pending_confirmation"
+                else "EHR 已完成同意并提交。"
+            )
+            if not dry_run and flow_status == "succeeded":
+                try:
+                    permission_store.update_single_todo_process_status(document_no, "已处理")
+                    add_event("todo_process_status_updated", documentNo=document_no, todoProcessStatus="已处理")
+                except Exception as exc:  # noqa: BLE001
+                    add_event("todo_process_status_update_failed", error=str(exc), documentNo=document_no)
+            execution_log["result"] = flow_result
+            execution_log["response"] = response_payload
+        except Exception:
+            _capture_failure_screenshot(
+                page=page,
+                screenshot_path=screenshot_path,
+                response_payload=response_payload,
+                add_event=add_event,
+            )
+            raise
     except Exception as exc:  # noqa: BLE001
         response_payload["status"] = "failed"
         response_payload["finishedAt"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -419,16 +438,8 @@ def approve_process_document(
         )
         raise RuntimeError(response_payload["message"]) from exc
     finally:
-        if context is not None:
-            try:
-                context.close()
-            except Exception:  # noqa: BLE001
-                pass
-        if browser is not None:
-            try:
-                browser.close()
-            except Exception:  # noqa: BLE001
-                pass
+        if browser_session_acquired:
+            release_approval_browser_session()
 
     flush_execution_log()
     return response_payload
