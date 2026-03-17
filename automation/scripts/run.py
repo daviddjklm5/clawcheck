@@ -400,6 +400,7 @@ def main() -> int:
 
         store = PostgresOrganizationListStore(settings.db)
         import_batch_no = f"orglist_{timestamp_slug()}"
+        payload["import_batch_no"] = import_batch_no
         inserted_count = store.write_rows(
             rows=parsed["records"],
             source_file_name=parsed["file_name"],
@@ -408,7 +409,6 @@ def main() -> int:
             include_all_children=include_all_children,
             extra_headers=parsed.get("unmapped_headers", []),
         )
-        payload["import_batch_no"] = import_batch_no
         payload["inserted_count"] = inserted_count
         logger.info("Persisted %s organization rows into PostgreSQL table 组织列表", inserted_count)
         return payload

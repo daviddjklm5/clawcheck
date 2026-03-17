@@ -4104,44 +4104,45 @@ class PostgresOrganizationListStore(_PostgresStoreBase):
             "created_at": "记录创建时间",
             "updated_at": "记录更新时间",
         }
+        insert_columns = [base_column_mapping[column] for column in self.base_columns] + normalized_extra_headers + [
+            base_column_mapping["created_at"],
+            base_column_mapping["updated_at"],
+        ]
+        value_placeholders = [f"%({column})s" for column in self.base_columns]
+        extra_header_placeholders = {
+            header: f"dynamic_column_{index}"
+            for index, header in enumerate(normalized_extra_headers)
+        }
+        value_placeholders.extend(
+            f"%({extra_header_placeholders[header]})s" for header in normalized_extra_headers
+        )
+        value_placeholders.extend(["NOW()", "NOW()"])
+        insert_sql = f"""
+            INSERT INTO {self.table_name} (
+                {self._quoted_columns(insert_columns)}
+            ) VALUES (
+                {', '.join(value_placeholders)}
+            )
+        """
+        payloads = [
+            self._build_orglist_payload(
+                row=row,
+                source_file_name=source_file_name,
+                import_batch_no=import_batch_no,
+                source_root_org=source_root_org,
+                include_all_children=include_all_children,
+                extra_headers=normalized_extra_headers,
+                extra_header_placeholders=extra_header_placeholders,
+            )
+            for row in normalized_rows
+        ]
         with self.connect() as connection:
             with connection.cursor() as cursor:
                 self._ensure_extra_columns(cursor, normalized_extra_headers)
                 cursor.execute(f"TRUNCATE TABLE {self.table_name}")
-                insert_columns = [base_column_mapping[column] for column in self.base_columns] + normalized_extra_headers + [
-                    base_column_mapping["created_at"],
-                    base_column_mapping["updated_at"],
-                ]
-                value_placeholders = [f"%({column})s" for column in self.base_columns]
-                extra_header_placeholders = {
-                    header: f"dynamic_column_{index}"
-                    for index, header in enumerate(normalized_extra_headers)
-                }
-                value_placeholders.extend(
-                    f"%({extra_header_placeholders[header]})s" for header in normalized_extra_headers
-                )
-                value_placeholders.extend(["NOW()", "NOW()"])
-                cursor.executemany(
-                    f"""
-                    INSERT INTO {self.table_name} (
-                        {self._quoted_columns(insert_columns)}
-                    ) VALUES (
-                        {', '.join(value_placeholders)}
-                    )
-                    """,
-                    [
-                        self._build_orglist_payload(
-                            row=row,
-                            source_file_name=source_file_name,
-                            import_batch_no=import_batch_no,
-                            source_root_org=source_root_org,
-                            include_all_children=include_all_children,
-                            extra_headers=normalized_extra_headers,
-                            extra_header_placeholders=extra_header_placeholders,
-                        )
-                        for row in normalized_rows
-                    ],
-                )
+                cursor.executemany(insert_sql, payloads)
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
                 cursor.execute('SELECT refresh_组织属性查询()')
         return len(normalized_rows)
 

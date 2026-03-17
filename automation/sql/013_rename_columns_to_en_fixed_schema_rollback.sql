@@ -427,26 +427,84 @@ BEGIN
     EXECUTE 'ANALYZE "组织属性查询__staging"';
 
     LOCK TABLE "组织属性查询" IN ACCESS EXCLUSIVE MODE;
-    EXECUTE 'DROP TABLE IF EXISTS "组织属性查询__old"';
-    EXECUTE 'ALTER TABLE "组织属性查询" RENAME TO "组织属性查询__old"';
-    EXECUTE 'ALTER TABLE "组织属性查询__staging" RENAME TO "组织属性查询"';
-    EXECUTE 'DROP TABLE "组织属性查询__old"';
-
-    EXECUTE 'ALTER TABLE "组织属性查询" ADD CONSTRAINT "组织属性查询_pkey" PRIMARY KEY (org_code)';
-    EXECUTE 'CREATE INDEX idx_组织属性查询_org_name ON "组织属性查询" (org_name)';
-    EXECUTE 'CREATE INDEX idx_组织属性查询_parent_org_code ON "组织属性查询" (parent_org_code)';
-    EXECUTE 'CREATE INDEX idx_组织属性查询_company_name ON "组织属性查询" (company_name)';
-    EXECUTE 'CREATE INDEX idx_组织属性查询_org_level ON "组织属性查询" (org_level)';
-    EXECUTE 'CREATE INDEX idx_组织属性查询_city_name ON "组织属性查询" (city_name)';
-    EXECUTE 'CREATE INDEX idx_组织属性查询_process_level_category ON "组织属性查询" (process_level_category)';
-    EXECUTE 'CREATE INDEX idx_组织属性查询_dept_category_code ON "组织属性查询" (dept_category_code)';
-    EXECUTE 'CREATE INDEX idx_组织属性查询_dept_subcategory_code ON "组织属性查询" (dept_subcategory_code)';
-    EXECUTE 'CREATE INDEX idx_组织属性查询_org_unit_name ON "组织属性查询" (org_unit_name)';
-    EXECUTE 'CREATE INDEX idx_组织属性查询_org_auth_level ON "组织属性查询" (org_auth_level)';
-    EXECUTE 'CREATE INDEX idx_组织属性查询_wanyu_city_sales_department ON "组织属性查询" (wanyu_city_sales_department)';
-    EXECUTE 'CREATE INDEX idx_组织属性查询_war_zone ON "组织属性查询" (war_zone)';
-    EXECUTE 'CREATE INDEX idx_组织属性查询_war_zone_city_name ON "组织属性查询" (war_zone, city_name)';
-    EXECUTE 'CREATE INDEX idx_组织属性查询_org_unit_name_company_name ON "组织属性查询" (org_unit_name, company_name)';
+    EXECUTE 'TRUNCATE TABLE "组织属性查询"';
+    EXECUTE '
+        INSERT INTO "组织属性查询" (
+            org_code,
+            row_no,
+            org_name,
+            org_type,
+            parent_org_name,
+            parent_org_code,
+            established_date,
+            company_name,
+            business_status,
+            org_level,
+            org_function,
+            city_name,
+            work_location,
+            physical_level,
+            pending_disable_date,
+            department_type,
+            process_level_name,
+            process_level_name_resolved,
+            process_level_category,
+            dept_subcategory_code,
+            dept_subcategory_name,
+            dept_category_code,
+            dept_category_name,
+            org_created_time,
+            org_full_name,
+            org_unit_name,
+            org_unit_rule,
+            org_auth_level,
+            org_auth_level_rule,
+            wanyu_city_sales_department,
+            war_zone,
+            source_import_batch_no,
+            refreshed_at,
+            created_at,
+            updated_at
+        )
+        SELECT
+            org_code,
+            row_no,
+            org_name,
+            org_type,
+            parent_org_name,
+            parent_org_code,
+            established_date,
+            company_name,
+            business_status,
+            org_level,
+            org_function,
+            city_name,
+            work_location,
+            physical_level,
+            pending_disable_date,
+            department_type,
+            process_level_name,
+            process_level_name_resolved,
+            process_level_category,
+            dept_subcategory_code,
+            dept_subcategory_name,
+            dept_category_code,
+            dept_category_name,
+            org_created_time,
+            org_full_name,
+            org_unit_name,
+            org_unit_rule,
+            org_auth_level,
+            org_auth_level_rule,
+            wanyu_city_sales_department,
+            war_zone,
+            source_import_batch_no,
+            refreshed_at,
+            created_at,
+            updated_at
+        FROM "组织属性查询__staging"
+    ';
+    EXECUTE 'DROP TABLE "组织属性查询__staging"';
     EXECUTE 'ANALYZE "组织属性查询"';
 END;
 $$;

@@ -659,26 +659,84 @@ BEGIN
     EXECUTE 'ANALYZE "组织属性查询__staging"';
 
     LOCK TABLE "组织属性查询" IN ACCESS EXCLUSIVE MODE;
-    EXECUTE 'DROP TABLE IF EXISTS "组织属性查询__old"';
-    EXECUTE 'ALTER TABLE "组织属性查询" RENAME TO "组织属性查询__old"';
-    EXECUTE 'ALTER TABLE "组织属性查询__staging" RENAME TO "组织属性查询"';
-    EXECUTE 'DROP TABLE "组织属性查询__old"';
-
-    EXECUTE 'ALTER TABLE "组织属性查询" ADD CONSTRAINT "组织属性查询_pkey" PRIMARY KEY ("行政组织编码")';
-    EXECUTE 'CREATE INDEX idx_组织属性查询_org_name ON "组织属性查询" ("行政组织名称")';
-    EXECUTE 'CREATE INDEX idx_组织属性查询_parent_org_code ON "组织属性查询" ("上级行政组织编码")';
-    EXECUTE 'CREATE INDEX idx_组织属性查询_company_name ON "组织属性查询" ("所属公司")';
-    EXECUTE 'CREATE INDEX idx_组织属性查询_org_level ON "组织属性查询" ("行政组织层级")';
-    EXECUTE 'CREATE INDEX idx_组织属性查询_city_name ON "组织属性查询" ("所在城市")';
-    EXECUTE 'CREATE INDEX idx_组织属性查询_process_level_category ON "组织属性查询" ("组织流程层级分类")';
-    EXECUTE 'CREATE INDEX idx_组织属性查询_dept_category_code ON "组织属性查询" ("部门分类_编码")';
-    EXECUTE 'CREATE INDEX idx_组织属性查询_dept_subcategory_code ON "组织属性查询" ("部门子分类_编码")';
-    EXECUTE 'CREATE INDEX idx_组织属性查询_org_unit_name ON "组织属性查询" ("组织单位")';
-    EXECUTE 'CREATE INDEX idx_组织属性查询_org_auth_level ON "组织属性查询" ("组织授权级别")';
-    EXECUTE 'CREATE INDEX idx_组织属性查询_wanyu_city_sales_department ON "组织属性查询" ("万御城市营业部")';
-    EXECUTE 'CREATE INDEX idx_组织属性查询_war_zone ON "组织属性查询" ("所属战区")';
-    EXECUTE 'CREATE INDEX idx_组织属性查询_war_zone_city_name ON "组织属性查询" ("所属战区", "所在城市")';
-    EXECUTE 'CREATE INDEX idx_组织属性查询_org_unit_name_company_name ON "组织属性查询" ("组织单位", "所属公司")';
+    EXECUTE 'TRUNCATE TABLE "组织属性查询"';
+    EXECUTE '
+        INSERT INTO "组织属性查询" (
+            "行政组织编码",
+            "序号",
+            "行政组织名称",
+            "行政组织类型",
+            "上级行政组织",
+            "上级行政组织编码",
+            "成立日期",
+            "所属公司",
+            "业务状态",
+            "行政组织层级",
+            "行政组织职能",
+            "所在城市",
+            "工作地",
+            "物理层级",
+            "待停用日期",
+            "部门类型",
+            "流程层级_名称",
+            "组织流程层级判断",
+            "组织流程层级分类",
+            "部门子分类_编码",
+            "部门子分类_名称",
+            "部门分类_编码",
+            "部门分类_名称",
+            "创建时间",
+            "组织长名称",
+            "组织单位",
+            "组织单位命中规则",
+            "组织授权级别",
+            "组织授权级别命中规则",
+            "万御城市营业部",
+            "所属战区",
+            "来源导入批次号",
+            "刷新时间",
+            "记录创建时间",
+            "记录更新时间"
+        )
+        SELECT
+            "行政组织编码",
+            "序号",
+            "行政组织名称",
+            "行政组织类型",
+            "上级行政组织",
+            "上级行政组织编码",
+            "成立日期",
+            "所属公司",
+            "业务状态",
+            "行政组织层级",
+            "行政组织职能",
+            "所在城市",
+            "工作地",
+            "物理层级",
+            "待停用日期",
+            "部门类型",
+            "流程层级_名称",
+            "组织流程层级判断",
+            "组织流程层级分类",
+            "部门子分类_编码",
+            "部门子分类_名称",
+            "部门分类_编码",
+            "部门分类_名称",
+            "创建时间",
+            "组织长名称",
+            "组织单位",
+            "组织单位命中规则",
+            "组织授权级别",
+            "组织授权级别命中规则",
+            "万御城市营业部",
+            "所属战区",
+            "来源导入批次号",
+            "刷新时间",
+            "记录创建时间",
+            "记录更新时间"
+        FROM "组织属性查询__staging"
+    ';
+    EXECUTE 'DROP TABLE "组织属性查询__staging"';
     EXECUTE 'ANALYZE "组织属性查询"';
 END;
 $$;
