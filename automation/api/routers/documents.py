@@ -39,7 +39,7 @@ class CollectRunRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     documentNo: str = ""
-    limit: int = Field(default=10, ge=1)
+    limit: int = Field(default=100, ge=1)
     dryRun: bool = False
     autoAudit: bool = True
 

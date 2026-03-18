@@ -41,7 +41,7 @@ class PermissionCollectFlow:
         self.current_document_tab_pageid: str | None = None
         self.current_document_tab_text = ""
 
-    def collect(self, document_no: str | None = None, limit: int = 1) -> list[dict[str, Any]]:
+    def collect(self, document_no: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
         self.open_todo_list()
         todo_rows = self.extract_grid_rows(TODO_HEADERS)
         permission_rows = [row for row in todo_rows if row.get("单据") == "权限申请"]

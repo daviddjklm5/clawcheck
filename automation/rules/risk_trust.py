@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -273,15 +274,15 @@ class RiskTrustEvaluator:
         }
 
     def _build_facts(self, bundle: dict[str, Any]) -> dict[str, Any]:
-        basic_info = dict(bundle.get("basic_info", {}))
-        applicant_person = dict(bundle.get("applicant_person_attributes", {}))
-        applicant_org = dict(bundle.get("applicant_org_attributes", {}))
+        basic_info = self._as_dict(bundle.get("basic_info"))
+        applicant_person = self._as_dict(bundle.get("applicant_person_attributes"))
+        applicant_org = self._as_dict(bundle.get("applicant_org_attributes"))
         ignored_node_names = {
             self._normalized_text(node_name)
-            for node_name in self.constants.get("ignored_approval_node_names", [])
+            for node_name in self._as_list(self.constants.get("ignored_approval_node_names"))
             if self._normalized_text(node_name) != "<NULL>"
         }
-        approval_records = list(bundle.get("approval_records", []))
+        approval_records = self._as_dict_list(bundle.get("approval_records"))
         applicant_employee_no = self._normalized_text(basic_info.get("employee_no"))
         last_submit_index = -1
         for idx, row in enumerate(approval_records):
@@ -318,14 +319,14 @@ class RiskTrustEvaluator:
         )
 
         def _is_warzone_hr(row: dict[str, Any]) -> bool:
-            approver_org = dict(row.get("approver_org_attributes", {}))
+            approver_org = self._as_dict(row.get("approver_org_attributes"))
             process_level_category = self._normalized_text(approver_org.get("process_level_category"))
             return process_level_category == "战区人行部门"
 
         details: list[dict[str, Any]] = []
-        for detail_row in bundle.get("permission_details", []):
+        for detail_row in self._as_dict_list(bundle.get("permission_details")):
             targets = []
-            for target in detail_row.get("targets", []):
+            for target in self._as_dict_list(detail_row.get("targets")):
                 targets.append(
                     {
                         "org_code": target.get("org_code"),
@@ -512,3 +513,20 @@ class RiskTrustEvaluator:
     @staticmethod
     def _json_text(payload: Any) -> str:
         return json.dumps(payload, ensure_ascii=False, default=str)
+
+    @staticmethod
+    def _as_dict(value: Any) -> dict[str, Any]:
+        if isinstance(value, Mapping):
+            return dict(value)
+        return {}
+
+    @staticmethod
+    def _as_list(value: Any) -> list[Any]:
+        if isinstance(value, list):
+            return value
+        if isinstance(value, tuple):
+            return list(value)
+        return []
+
+    def _as_dict_list(self, value: Any) -> list[dict[str, Any]]:
+        return [row for row in self._as_list(value) if isinstance(row, dict)]

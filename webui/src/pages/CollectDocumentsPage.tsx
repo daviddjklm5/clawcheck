@@ -192,7 +192,7 @@ export function CollectDocumentsPage() {
   const [detailError, setDetailError] = useState<string | null>(null);
   const [refreshVersion, setRefreshVersion] = useState(0);
   const [runDocumentNo, setRunDocumentNo] = useState("");
-  const [runLimit, setRunLimit] = useState("10");
+  const [runLimit, setRunLimit] = useState("100");
   const [runDryRun, setRunDryRun] = useState(false);
   const [runAutoAudit, setRunAutoAudit] = useState(true);
   const [runSubmitting, setRunSubmitting] = useState(false);

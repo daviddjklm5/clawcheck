@@ -57,7 +57,7 @@ def parse_args() -> argparse.Namespace:
         default="",
         help="Comma-separated permission document numbers for audit action",
     )
-    parser.add_argument("--limit", type=int, default=1, help="Maximum number of permission documents to collect")
+    parser.add_argument("--limit", type=int, default=100, help="Maximum number of permission documents to collect")
     parser.add_argument("--dry-run", action="store_true", help="Collect data without writing PostgreSQL")
     parser.add_argument("--dump-json", default="", help="Optional JSON dump path for collected payload")
     parser.add_argument(

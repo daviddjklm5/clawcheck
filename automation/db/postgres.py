@@ -2733,7 +2733,7 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
         approval_rows_by_document: dict[str, list[dict[str, Any]]] = {}
         for row in approval_rows:
             approver_profile = person_attributes_by_employee_no.get(row["approver_employee_no"], {})
-            approver_org = org_attributes_by_org_code.get(self._strip_text(approver_profile.get("department_id")) or "")
+            approver_org = org_attributes_by_org_code.get(self._strip_text(approver_profile.get("department_id")) or "") or {}
             approval_rows_by_document.setdefault(row["document_no"], []).append(
                 {
                     **row,
@@ -2749,7 +2749,7 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
         bundles: list[dict[str, Any]] = []
         for basic_row in basic_rows:
             applicant_profile = person_attributes_by_employee_no.get(basic_row["employee_no"], {})
-            applicant_org = org_attributes_by_org_code.get(self._strip_text(applicant_profile.get("department_id")) or "")
+            applicant_org = org_attributes_by_org_code.get(self._strip_text(applicant_profile.get("department_id")) or "") or {}
 
             document_detail_rows: list[dict[str, Any]] = []
             for detail_row in detail_rows_by_document.get(basic_row["document_no"], []):

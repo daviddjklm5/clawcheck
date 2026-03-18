@@ -224,6 +224,40 @@ class RiskTrustEvaluatorTest(unittest.TestCase):
         self.assertEqual(permission_detail["score"], 1.0)
         self.assertEqual(summary_rows[0]["final_score"], 1.0)
 
+    def test_none_payload_sections_do_not_break_evaluation(self) -> None:
+        bundle = {
+            "basic_info": {"document_no": "RA-6", "employee_no": "001"},
+            "applicant_person_attributes": {"hr_type": "HX"},
+            "applicant_org_attributes": None,
+            "approval_records": [
+                {
+                    "node_name": "权限申请提交",
+                    "approver_employee_no": "001",
+                    "approval_action": "提交",
+                    "approval_time": "2026-03-15 10:00:00",
+                    "approver_org_attributes": None,
+                }
+            ],
+            "permission_details": [
+                {
+                    "document_no": "RA-6",
+                    "role_code": "C001",
+                    "role_name": "常规权限",
+                    "catalog_matched": True,
+                    "permission_level": "C类-常规",
+                    "skip_org_scope_check": False,
+                    "targets": None,
+                }
+            ],
+        }
+
+        summary_rows, detail_rows = self.evaluator.evaluate_documents([bundle], assessment_batch_no="audit_batch_6")
+
+        self.assertEqual(len(summary_rows), 1)
+        self.assertEqual(summary_rows[0]["document_no"], "RA-6")
+        self.assertGreater(len(detail_rows), 0)
+        self.assertTrue(any(row["dimension_name"] == "审批人判断" for row in detail_rows))
+
 
 if __name__ == "__main__":
     unittest.main()

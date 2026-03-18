@@ -312,7 +312,7 @@ def get_collect_document_detail(document_no: str) -> dict[str, Any] | None:
 def start_collect_task(
     *,
     document_no: str | None = None,
-    limit: int = 10,
+    limit: int = 100,
     dry_run: bool = False,
     auto_audit: bool = True,
 ) -> dict[str, Any]:
