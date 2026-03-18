@@ -224,6 +224,97 @@ class RiskTrustEvaluatorTest(unittest.TestCase):
         self.assertEqual(permission_detail["score"], 1.0)
         self.assertEqual(summary_rows[0]["final_score"], 1.0)
 
+    def test_cancel_role_apply_type_uses_revoke_permission_rule(self) -> None:
+        bundle = {
+            "basic_info": {"document_no": "RA-7", "employee_no": "001"},
+            "applicant_person_attributes": {"hr_type": "H1"},
+            "applicant_org_attributes": {"process_level_category": "人事远程交付中心", "org_unit_name": "组织A"},
+            "approval_records": [
+                {
+                    "node_name": "权限申请提交",
+                    "approver_employee_no": "001",
+                    "approval_action": "提交",
+                    "approval_time": "2026-03-15 10:00:00",
+                    "approver_org_attributes": {"process_level_category": "人事远程交付中心"},
+                },
+                {
+                    "node_name": "部门负责人",
+                    "approver_employee_no": "008",
+                    "approval_action": "同意",
+                    "approval_time": "2026-03-15 11:00:00",
+                    "approver_org_attributes": {"process_level_category": "战区人行部门"},
+                },
+            ],
+            "permission_details": [
+                {
+                    "document_no": "RA-7",
+                    "role_code": "B100",
+                    "role_name": "涉薪权限",
+                    "apply_type": "取消角色",
+                    "catalog_matched": True,
+                    "permission_level": "B1类-涉薪",
+                    "skip_org_scope_check": True,
+                    "targets": [{"org_code": None, "org_auth_level": None, "org_unit_name": None}],
+                }
+            ],
+        }
+
+        summary_rows, detail_rows = self.evaluator.evaluate_documents([bundle], assessment_batch_no="audit_batch_7")
+
+        permission_detail = next(row for row in detail_rows if row["dimension_name"] == "申请的权限")
+        self.assertEqual(permission_detail["rule_id"], "PERMISSION_CANCEL_ROLE")
+        self.assertEqual(permission_detail["score"], 2.5)
+        self.assertEqual(summary_rows[0]["final_score"], 2.5)
+        self.assertEqual(summary_rows[0]["summary_conclusion"], "可信任")
+
+    def test_cancel_role_non_hr_skips_non_hr_and_warzone_checks(self) -> None:
+        bundle = {
+            "basic_info": {"document_no": "RA-8", "employee_no": "001"},
+            "applicant_person_attributes": {"hr_type": "HX"},
+            "applicant_org_attributes": {"process_level_category": "人事远程交付中心", "org_unit_name": "组织A"},
+            "approval_records": [
+                {
+                    "node_name": "权限申请提交",
+                    "approver_employee_no": "001",
+                    "approval_action": "提交",
+                    "approval_time": "2026-03-15 10:00:00",
+                    "approver_org_attributes": {"process_level_category": "属地组织"},
+                },
+                {
+                    "node_name": "部门负责人",
+                    "approver_employee_no": "008",
+                    "approval_action": "同意",
+                    "approval_time": "2026-03-15 11:00:00",
+                    "approver_org_attributes": {"process_level_category": "属地组织"},
+                },
+            ],
+            "permission_details": [
+                {
+                    "document_no": "RA-8",
+                    "role_code": "B100",
+                    "role_name": "涉薪权限",
+                    "apply_type": "取消角色",
+                    "catalog_matched": True,
+                    "permission_level": "B1类-涉薪",
+                    "skip_org_scope_check": True,
+                    "targets": [{"org_code": None, "org_auth_level": None, "org_unit_name": None}],
+                }
+            ],
+        }
+
+        summary_rows, detail_rows = self.evaluator.evaluate_documents([bundle], assessment_batch_no="audit_batch_8")
+
+        applicant_detail = next(row for row in detail_rows if row["dimension_name"] == "申请人的角色判断")
+        approval_detail = next(row for row in detail_rows if row["dimension_name"] == "审批人判断")
+        permission_detail = next(row for row in detail_rows if row["dimension_name"] == "申请的权限")
+
+        self.assertEqual(applicant_detail["rule_id"], "APPLICANT_CANCEL_ROLE_NON_HR_SKIPPED")
+        self.assertEqual(approval_detail["rule_id"], "APPROVAL_CHAIN_DEFAULT")
+        self.assertEqual(permission_detail["rule_id"], "PERMISSION_CANCEL_ROLE")
+        self.assertEqual(summary_rows[0]["final_score"], 2.5)
+        self.assertEqual(summary_rows[0]["summary_conclusion"], "可信任")
+        self.assertFalse(summary_rows[0]["has_low_score_details"])
+
     def test_none_payload_sections_do_not_break_evaluation(self) -> None:
         bundle = {
             "basic_info": {"document_no": "RA-6", "employee_no": "001"},

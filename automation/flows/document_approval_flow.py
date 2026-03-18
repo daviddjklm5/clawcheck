@@ -81,7 +81,7 @@ class DocumentApprovalFlow:
 
     def _remember_todo_page_size_state(self, page_size_applied: bool) -> bool:
         self._todo_page_size_applied = self._todo_page_size_applied or bool(page_size_applied)
-        return bool(page_size_applied)
+        return self._todo_page_size_applied
 
     def _open_todo_list_ready(self, page_size_timeout_ms: int | None = None) -> bool:
         started_at = time.monotonic()
@@ -437,6 +437,9 @@ class DocumentApprovalFlow:
             "documentStillInTodo": None,
             "probeError": "",
             "pageSizeApplied": False,
+            "todoTotalCount": None,
+            "scannedUniqueRowCount": 0,
+            "coveredAllTodoRows": False,
         }
         grid_visible = False
         try:
@@ -475,10 +478,18 @@ class DocumentApprovalFlow:
             return probe
 
         self.collector._set_grid_vertical_position(grid_selector, 0)
+        try:
+            todo_total_count = self.collector._extract_todo_total_count()
+        except Exception as exc:  # noqa: BLE001
+            todo_total_count = None
+            probe["probeError"] = f"todo_total_count_probe_failed: {exc}"
+        probe["todoTotalCount"] = todo_total_count
+
         deadline = time.monotonic() + (timeout_ms / 1000)
         stagnant_rounds = 0
         saw_snapshot = False
         last_error = ""
+        collected_row_keys: set[str] = set()
 
         while time.monotonic() < deadline:
             if self.collector._focus_todo_row(grid_selector, document_no):
@@ -493,6 +504,27 @@ class DocumentApprovalFlow:
                 continue
 
             saw_snapshot = True
+            for row in snapshot.get("rows", []):
+                normalized_row = self.collector._normalize_row_cells(headers, row)
+                mapped = {
+                    headers[idx]: normalized_row[idx] if idx < len(normalized_row) else ""
+                    for idx in range(len(headers))
+                }
+                row_key = (
+                    (mapped.get("单据编号") or "").strip()
+                    or (mapped.get("#") or "").strip()
+                    or "|".join(normalized_row)
+                )
+                if row_key:
+                    collected_row_keys.add(row_key)
+
+            probe["scannedUniqueRowCount"] = len(collected_row_keys)
+            if todo_total_count is not None and len(collected_row_keys) >= todo_total_count:
+                probe["documentStillInTodo"] = False
+                probe["coveredAllTodoRows"] = True
+                probe["probeError"] = ""
+                return probe
+
             scroll_height = int(snapshot.get("scrollHeight", 0) or 0)
             client_height = int(snapshot.get("clientHeight", 0) or 0)
             current_top = int(snapshot.get("scrollTop", 0) or 0)
@@ -506,9 +538,21 @@ class DocumentApprovalFlow:
             if stagnant_rounds >= 3:
                 break
 
-        probe["documentStillInTodo"] = False if saw_snapshot else None
+        if saw_snapshot and todo_total_count is not None and len(collected_row_keys) >= todo_total_count:
+            probe["documentStillInTodo"] = False
+            probe["coveredAllTodoRows"] = True
+        else:
+            probe["documentStillInTodo"] = False if saw_snapshot else None
         probe["probeError"] = last_error
         return probe
+
+    @staticmethod
+    def _is_todo_probe_strong_success(todo_probe: dict[str, Any]) -> bool:
+        if todo_probe.get("documentStillInTodo") is not False:
+            return False
+        if todo_probe.get("pageSizeApplied", False):
+            return True
+        return bool(todo_probe.get("coveredAllTodoRows", False))
 
     @staticmethod
     def _should_return_pending_confirmation(
@@ -644,13 +688,16 @@ class DocumentApprovalFlow:
             todoListVisible=todo_probe.get("todoListVisible", False),
             documentStillInTodo=todo_probe.get("documentStillInTodo"),
             pageSizeApplied=todo_probe.get("pageSizeApplied", False),
+            todoTotalCount=todo_probe.get("todoTotalCount"),
+            scannedUniqueRowCount=todo_probe.get("scannedUniqueRowCount", 0),
+            coveredAllTodoRows=todo_probe.get("coveredAllTodoRows", False),
             submitButtonVisible=state_before_todo_probe.get("submitButtonVisible", False),
             taskTabVisible=state_before_todo_probe.get("taskTabVisible", False),
             approvalTabVisible=state_before_todo_probe.get("approvalTabVisible", False),
             probeError=todo_probe.get("probeError", ""),
         )
         if todo_probe.get("documentStillInTodo") is False:
-            if todo_probe.get("pageSizeApplied", False):
+            if self._is_todo_probe_strong_success(todo_probe):
                 return {
                     "status": "succeeded",
                     "confirmationType": "todo_disappeared",
@@ -673,12 +720,15 @@ class DocumentApprovalFlow:
                 todoListVisible=todo_probe.get("todoListVisible", False),
                 documentStillInTodo=todo_probe.get("documentStillInTodo"),
                 pageSizeApplied=todo_probe.get("pageSizeApplied", False),
+                todoTotalCount=todo_probe.get("todoTotalCount"),
+                scannedUniqueRowCount=todo_probe.get("scannedUniqueRowCount", 0),
+                coveredAllTodoRows=todo_probe.get("coveredAllTodoRows", False),
                 submitButtonVisible=state_before_todo_probe.get("submitButtonVisible", False),
                 taskTabVisible=state_before_todo_probe.get("taskTabVisible", False),
                 approvalTabVisible=state_before_todo_probe.get("approvalTabVisible", False),
                 probeError=todo_probe.get("probeError", ""),
             )
-            if todo_probe.get("documentStillInTodo") is False and todo_probe.get("pageSizeApplied", False):
+            if self._is_todo_probe_strong_success(todo_probe):
                 return {
                     "status": "succeeded",
                     "confirmationType": "todo_disappeared",
@@ -775,13 +825,16 @@ class DocumentApprovalFlow:
             todoListVisible=todo_probe.get("todoListVisible", False),
             documentStillInTodo=todo_probe.get("documentStillInTodo"),
             pageSizeApplied=todo_probe.get("pageSizeApplied", False),
+            todoTotalCount=todo_probe.get("todoTotalCount"),
+            scannedUniqueRowCount=todo_probe.get("scannedUniqueRowCount", 0),
+            coveredAllTodoRows=todo_probe.get("coveredAllTodoRows", False),
             submitButtonVisible=state_before_todo_probe.get("submitButtonVisible", False),
             taskTabVisible=state_before_todo_probe.get("taskTabVisible", False),
             approvalTabVisible=state_before_todo_probe.get("approvalTabVisible", False),
             probeError=todo_probe.get("probeError", ""),
         )
         if todo_probe.get("documentStillInTodo") is False:
-            if todo_probe.get("pageSizeApplied", False):
+            if self._is_todo_probe_strong_success(todo_probe):
                 return {
                     "status": "succeeded",
                     "confirmationType": "todo_disappeared",
@@ -804,12 +857,15 @@ class DocumentApprovalFlow:
                 todoListVisible=todo_probe.get("todoListVisible", False),
                 documentStillInTodo=todo_probe.get("documentStillInTodo"),
                 pageSizeApplied=todo_probe.get("pageSizeApplied", False),
+                todoTotalCount=todo_probe.get("todoTotalCount"),
+                scannedUniqueRowCount=todo_probe.get("scannedUniqueRowCount", 0),
+                coveredAllTodoRows=todo_probe.get("coveredAllTodoRows", False),
                 submitButtonVisible=state_before_todo_probe.get("submitButtonVisible", False),
                 taskTabVisible=state_before_todo_probe.get("taskTabVisible", False),
                 approvalTabVisible=state_before_todo_probe.get("approvalTabVisible", False),
                 probeError=todo_probe.get("probeError", ""),
             )
-            if todo_probe.get("documentStillInTodo") is False and todo_probe.get("pageSizeApplied", False):
+            if self._is_todo_probe_strong_success(todo_probe):
                 return {
                     "status": "succeeded",
                     "confirmationType": "todo_disappeared",
@@ -832,12 +888,15 @@ class DocumentApprovalFlow:
                 todoListVisible=todo_probe.get("todoListVisible", False),
                 documentStillInTodo=todo_probe.get("documentStillInTodo"),
                 pageSizeApplied=todo_probe.get("pageSizeApplied", False),
+                todoTotalCount=todo_probe.get("todoTotalCount"),
+                scannedUniqueRowCount=todo_probe.get("scannedUniqueRowCount", 0),
+                coveredAllTodoRows=todo_probe.get("coveredAllTodoRows", False),
                 submitButtonVisible=state_before_todo_probe.get("submitButtonVisible", False),
                 taskTabVisible=state_before_todo_probe.get("taskTabVisible", False),
                 approvalTabVisible=state_before_todo_probe.get("approvalTabVisible", False),
                 probeError=todo_probe.get("probeError", ""),
             )
-            if todo_probe.get("documentStillInTodo") is False and todo_probe.get("pageSizeApplied", False):
+            if self._is_todo_probe_strong_success(todo_probe):
                 return {
                     "status": "succeeded",
                     "confirmationType": "todo_disappeared",

@@ -20,6 +20,8 @@ class _ApprovalBrowserSession:
     context: Any
     page: Any
     settings_signature: tuple[Any, ...]
+    owner_thread_ident: int
+    owner_thread_name: str
     created_at_monotonic: float
     last_used_at_monotonic: float
 
@@ -60,6 +62,11 @@ class _ApprovalBrowserSessionPool:
         except Exception:  # noqa: BLE001
             return True
 
+    @staticmethod
+    def _current_thread_info() -> tuple[int, str]:
+        thread = threading.current_thread()
+        return threading.get_ident(), thread.name
+
     def _close_session_locked(self, reason: str, event_callback=None) -> None:
         session = self._session
         if session is None:
@@ -73,6 +80,8 @@ class _ApprovalBrowserSessionPool:
             reason=reason,
             sessionAgeMs=round((now - session.created_at_monotonic) * 1000, 1),
             sessionIdleMs=round((now - session.last_used_at_monotonic) * 1000, 1),
+            ownerThreadIdent=session.owner_thread_ident,
+            ownerThreadName=session.owner_thread_name,
         )
 
         try:
@@ -112,12 +121,15 @@ class _ApprovalBrowserSessionPool:
         context.set_default_navigation_timeout(settings.browser.navigation_timeout_ms)
         page = context.new_page()
         now = time.monotonic()
+        owner_thread_ident, owner_thread_name = self._current_thread_info()
         session = _ApprovalBrowserSession(
             playwright=playwright,
             browser=browser,
             context=context,
             page=page,
             settings_signature=self._build_settings_signature(settings, state_file),
+            owner_thread_ident=owner_thread_ident,
+            owner_thread_name=owner_thread_name,
             created_at_monotonic=now,
             last_used_at_monotonic=now,
         )
@@ -128,23 +140,30 @@ class _ApprovalBrowserSessionPool:
             stateFile=str(state_file),
             idleTtlSec=_APPROVAL_SESSION_IDLE_TTL_SECONDS,
             headed=bool(settings.browser.headed),
+            ownerThreadIdent=owner_thread_ident,
+            ownerThreadName=owner_thread_name,
         )
         return session, {
             "reused": False,
             "pageRecreated": False,
             "sessionAgeMs": 0.0,
             "sessionIdleMs": 0.0,
+            "ownerThreadIdent": owner_thread_ident,
+            "ownerThreadName": owner_thread_name,
         }
 
     def _ensure_session_locked(self, settings, state_file: Path, event_callback=None) -> tuple[_ApprovalBrowserSession, dict[str, Any]]:
         signature = self._build_settings_signature(settings, state_file)
         now = time.monotonic()
         session = self._session
+        current_thread_ident, _ = self._current_thread_info()
 
         if session is not None:
             close_reason = ""
             if session.settings_signature != signature:
                 close_reason = "settings_changed"
+            elif session.owner_thread_ident != current_thread_ident:
+                close_reason = "owner_thread_changed"
             elif not self._is_browser_connected(session.browser):
                 close_reason = "browser_disconnected"
             else:
@@ -181,12 +200,16 @@ class _ApprovalBrowserSessionPool:
             sessionAgeMs=age_ms,
             sessionIdleMs=idle_ms,
             pageRecreated=page_recreated,
+            ownerThreadIdent=session.owner_thread_ident,
+            ownerThreadName=session.owner_thread_name,
         )
         return session, {
             "reused": True,
             "pageRecreated": page_recreated,
             "sessionAgeMs": age_ms,
             "sessionIdleMs": idle_ms,
+            "ownerThreadIdent": session.owner_thread_ident,
+            "ownerThreadName": session.owner_thread_name,
         }
 
     def acquire(self, settings, state_file: Path, event_callback=None) -> tuple[_ApprovalBrowserSession, dict[str, Any]]:
@@ -205,8 +228,13 @@ class _ApprovalBrowserSessionPool:
             self._lock.release()
             raise
 
-    def release(self) -> None:
-        if self._lock.locked():
+    def release(self, *, close_session: bool = False, close_reason: str = "manual") -> None:
+        if not self._lock.locked():
+            return
+        try:
+            if close_session:
+                self._close_session_locked(close_reason)
+        finally:
             self._lock.release()
 
     def close(self, reason: str = "manual") -> None:
@@ -226,8 +254,11 @@ def acquire_approval_browser_session(settings, state_file: Path, event_callback=
     return session.browser, session.context, session.page, metadata
 
 
-def release_approval_browser_session() -> None:
-    _APPROVAL_BROWSER_SESSION_POOL.release()
+def release_approval_browser_session(*, close_session: bool = False, close_reason: str = "manual") -> None:
+    _APPROVAL_BROWSER_SESSION_POOL.release(
+        close_session=close_session,
+        close_reason=close_reason,
+    )
 
 
 def close_approval_browser_session(reason: str = "process_exit") -> None:

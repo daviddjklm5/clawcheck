@@ -18,6 +18,9 @@ constants:
   remote_allowed_process_categories:
     - "人事远程交付中心"
 
+  cancel_role_apply_types:
+    - "取消角色"
+
   s1_allowed_process_categories:
     - "BG人行中心与学社"
     - "人事远程交付中心"
@@ -46,7 +49,7 @@ constants:
     "属地服务站": 2.5
     "人事远程交付中心": 2.5
     "BG人行中心与学社": 1.0
-    "属地组织": 1.5
+    "属地组织": 2.5
     "万物云本部": 1.0
     "业务单元本部": 1.5
     "<NULL>": 0.5

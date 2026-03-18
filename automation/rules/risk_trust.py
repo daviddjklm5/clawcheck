@@ -249,6 +249,7 @@ class RiskTrustEvaluator:
     ) -> dict[str, Any]:
         applicant = facts["applicant"]
         approval = facts["approval"]
+        document_flags = self._as_dict(facts.get("document_flags"))
         role_row = role_row or {}
         target_row = target_row or {}
 
@@ -261,7 +262,9 @@ class RiskTrustEvaluator:
             "current_round_all_approvers_equal_submitter": bool(approval.get("current_round_all_approvers_equal_submitter")),
             "has_warzone_hr_in_history": bool(approval.get("has_warzone_hr_in_history")),
             "has_warzone_hr_in_current_round": bool(approval.get("has_warzone_hr_in_current_round")),
+            "all_details_cancel_role_apply_type": bool(document_flags.get("all_details_cancel_role_apply_type")),
             "role_catalog_matched": bool(role_row.get("catalog_matched")),
+            "apply_type": self._normalized_text(role_row.get("apply_type")),
             "permission_level": self._normalized_text(role_row.get("permission_level")),
             "role_skip_org_scope_check": bool(role_row.get("skip_org_scope_check")),
             "target_org_auth_level": self._normalized_text(target_row.get("org_auth_level")),
@@ -341,6 +344,7 @@ class RiskTrustEvaluator:
                     "line_no": detail_row.get("line_no"),
                     "role_code": detail_row.get("role_code"),
                     "role_name": detail_row.get("role_name"),
+                    "apply_type": detail_row.get("apply_type"),
                     "permission_level": detail_row.get("permission_level"),
                     "skip_org_scope_check": bool(detail_row.get("skip_org_scope_check")),
                     "catalog_matched": bool(detail_row.get("catalog_matched")),
@@ -348,9 +352,22 @@ class RiskTrustEvaluator:
                 }
             )
 
+        cancel_role_apply_types = {
+            self._normalized_text(value)
+            for value in self._as_list(self.constants.get("cancel_role_apply_types"))
+            if self._normalized_text(value) != "<NULL>"
+        }
+        all_details_cancel_role_apply_type = bool(details) and bool(cancel_role_apply_types) and all(
+            self._normalized_text(row.get("apply_type")) in cancel_role_apply_types
+            for row in details
+        )
+
         return {
             "document_no": basic_info.get("document_no"),
             "basic_info": basic_info,
+            "document_flags": {
+                "all_details_cancel_role_apply_type": all_details_cancel_role_apply_type,
+            },
             "applicant": {
                 "employee_no": basic_info.get("employee_no"),
                 "hr_type": applicant_person.get("hr_type"),

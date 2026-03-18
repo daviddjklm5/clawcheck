@@ -439,7 +439,10 @@ def approve_process_document(
         raise RuntimeError(response_payload["message"]) from exc
     finally:
         if browser_session_acquired:
-            release_approval_browser_session()
+            release_approval_browser_session(
+                close_session=True,
+                close_reason="approval_request_finished",
+            )
 
     flush_execution_log()
     return response_payload

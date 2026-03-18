@@ -60,7 +60,7 @@ class DocumentApprovalFlowTest(unittest.TestCase):
         self.page.locator.return_value.filter.assert_called_once_with(has_text="待办任务")
         todo_trigger.wait_for.assert_called_once_with(state="visible", timeout=2000)
         todo_trigger.click.assert_called_once_with(force=True)
-        self.flow.collector._wait_for_todo_list_ready.assert_called_once_with()
+        self.flow.collector._wait_for_todo_list_ready.assert_called_once_with(page_size_timeout_ms=None)
 
     def test_wait_for_submission_confirmation_returns_todo_disappeared_success(self) -> None:
         with (
@@ -85,6 +85,10 @@ class DocumentApprovalFlowTest(unittest.TestCase):
                     "todoListVisible": True,
                     "documentStillInTodo": False,
                     "probeError": "",
+                    "pageSizeApplied": False,
+                    "todoTotalCount": 4,
+                    "scannedUniqueRowCount": 4,
+                    "coveredAllTodoRows": True,
                 },
             ),
         ):
@@ -97,6 +101,17 @@ class DocumentApprovalFlowTest(unittest.TestCase):
 
         self.assertEqual(result["status"], "succeeded")
         self.assertEqual(result["confirmationType"], "todo_disappeared")
+
+    def test_is_todo_probe_strong_success_accepts_covered_total_count_without_page_size(self) -> None:
+        strong_success = self.flow._is_todo_probe_strong_success(
+            {
+                "documentStillInTodo": False,
+                "pageSizeApplied": False,
+                "coveredAllTodoRows": True,
+            }
+        )
+
+        self.assertTrue(strong_success)
 
     def test_wait_for_submission_confirmation_returns_pending_when_structure_changed_but_todo_probe_is_uncertain(self) -> None:
         with (
@@ -192,10 +207,12 @@ class DocumentApprovalFlowTest(unittest.TestCase):
         self.flow.collector._extract_best_grid = MagicMock(
             return_value={"selector": "#gridview", "headers": ["单据", "单据编号"]},
         )
+        self.flow.collector._extract_todo_total_count = MagicMock(return_value=None)
         self.flow.collector._set_grid_vertical_position = MagicMock()
         self.flow.collector._focus_todo_row = MagicMock(return_value=False)
         self.flow.collector._get_grid_virtual_snapshot = MagicMock(
             return_value={
+                "rows": [],
                 "scrollHeight": 1000,
                 "clientHeight": 500,
                 "scrollTop": 500,
@@ -204,7 +221,7 @@ class DocumentApprovalFlowTest(unittest.TestCase):
 
         result = self.flow._probe_todo_document_presence("RA-TEST-001", timeout_ms=500)
 
-        self.flow.collector._wait_for_todo_list_ready.assert_called_once_with()
+        self.flow.collector._wait_for_todo_list_ready.assert_called_once_with(page_size_timeout_ms=None)
         self.assertEqual(result["todoListVisible"], True)
         self.assertEqual(result["documentStillInTodo"], False)
 
