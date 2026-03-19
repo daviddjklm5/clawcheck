@@ -158,6 +158,7 @@ ORG_ATTRIBUTE_COLUMNS = {
     "org_unit_name": "组织单位",
     "physical_level": "物理层级",
     "war_zone": "所属战区",
+    "org_full_name": "组织长名称",
 }
 
 RISK_TRUST_ASSESSMENT_COLUMNS = {
@@ -378,7 +379,18 @@ class _PostgresStoreBase:
         org_attributes_by_code: dict[str, dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
         grouped_rows: dict[
-            tuple[str, str | None, str | None, str | None, str | None, str | None, str | None, str | None, bool],
+            tuple[
+                str,
+                str | None,
+                str | None,
+                str | None,
+                str | None,
+                str | None,
+                str | None,
+                str | None,
+                str | None,
+                bool,
+            ],
             dict[str, Any],
         ] = {}
         org_attributes_by_code = org_attributes_by_code or {}
@@ -406,6 +418,9 @@ class _PostgresStoreBase:
             org_auth_level = cls._strip_text(row.get("org_auth_level")) or cls._strip_text(
                 org_attributes.get("org_auth_level")
             )
+            org_path_name = cls._strip_text(row.get("org_path_name")) or cls._strip_text(
+                org_attributes.get("org_full_name")
+            )
             skip_org_scope_check = bool(row.get("skip_org_scope_check"))
 
             if org_code is None and skip_org_scope_check and organization_name is None:
@@ -420,6 +435,7 @@ class _PostgresStoreBase:
                 physical_level,
                 process_level_category,
                 org_auth_level,
+                org_path_name,
                 skip_org_scope_check,
             )
             if key not in grouped_rows:
@@ -432,6 +448,7 @@ class _PostgresStoreBase:
                     "physical_level": physical_level,
                     "process_level_category": process_level_category,
                     "org_auth_level": org_auth_level,
+                    "org_path_name": org_path_name,
                     "skip_org_scope_check": skip_org_scope_check,
                     "aggregated_row_count": 0,
                 }
@@ -2878,6 +2895,7 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                     "warZone": row["war_zone"] or "-",
                     "physicalLevel": row["physical_level"] or "-",
                     "processLevelCategory": row["process_level_category"] or "-",
+                    "orgPathName": row["org_path_name"] or "-",
                     "orgAuthLevel": row["org_auth_level"] or "-",
                     "aggregatedRowCount": int(row["aggregated_row_count"] or 0),
                     "skipOrgScopeCheck": self._format_bool_label(row["skip_org_scope_check"]),
@@ -3357,7 +3375,8 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                 {self._quote_identifier(ORG_ATTRIBUTE_COLUMNS["org_auth_level"])},
                 {self._quote_identifier(ORG_ATTRIBUTE_COLUMNS["org_unit_name"])},
                 {self._quote_identifier(ORG_ATTRIBUTE_COLUMNS["physical_level"])},
-                {self._quote_identifier(ORG_ATTRIBUTE_COLUMNS["war_zone"])}
+                {self._quote_identifier(ORG_ATTRIBUTE_COLUMNS["war_zone"])},
+                {self._quote_identifier(ORG_ATTRIBUTE_COLUMNS["org_full_name"])}
             FROM "组织属性查询"
             WHERE {self._quote_identifier(ORG_ATTRIBUTE_COLUMNS["org_code"])} = ANY(%s)
             """,
@@ -3373,6 +3392,7 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                 "org_unit_name": self._strip_text(row[4]),
                 "physical_level": self._strip_text(row[5]),
                 "war_zone": self._strip_text(row[6]),
+                "org_full_name": self._strip_text(row[7]),
             }
             for row in rows
             if self._strip_text(row[0]) is not None
@@ -3697,7 +3717,11 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
         ]
 
     def _fetch_process_org_scope_display_rows(self, cursor, document_nos: Iterable[str]) -> list[dict[str, Any]]:
-        normalized_document_nos = [document_no for document_no in document_nos if document_no]
+        normalized_document_nos = [
+            normalized_document_no
+            for value in document_nos
+            if (normalized_document_no := self._strip_text(value)) is not None
+        ]
         if not normalized_document_nos:
             return []
         cursor.execute(
@@ -3708,19 +3732,29 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                 scope.{self._quote_identifier(APPLY_FORM_ORG_SCOPE_COLUMNS["role_name"])},
                 scope.{self._quote_identifier(APPLY_FORM_ORG_SCOPE_COLUMNS["org_code"])},
                 catalog.{self._quote_identifier(PERMISSION_CATALOG_COLUMNS["skip_org_scope_check"])},
-                org.{self._quote_identifier(ORG_ATTRIBUTE_COLUMNS["org_name"])},
+                COALESCE(
+                    org.{self._quote_identifier(ORG_ATTRIBUTE_COLUMNS["org_name"])},
+                    orglist."行政组织名称"
+                ),
                 org.{self._quote_identifier(ORG_ATTRIBUTE_COLUMNS["org_unit_name"])},
                 org.{self._quote_identifier(ORG_ATTRIBUTE_COLUMNS["war_zone"])},
                 org.{self._quote_identifier(ORG_ATTRIBUTE_COLUMNS["physical_level"])},
                 org.{self._quote_identifier(ORG_ATTRIBUTE_COLUMNS["process_level_category"])},
-                org.{self._quote_identifier(ORG_ATTRIBUTE_COLUMNS["org_auth_level"])}
+                org.{self._quote_identifier(ORG_ATTRIBUTE_COLUMNS["org_auth_level"])},
+                COALESCE(
+                    org.{self._quote_identifier(ORG_ATTRIBUTE_COLUMNS["org_full_name"])},
+                    orglist."组织长名称"
+                )
             FROM {APPLY_FORM_ORG_SCOPE_TABLE} AS scope
             LEFT JOIN "权限列表" AS catalog
                 ON catalog.{self._quote_identifier(PERMISSION_CATALOG_COLUMNS["role_code"])} =
                    scope.{self._quote_identifier(APPLY_FORM_ORG_SCOPE_COLUMNS["role_code"])}
             LEFT JOIN "组织属性查询" AS org
-                ON org.{self._quote_identifier(ORG_ATTRIBUTE_COLUMNS["org_code"])} =
-                   scope.{self._quote_identifier(APPLY_FORM_ORG_SCOPE_COLUMNS["org_code"])}
+                ON NULLIF(BTRIM(org.{self._quote_identifier(ORG_ATTRIBUTE_COLUMNS["org_code"])}), '') =
+                   NULLIF(BTRIM(scope.{self._quote_identifier(APPLY_FORM_ORG_SCOPE_COLUMNS["org_code"])}), '')
+            LEFT JOIN "组织列表" AS orglist
+                ON NULLIF(BTRIM(orglist."行政组织编码"), '') =
+                   NULLIF(BTRIM(scope.{self._quote_identifier(APPLY_FORM_ORG_SCOPE_COLUMNS["org_code"])}), '')
             WHERE scope.{self._quote_identifier(APPLY_FORM_ORG_SCOPE_COLUMNS["document_no"])} = ANY(%s)
             ORDER BY scope.{self._quote_identifier(APPLY_FORM_ORG_SCOPE_COLUMNS["document_no"])},
                      scope.{self._quote_identifier(APPLY_FORM_ORG_SCOPE_COLUMNS["role_code"])},
@@ -3743,6 +3777,7 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                 "physical_level": self._strip_text(row[8]),
                 "process_level_category": self._strip_text(row[9]),
                 "org_auth_level": self._strip_text(row[10]),
+                "org_path_name": self._strip_text(row[11]),
             }
             for row in rows
             if self._strip_text(row[0]) is not None and self._strip_text(row[1]) is not None

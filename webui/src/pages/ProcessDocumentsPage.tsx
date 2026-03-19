@@ -238,6 +238,7 @@ const orgScopeColumns: GridColDef<OrgScopeRow>[] = [
   { field: "warZone", headerName: "所属战区", minWidth: 140 },
   { field: "physicalLevel", headerName: "物理层级", minWidth: 110, sortComparator: comparePhysicalLevel },
   { field: "processLevelCategory", headerName: "组织流程层级分类", minWidth: 180 },
+  { field: "orgPathName", headerName: "组织路径名称", minWidth: 320, flex: 1.2 },
   { field: "orgAuthLevel", headerName: "组织授权级别", minWidth: 140 },
   { field: "aggregatedRowCount", headerName: "聚合行数", minWidth: 110, type: "number" },
   { field: "skipOrgScopeCheck", headerName: "跳过组织范围", minWidth: 130 },

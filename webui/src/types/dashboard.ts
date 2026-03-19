@@ -264,6 +264,7 @@ export interface OrgScopeRow {
   warZone: string;
   physicalLevel: string;
   processLevelCategory: string;
+  orgPathName: string;
   orgAuthLevel: string;
   aggregatedRowCount: number;
   skipOrgScopeCheck: string;
