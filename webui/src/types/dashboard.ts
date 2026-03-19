@@ -215,6 +215,12 @@ export interface ProcessDocumentRow {
   documentStatus: string;
   todoProcessStatus: string;
   todoStatusUpdatedAt: string;
+  orgUnitName: string;
+  warZone: string;
+  processLevelCategory: string;
+  positionName: string;
+  level1FunctionName: string;
+  orgPathName: string;
   finalScore: number;
   summaryConclusion: string;
   summaryConclusionLabel: string;

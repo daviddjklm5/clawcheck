@@ -315,6 +315,48 @@ class RiskTrustEvaluatorTest(unittest.TestCase):
         self.assertEqual(summary_rows[0]["summary_conclusion"], "可信任")
         self.assertFalse(summary_rows[0]["has_low_score_details"])
 
+    def test_cross_org_unit_risk_is_skipped_for_exempt_process_categories(self) -> None:
+        bundle = {
+            "basic_info": {"document_no": "RA-9", "employee_no": "001"},
+            "applicant_person_attributes": {"hr_type": "H1"},
+            "applicant_org_attributes": {"process_level_category": "战区人行部门", "org_unit_name": "组织A"},
+            "approval_records": [
+                {
+                    "node_name": "权限申请提交",
+                    "approver_employee_no": "001",
+                    "approval_action": "提交",
+                    "approval_time": "2026-03-19 10:00:00",
+                    "approver_org_attributes": {"process_level_category": "战区人行部门"},
+                },
+                {
+                    "node_name": "部门负责人",
+                    "approver_employee_no": "008",
+                    "approval_action": "同意",
+                    "approval_time": "2026-03-19 11:00:00",
+                    "approver_org_attributes": {"process_level_category": "万物云本部"},
+                },
+            ],
+            "permission_details": [
+                {
+                    "document_no": "RA-9",
+                    "role_code": "C001",
+                    "role_name": "常规权限",
+                    "catalog_matched": True,
+                    "permission_level": "C类-常规",
+                    "skip_org_scope_check": True,
+                    "targets": [{"org_code": "ORG9", "org_auth_level": None, "org_unit_name": "组织B"}],
+                }
+            ],
+        }
+
+        summary_rows, detail_rows = self.evaluator.evaluate_documents([bundle], assessment_batch_no="audit_batch_9")
+
+        target_org_detail = next(row for row in detail_rows if row["dimension_name"] == "申请的组织")
+        self.assertEqual(target_org_detail["rule_id"], "TARGET_ORG_SCOPE_SKIPPED")
+        self.assertEqual(target_org_detail["score"], 2.5)
+        self.assertEqual(summary_rows[0]["summary_conclusion"], "可信任")
+        self.assertFalse(summary_rows[0]["has_low_score_details"])
+
     def test_none_payload_sections_do_not_break_evaluation(self) -> None:
         bundle = {
             "basic_info": {"document_no": "RA-6", "employee_no": "001"},

@@ -93,6 +93,9 @@ class RiskTrustYamlAssetsTest(unittest.TestCase):
         cancel_role_rule = next(rule for rule in permission_rules if rule["id"] == "PERMISSION_CANCEL_ROLE")
         b1_non_hr_rule = next(rule for rule in permission_rules if rule["id"] == "PERMISSION_B1_NON_HR")
         skipped_scope_rule = next(rule for rule in target_org_rules if rule["id"] == "TARGET_ORG_SCOPE_SKIPPED")
+        cross_unit_low_rule = next(rule for rule in target_org_rules if rule["id"] == "TARGET_ORG_CROSS_UNIT_LOW")
+        cross_unit_high_rule = next(rule for rule in target_org_rules if rule["id"] == "TARGET_ORG_CROSS_UNIT_HIGH")
+        cross_unit_other_rule = next(rule for rule in target_org_rules if rule["id"] == "TARGET_ORG_CROSS_UNIT_OTHER")
 
         self.assertEqual(cancel_non_hr_skip_rule["score"], 2.5)
         self.assertEqual(
@@ -115,6 +118,26 @@ class RiskTrustYamlAssetsTest(unittest.TestCase):
             "cancel_role_apply_types",
         )
         self.assertEqual(skipped_scope_rule["score"], 2.5)
+        self.assertEqual(
+            constants["constants"]["cross_org_assessment_exempt_process_categories"],
+            ["人事远程交付中心", "BG人行中心与学社", "蝶发人行部", "战区人行部门", "属地服务站"],
+        )
+        self.assertEqual(
+            constants["constants"]["cross_org_high_trust_process_categories"],
+            ["万物云本部"],
+        )
+        self.assertEqual(
+            cross_unit_low_rule["when"]["applicant_process_level_category_not_in_ref"],
+            "cross_org_assessment_exempt_process_categories",
+        )
+        self.assertEqual(
+            cross_unit_high_rule["when"]["applicant_process_level_category_not_in_ref"],
+            "cross_org_assessment_exempt_process_categories",
+        )
+        self.assertEqual(
+            cross_unit_other_rule["when"]["applicant_process_level_category_not_in_ref"],
+            "cross_org_assessment_exempt_process_categories",
+        )
 
     def test_constants_yaml_contains_summary_conclusion_mapping(self) -> None:
         constants = yaml.safe_load(self.constants_path.read_text(encoding="utf-8"))

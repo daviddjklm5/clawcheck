@@ -52,31 +52,12 @@ const DETAIL_GRID_PAGE_SIZE = 20;
 const MAIN_GRID_HEIGHT = 760;
 const DETAIL_GRID_HEIGHT = 920;
 
-const documentStatusTone: Record<string, Tone> = {
-  已提交: "warning",
-  已完成: "success",
-  已驳回: "danger",
-  待处理: "warning",
-};
-
 const conclusionTone: Record<string, Tone> = {
   拒绝: "danger",
   人工干预: "warning",
   加强审核: "warning",
   仅关注: "info",
   可信任: "success",
-};
-
-const actionTone: Record<string, Tone> = {
-  reject: "danger",
-  manual_review: "warning",
-  warning: "info",
-  allow: "success",
-};
-
-const todoProcessStatusTone: Record<string, Tone> = {
-  待处理: "warning",
-  已处理: "success",
 };
 
 const detailTabs: Array<{ value: DetailTab; label: string }> = [
@@ -345,6 +326,12 @@ export function ProcessDocumentsPage() {
         item.applicantName,
         item.applicantNo,
         item.permissionTarget,
+        item.orgUnitName,
+        item.warZone,
+        item.processLevelCategory,
+        item.positionName,
+        item.level1FunctionName,
+        item.orgPathName,
         item.department,
         item.summaryConclusionLabel,
       ].join(" "),
@@ -562,31 +549,15 @@ export function ProcessDocumentsPage() {
       ),
     },
     { field: "permissionTarget", headerName: "权限对象", minWidth: 130, flex: 0.9 },
+    { field: "orgUnitName", headerName: "组织单位", minWidth: 160 },
+    { field: "warZone", headerName: "所属战区", minWidth: 140 },
+    { field: "processLevelCategory", headerName: "组织流程层级分类", minWidth: 180 },
+    { field: "positionName", headerName: "职位名称", minWidth: 170 },
+    { field: "level1FunctionName", headerName: "一级职能名称", minWidth: 150 },
+    { field: "orgPathName", headerName: "组织路径名称", minWidth: 320, flex: 1.2 },
     { field: "applicantName", headerName: "申请人", minWidth: 110 },
     { field: "applicantNo", headerName: "工号", minWidth: 100 },
     { field: "department", headerName: "部门", minWidth: 180, flex: 1 },
-    {
-      field: "documentStatus",
-      headerName: "单据状态",
-      minWidth: 110,
-      renderCell: (params) => (
-        <StatusTag
-          label={String(params.value ?? "")}
-          tone={documentStatusTone[String(params.value)] ?? "default"}
-        />
-      ),
-    },
-    {
-      field: "todoProcessStatus",
-      headerName: "待办处理状态",
-      minWidth: 130,
-      renderCell: (params) => (
-        <StatusTag
-          label={String(params.value ?? "")}
-          tone={todoProcessStatusTone[String(params.value)] ?? "default"}
-        />
-      ),
-    },
     {
       field: "finalScore",
       headerName: "最终信任分",
@@ -603,17 +574,6 @@ export function ProcessDocumentsPage() {
         <StatusTag
           label={String(params.row.summaryConclusionLabel ?? params.value ?? "")}
           tone={conclusionTone[String(params.row.summaryConclusionLabel ?? params.value)] ?? "default"}
-        />
-      ),
-    },
-    {
-      field: "suggestedActionLabel",
-      headerName: "建议动作",
-      minWidth: 140,
-      renderCell: (params) => (
-        <StatusTag
-          label={String(params.value ?? "")}
-          tone={actionTone[params.row.suggestedAction] ?? "default"}
         />
       ),
     },

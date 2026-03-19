@@ -1,4 +1,4 @@
-version: "2026-03-15"
+version: "2026-03-19"
 package: "apply_form_risk_trust_constants"
 description: "申请表审批风险与信任度评估常量"
 enabled: true
@@ -36,13 +36,15 @@ constants:
     - "蝶发人行部"
     - "业务单元本部"
 
-  cross_org_high_trust_process_categories:
+  cross_org_assessment_exempt_process_categories:
+    - "人事远程交付中心"
     - "BG人行中心与学社"
+    - "蝶发人行部"
     - "战区人行部门"
     - "属地服务站"
-    - "人事远程交付中心"
+
+  cross_org_high_trust_process_categories:
     - "万物云本部"
-    - "蝶发人行部"
 
   applicant_process_category_scores:
     "战区人行部门": 2.5

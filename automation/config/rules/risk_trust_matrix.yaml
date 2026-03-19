@@ -1,4 +1,4 @@
-version: "2026-03-15"
+version: "2026-03-19"
 package: "apply_form_risk_trust"
 description: "申请表审批风险与信任度评估矩阵"
 enabled: true
@@ -263,6 +263,7 @@ dimensions:
       - id: "TARGET_ORG_CROSS_UNIT_LOW"
         when:
           applicant_org_unit_not_equal_target_org_unit: true
+          applicant_process_level_category_not_in_ref: "cross_org_assessment_exempt_process_categories"
           applicant_process_level_category_in:
             - "属地组织"
             - "<NULL>"
@@ -273,12 +274,14 @@ dimensions:
       - id: "TARGET_ORG_CROSS_UNIT_HIGH"
         when:
           applicant_org_unit_not_equal_target_org_unit: true
+          applicant_process_level_category_not_in_ref: "cross_org_assessment_exempt_process_categories"
           applicant_process_level_category_in_ref: "cross_org_high_trust_process_categories"
         score: 2.5
         summary: "高信任组织跨组织单位申请"
       - id: "TARGET_ORG_CROSS_UNIT_OTHER"
         when:
           applicant_org_unit_not_equal_target_org_unit: true
+          applicant_process_level_category_not_in_ref: "cross_org_assessment_exempt_process_categories"
         score: 1.0
         summary: "其他组织跨组织单位申请"
         low_score_detail: "跨组织单位申请，需人工关注"

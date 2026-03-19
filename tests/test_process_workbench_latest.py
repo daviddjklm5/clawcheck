@@ -82,11 +82,41 @@ class ProcessWorkbenchLatestSnapshotTest(unittest.TestCase):
                 "assessment_version": "2026-03-15",
             },
         ]
+        person_attributes = {
+            "0001": {
+                "employee_no": "0001",
+                "department_id": "ORG-001",
+                "position_name": "人力资源经理",
+                "level1_function_name": "人力资源",
+                "org_path_name": "万物云_万物梁行_华东区域公司_人力资源与行政服务中心",
+            },
+            "0002": {
+                "employee_no": "0002",
+                "department_id": "ORG-002",
+                "position_name": "招商主管",
+                "level1_function_name": "招商管理",
+                "org_path_name": "万物云_万物梁行_华南区域公司_招商主管理部",
+            },
+        }
+        org_attributes = {
+            "ORG-001": {
+                "org_unit_name": "人力资源与行政服务中心",
+                "war_zone": "华东战区",
+                "process_level_category": "业务单元本部",
+            },
+            "ORG-002": {
+                "org_unit_name": "万物梁行",
+                "war_zone": "华南战区",
+                "process_level_category": "属地组织",
+            },
+        }
 
         with (
             patch.object(self.store, "ensure_table"),
             patch.object(self.store, "connect", self._fake_connect),
             patch.object(self.store, "_fetch_latest_process_summary_rows", return_value=latest_rows) as mocked_fetch_latest,
+            patch.object(self.store, "_fetch_person_attributes_map", return_value=person_attributes),
+            patch.object(self.store, "_fetch_org_attributes_map", return_value=org_attributes),
             patch.object(
                 self.store,
                 "_fetch_latest_assessment_batch_no",
@@ -104,6 +134,15 @@ class ProcessWorkbenchLatestSnapshotTest(unittest.TestCase):
         self.assertEqual([row["documentNo"] for row in result["documents"]], ["RA-TEST-001", "RA-TEST-002"])
         self.assertEqual(result["documents"][0]["todoProcessStatus"], "待处理")
         self.assertEqual(result["documents"][1]["todoProcessStatus"], "已处理")
+        self.assertEqual(result["documents"][0]["orgUnitName"], "人力资源与行政服务中心")
+        self.assertEqual(result["documents"][0]["warZone"], "华东战区")
+        self.assertEqual(result["documents"][0]["processLevelCategory"], "业务单元本部")
+        self.assertEqual(result["documents"][0]["positionName"], "人力资源经理")
+        self.assertEqual(result["documents"][0]["level1FunctionName"], "人力资源")
+        self.assertEqual(
+            result["documents"][0]["orgPathName"],
+            "万物云_万物梁行_华东区域公司_人力资源与行政服务中心",
+        )
 
     def test_fetch_process_document_detail_defaults_to_latest_result_for_document(self) -> None:
         summary_row = {

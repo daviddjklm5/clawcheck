@@ -2507,7 +2507,14 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
             },
         ]
 
-    def _build_process_document_rows(self, summary_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def _build_process_document_rows(
+        self,
+        summary_rows: list[dict[str, Any]],
+        person_attributes_by_employee_no: dict[str, dict[str, Any]] | None = None,
+        org_attributes_by_org_code: dict[str, dict[str, Any]] | None = None,
+    ) -> list[dict[str, Any]]:
+        person_attributes_by_employee_no = person_attributes_by_employee_no or {}
+        org_attributes_by_org_code = org_attributes_by_org_code or {}
         return [
             {
                 "id": row["document_no"],
@@ -2519,6 +2526,36 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                 "documentStatus": row["document_status"] or "-",
                 "todoProcessStatus": row.get("todo_process_status") or "待处理",
                 "todoStatusUpdatedAt": self._format_datetime_value(row.get("todo_status_updated_at")),
+                "orgUnitName": (
+                    org_attributes_by_org_code.get(
+                        person_attributes_by_employee_no.get(row["employee_no"] or "", {}).get("department_id") or "",
+                        {},
+                    ).get("org_unit_name")
+                    or "-"
+                ),
+                "warZone": (
+                    org_attributes_by_org_code.get(
+                        person_attributes_by_employee_no.get(row["employee_no"] or "", {}).get("department_id") or "",
+                        {},
+                    ).get("war_zone")
+                    or "-"
+                ),
+                "processLevelCategory": (
+                    org_attributes_by_org_code.get(
+                        person_attributes_by_employee_no.get(row["employee_no"] or "", {}).get("department_id") or "",
+                        {},
+                    ).get("process_level_category")
+                    or "-"
+                ),
+                "positionName": (
+                    person_attributes_by_employee_no.get(row["employee_no"] or "", {}).get("position_name") or "-"
+                ),
+                "level1FunctionName": (
+                    person_attributes_by_employee_no.get(row["employee_no"] or "", {}).get("level1_function_name") or "-"
+                ),
+                "orgPathName": (
+                    person_attributes_by_employee_no.get(row["employee_no"] or "", {}).get("org_path_name") or "-"
+                ),
                 "finalScore": row["final_score"],
                 "summaryConclusion": row["summary_conclusion"] or "-",
                 "summaryConclusionLabel": display_summary_conclusion(row["summary_conclusion"]),
@@ -2538,10 +2575,25 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                 summary_rows = self._fetch_latest_process_summary_rows(cursor)
                 if not summary_rows:
                     return self._empty_process_workbench()
+                person_attributes_by_employee_no = self._fetch_person_attributes_map(
+                    cursor,
+                    [row["employee_no"] for row in summary_rows],
+                )
+                org_attributes_by_org_code = self._fetch_org_attributes_map(
+                    cursor,
+                    [
+                        self._strip_text(profile.get("department_id")) or ""
+                        for profile in person_attributes_by_employee_no.values()
+                    ],
+                )
 
         return {
             "stats": self._build_process_workbench_stats(summary_rows),
-            "documents": self._build_process_document_rows(summary_rows),
+            "documents": self._build_process_document_rows(
+                summary_rows,
+                person_attributes_by_employee_no=person_attributes_by_employee_no,
+                org_attributes_by_org_code=org_attributes_by_org_code,
+            ),
         }
 
     def fetch_process_workbench_document_nos(self) -> list[str]:
@@ -3219,6 +3271,7 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                 {self._quote_identifier(PERSON_ATTRIBUTES_COLUMNS["employee_no"])},
                 {self._quote_identifier(PERSON_ATTRIBUTES_COLUMNS["employee_name"])},
                 {self._quote_identifier(PERSON_ATTRIBUTES_COLUMNS["department_id"])},
+                {self._quote_identifier(PERSON_ATTRIBUTES_COLUMNS["level1_function_name"])},
                 {self._quote_identifier(PERSON_ATTRIBUTES_COLUMNS["position_name"])},
                 {self._quote_identifier(PERSON_ATTRIBUTES_COLUMNS["org_path_name"])},
                 {self._quote_identifier(PERSON_ATTRIBUTES_COLUMNS["hr_type"])},
@@ -3235,11 +3288,12 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                 "employee_no": self._strip_text(row[0]),
                 "employee_name": self._strip_text(row[1]),
                 "department_id": self._strip_text(row[2]),
-                "position_name": self._strip_text(row[3]),
-                "org_path_name": self._strip_text(row[4]),
-                "hr_type": self._strip_text(row[5]),
-                "roster_match_status": self._strip_text(row[6]),
-                "hr_judgement_reason": self._strip_text(row[7]),
+                "level1_function_name": self._strip_text(row[3]),
+                "position_name": self._strip_text(row[4]),
+                "org_path_name": self._strip_text(row[5]),
+                "hr_type": self._strip_text(row[6]),
+                "roster_match_status": self._strip_text(row[7]),
+                "hr_judgement_reason": self._strip_text(row[8]),
             }
             for row in rows
             if self._strip_text(row[0]) is not None
