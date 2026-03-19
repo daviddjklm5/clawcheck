@@ -2617,6 +2617,17 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                     key=_process_role_sort_key,
                 )
                 approval_rows = self._fetch_approval_rows(cursor, [normalized_document_no])
+                approver_profiles_by_employee_no = self._fetch_person_attributes_map(
+                    cursor,
+                    [row["approver_employee_no"] for row in approval_rows],
+                )
+                approver_org_attributes_by_org_code = self._fetch_org_attributes_map(
+                    cursor,
+                    [
+                        self._strip_text(profile.get("department_id")) or ""
+                        for profile in approver_profiles_by_employee_no.values()
+                    ],
+                )
                 org_scope_rows = self._build_org_scope_summary_rows(
                     self._fetch_process_org_scope_display_rows(cursor, [normalized_document_no])
                 )
@@ -2761,6 +2772,44 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                     "action": row["approval_action"] or "-",
                     "finishedAt": self._format_datetime_value(row["approval_time"]),
                     "comment": row["approval_opinion"] or "-",
+                    "positionName": (
+                        approver_profiles_by_employee_no.get(row["approver_employee_no"] or "", {}).get("position_name")
+                        or "-"
+                    ),
+                    "orgUnitName": (
+                        approver_org_attributes_by_org_code.get(
+                            approver_profiles_by_employee_no.get(row["approver_employee_no"] or "", {}).get(
+                                "department_id"
+                            )
+                            or "",
+                            {},
+                        ).get("org_unit_name")
+                        or "-"
+                    ),
+                    "warZone": (
+                        approver_org_attributes_by_org_code.get(
+                            approver_profiles_by_employee_no.get(row["approver_employee_no"] or "", {}).get(
+                                "department_id"
+                            )
+                            or "",
+                            {},
+                        ).get("war_zone")
+                        or "-"
+                    ),
+                    "processLevelCategory": (
+                        approver_org_attributes_by_org_code.get(
+                            approver_profiles_by_employee_no.get(row["approver_employee_no"] or "", {}).get(
+                                "department_id"
+                            )
+                            or "",
+                            {},
+                        ).get("process_level_category")
+                        or "-"
+                    ),
+                    "orgPathName": (
+                        approver_profiles_by_employee_no.get(row["approver_employee_no"] or "", {}).get("org_path_name")
+                        or "-"
+                    ),
                 }
                 for row in approval_rows
             ],
@@ -3170,6 +3219,8 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                 {self._quote_identifier(PERSON_ATTRIBUTES_COLUMNS["employee_no"])},
                 {self._quote_identifier(PERSON_ATTRIBUTES_COLUMNS["employee_name"])},
                 {self._quote_identifier(PERSON_ATTRIBUTES_COLUMNS["department_id"])},
+                {self._quote_identifier(PERSON_ATTRIBUTES_COLUMNS["position_name"])},
+                {self._quote_identifier(PERSON_ATTRIBUTES_COLUMNS["org_path_name"])},
                 {self._quote_identifier(PERSON_ATTRIBUTES_COLUMNS["hr_type"])},
                 {self._quote_identifier(PERSON_ATTRIBUTES_COLUMNS["roster_match_status"])},
                 {self._quote_identifier(PERSON_ATTRIBUTES_COLUMNS["hr_judgement_reason"])}
@@ -3184,9 +3235,11 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                 "employee_no": self._strip_text(row[0]),
                 "employee_name": self._strip_text(row[1]),
                 "department_id": self._strip_text(row[2]),
-                "hr_type": self._strip_text(row[3]),
-                "roster_match_status": self._strip_text(row[4]),
-                "hr_judgement_reason": self._strip_text(row[5]),
+                "position_name": self._strip_text(row[3]),
+                "org_path_name": self._strip_text(row[4]),
+                "hr_type": self._strip_text(row[5]),
+                "roster_match_status": self._strip_text(row[6]),
+                "hr_judgement_reason": self._strip_text(row[7]),
             }
             for row in rows
             if self._strip_text(row[0]) is not None

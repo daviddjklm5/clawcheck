@@ -239,7 +239,12 @@ const roleColumns: GridColDef<RoleRow>[] = [
 
 const approvalColumns: GridColDef<ApprovalRow>[] = [
   { field: "nodeName", headerName: "节点", minWidth: 150 },
-  { field: "approver", headerName: "审批人", minWidth: 120 },
+  { field: "approver", headerName: "审批人", minWidth: 150 },
+  { field: "positionName", headerName: "职位", minWidth: 160 },
+  { field: "orgUnitName", headerName: "组织单位", minWidth: 160 },
+  { field: "warZone", headerName: "所属战区", minWidth: 140 },
+  { field: "processLevelCategory", headerName: "组织流程层级分类", minWidth: 180 },
+  { field: "orgPathName", headerName: "组织路径名称", minWidth: 320, flex: 1.1 },
   { field: "action", headerName: "动作", minWidth: 100 },
   { field: "finishedAt", headerName: "完成时间", minWidth: 170 },
   { field: "comment", headerName: "审批意见", minWidth: 220, flex: 1.2 },
@@ -1244,7 +1249,7 @@ export function ProcessDocumentsPage() {
             {detail && activeTab === "approvals" ? (
               <AppDataGrid<ApprovalRow>
                 title="审批记录"
-                subtitle="展示当前审批轨迹，后续审批动作页可继续复用这里的数据结构。"
+                subtitle="展示当前审批轨迹，并补充审批人的职位、组织单位、战区、流程分类与组织路径。"
                 rows={detailApprovals}
                 columns={approvalColumns}
                 loading={detailLoading}

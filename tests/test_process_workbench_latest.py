@@ -147,6 +147,8 @@ class ProcessWorkbenchLatestSnapshotTest(unittest.TestCase):
             ),
             patch.object(self.store, "_fetch_process_role_rows", return_value=[]),
             patch.object(self.store, "_fetch_approval_rows", return_value=[]),
+            patch.object(self.store, "_fetch_person_attributes_map", return_value={}),
+            patch.object(self.store, "_fetch_org_attributes_map", return_value={}),
             patch.object(self.store, "_fetch_process_org_scope_display_rows", return_value=[]),
             patch.object(self.store, "_fetch_process_low_score_rows", return_value=[]) as mocked_fetch_low_score,
             patch.object(self.store, "_fetch_process_feedback_group_rows", return_value=[]),
@@ -170,6 +172,7 @@ class ProcessWorkbenchLatestSnapshotTest(unittest.TestCase):
         self.assertEqual(batch_field["value"], "audit_20260316_121915")
         self.assertEqual(todo_field["value"], "已处理")
         self.assertEqual(result["feedbackOverview"]["summaryConclusionLabel"], "加强审核")
+        self.assertEqual(result["approvals"], [])
 
     def test_fetch_process_document_detail_sorts_roles_by_permission_level_priority(self) -> None:
         summary_row = {
@@ -286,6 +289,8 @@ class ProcessWorkbenchLatestSnapshotTest(unittest.TestCase):
             patch.object(self.store, "_fetch_latest_process_summary_rows", return_value=[summary_row]),
             patch.object(self.store, "_fetch_process_role_rows", return_value=role_rows),
             patch.object(self.store, "_fetch_approval_rows", return_value=[]),
+            patch.object(self.store, "_fetch_person_attributes_map", return_value={}),
+            patch.object(self.store, "_fetch_org_attributes_map", return_value={}),
             patch.object(self.store, "_fetch_process_org_scope_display_rows", return_value=[]),
             patch.object(self.store, "_fetch_process_low_score_rows", return_value=[]),
             patch.object(self.store, "_fetch_process_feedback_group_rows", return_value=[]),
@@ -312,6 +317,103 @@ class ProcessWorkbenchLatestSnapshotTest(unittest.TestCase):
                 "B2类-涉档案绩效",
                 "C类-常规",
                 "-",
+            ],
+        )
+
+    def test_fetch_process_document_detail_enriches_approval_rows_with_person_and_org_attributes(self) -> None:
+        summary_row = {
+            "document_no": "RA-TEST-001",
+            "applicant_name": "张三",
+            "employee_no": "0001",
+            "permission_target": "张三",
+            "apply_reason": "测试申请原因",
+            "document_status": "已提交",
+            "todo_process_status": "待处理",
+            "todo_status_updated_at": datetime(2026, 3, 16, 12, 31, 0),
+            "department_name": "人事部",
+            "apply_time": None,
+            "applicant_identity_label": "属地 HR",
+            "applicant_org_unit_name": "人力资源与行政服务中心",
+            "latest_approval_time": datetime(2026, 3, 16, 10, 42, 2),
+            "applicant_process_level_category": "属地服务站",
+            "final_score": 1.0,
+            "summary_conclusion": "人工干预",
+            "suggested_action": "manual_review",
+            "lowest_hit_dimension": "申请的权限",
+            "low_score_detail_count": 2,
+            "assessment_batch_no": "audit_20260316_121915",
+            "assessment_version": "2026-03-15",
+            "assessed_at": datetime(2026, 3, 16, 12, 19, 15),
+            "assessment_explain": "",
+        }
+        approval_rows = [
+            {
+                "document_no": "RA-TEST-001",
+                "record_seq": 1,
+                "node_name": "部门负责人",
+                "approver_name": "李四",
+                "approver_employee_no": "0099",
+                "approval_action": "同意",
+                "approval_opinion": "同意申请",
+                "approval_time": datetime(2026, 3, 16, 10, 42, 2),
+            }
+        ]
+        person_attributes = {
+            "0099": {
+                "employee_no": "0099",
+                "employee_name": "李四",
+                "department_id": "ORG-001",
+                "position_name": "战区人力负责人",
+                "org_path_name": "万物云_万物梁行_华东区域公司_人力资源与行政服务中心",
+            }
+        }
+        org_attributes = {
+            "ORG-001": {
+                "org_unit_name": "人力资源与行政服务中心",
+                "war_zone": "华东战区",
+                "process_level_category": "业务单元本部",
+            }
+        }
+
+        with (
+            patch.object(self.store, "ensure_table"),
+            patch.object(self.store, "connect", self._fake_connect),
+            patch.object(self.store, "_fetch_latest_process_summary_rows", return_value=[summary_row]),
+            patch.object(self.store, "_fetch_process_role_rows", return_value=[]),
+            patch.object(self.store, "_fetch_approval_rows", return_value=approval_rows),
+            patch.object(self.store, "_fetch_person_attributes_map", return_value=person_attributes),
+            patch.object(self.store, "_fetch_org_attributes_map", return_value=org_attributes),
+            patch.object(self.store, "_fetch_process_org_scope_display_rows", return_value=[]),
+            patch.object(self.store, "_fetch_process_low_score_rows", return_value=[]),
+            patch.object(self.store, "_fetch_process_feedback_group_rows", return_value=[]),
+            patch(
+                "automation.db.postgres.build_low_score_feedback",
+                return_value={
+                    "summaryConclusionLabel": "加强审核",
+                    "feedbackStats": [],
+                    "feedbackGroups": [],
+                    "feedbackLines": [],
+                },
+            ),
+        ):
+            result = self.store.fetch_process_document_detail("RA-TEST-001")
+
+        self.assertEqual(
+            result["approvals"],
+            [
+                {
+                    "id": "RA-TEST-001:1",
+                    "nodeName": "部门负责人",
+                    "approver": "李四",
+                    "action": "同意",
+                    "finishedAt": "2026-03-16 10:42:02",
+                    "comment": "同意申请",
+                    "positionName": "战区人力负责人",
+                    "orgUnitName": "人力资源与行政服务中心",
+                    "warZone": "华东战区",
+                    "processLevelCategory": "业务单元本部",
+                    "orgPathName": "万物云_万物梁行_华东区域公司_人力资源与行政服务中心",
+                }
             ],
         )
 

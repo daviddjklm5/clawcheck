@@ -243,6 +243,11 @@ export interface ApprovalRow {
   action: string;
   finishedAt: string;
   comment: string;
+  positionName: string;
+  orgUnitName: string;
+  warZone: string;
+  processLevelCategory: string;
+  orgPathName: string;
 }
 
 export interface OrgScopeRow {
