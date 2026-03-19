@@ -39,8 +39,8 @@ import type {
 
 type DetailTab = "summary" | "tableStatus" | "roles" | "orgScopes" | "approvals";
 
-const MAIN_GRID_PAGE_SIZE = 10;
-const DETAIL_GRID_PAGE_SIZE = 10;
+const MAIN_GRID_PAGE_SIZE = 20;
+const DETAIL_GRID_PAGE_SIZE = 20;
 const MAIN_GRID_HEIGHT = 760;
 const DETAIL_GRID_HEIGHT = 760;
 
@@ -746,7 +746,7 @@ export function CollectDocumentsPage() {
 
       <AppDataGrid<CollectDocumentRow>
         title="采集单据列表"
-        subtitle="默认每页 10 项，仅点击单据编号打开右侧详情抽屉；关闭抽屉后保留列表上下文。"
+        subtitle="默认每页 20 项，仅点击单据编号打开右侧详情抽屉；关闭抽屉后保留列表上下文。"
         rows={filteredDocuments}
         columns={documentColumns}
         loading={loading}
@@ -792,7 +792,7 @@ export function CollectDocumentsPage() {
         ModalProps={{ keepMounted: true }}
         PaperProps={{
           sx: {
-            width: { xs: "100%", lg: "min(1080px, 72vw)" },
+            width: { xs: "100%", lg: "min(1512px, 100vw)" },
             maxWidth: "100%",
             background: "linear-gradient(180deg, rgba(248,250,252,0.98) 0%, rgba(255,255,255,0.98) 100%)",
           },
