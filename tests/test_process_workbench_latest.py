@@ -456,6 +456,142 @@ class ProcessWorkbenchLatestSnapshotTest(unittest.TestCase):
             ],
         )
 
+    def test_fetch_process_document_detail_returns_org_scopes_with_war_zone_and_numeric_physical_level_ascending(self) -> None:
+        summary_row = {
+            "document_no": "RA-TEST-001",
+            "applicant_name": "张三",
+            "employee_no": "0001",
+            "permission_target": "张三",
+            "apply_reason": "测试申请原因",
+            "document_status": "已提交",
+            "todo_process_status": "待处理",
+            "todo_status_updated_at": datetime(2026, 3, 16, 12, 31, 0),
+            "department_name": "人事部",
+            "apply_time": None,
+            "applicant_identity_label": "属地 HR",
+            "applicant_org_unit_name": "人力资源与行政服务中心",
+            "latest_approval_time": datetime(2026, 3, 16, 10, 42, 2),
+            "applicant_process_level_category": "属地服务站",
+            "final_score": 1.0,
+            "summary_conclusion": "人工干预",
+            "suggested_action": "manual_review",
+            "lowest_hit_dimension": "申请的权限",
+            "low_score_detail_count": 3,
+            "assessment_batch_no": "audit_20260316_121915",
+            "assessment_version": "2026-03-15",
+            "assessed_at": datetime(2026, 3, 16, 12, 19, 15),
+            "assessment_explain": "",
+        }
+        org_scope_rows = [
+            {
+                "document_no": "RA-TEST-001",
+                "id": "3",
+                "role_code": "ROLE-C",
+                "role_name": "C 类角色",
+                "org_code": "ORG-010",
+                "skip_org_scope_check": False,
+                "organization_name": "组织十",
+                "org_unit_name": "华南单位",
+                "war_zone": "华南战区",
+                "physical_level": "10",
+                "process_level_category": "属地组织",
+                "org_auth_level": "B1",
+            },
+            {
+                "document_no": "RA-TEST-001",
+                "id": "2",
+                "role_code": "ROLE-B",
+                "role_name": "B 类角色",
+                "org_code": "ORG-002",
+                "skip_org_scope_check": False,
+                "organization_name": "组织二",
+                "org_unit_name": "华东单位",
+                "war_zone": "华东战区",
+                "physical_level": "2",
+                "process_level_category": "属地组织",
+                "org_auth_level": "A1",
+            },
+            {
+                "document_no": "RA-TEST-001",
+                "id": "missing",
+                "role_code": "ROLE-X",
+                "role_name": "X 类角色",
+                "org_code": "ORG-NULL",
+                "skip_org_scope_check": False,
+                "organization_name": "未知组织",
+                "org_unit_name": None,
+                "war_zone": None,
+                "physical_level": None,
+                "process_level_category": None,
+                "org_auth_level": None,
+            },
+        ]
+
+        with (
+            patch.object(self.store, "ensure_table"),
+            patch.object(self.store, "connect", self._fake_connect),
+            patch.object(self.store, "_fetch_latest_process_summary_rows", return_value=[summary_row]),
+            patch.object(self.store, "_fetch_process_role_rows", return_value=[]),
+            patch.object(self.store, "_fetch_approval_rows", return_value=[]),
+            patch.object(self.store, "_fetch_person_attributes_map", return_value={}),
+            patch.object(self.store, "_fetch_org_attributes_map", return_value={}),
+            patch.object(self.store, "_fetch_process_org_scope_display_rows", return_value=org_scope_rows),
+            patch.object(self.store, "_fetch_process_low_score_rows", return_value=[]),
+            patch.object(self.store, "_fetch_process_feedback_group_rows", return_value=[]),
+            patch(
+                "automation.db.postgres.build_low_score_feedback",
+                return_value={
+                    "summaryConclusionLabel": "加强审核",
+                    "feedbackStats": [],
+                    "feedbackGroups": [],
+                    "feedbackLines": [],
+                },
+            ),
+        ):
+            result = self.store.fetch_process_document_detail("RA-TEST-001")
+
+        self.assertEqual(
+            result["orgScopes"],
+            [
+                {
+                    "id": "RA-TEST-001:ORG-002:属地组织:A1",
+                    "organizationCode": "ORG-002",
+                    "organizationName": "组织二",
+                    "orgUnitName": "华东单位",
+                    "warZone": "华东战区",
+                    "physicalLevel": "2",
+                    "processLevelCategory": "属地组织",
+                    "orgAuthLevel": "A1",
+                    "aggregatedRowCount": 1,
+                    "skipOrgScopeCheck": "否",
+                },
+                {
+                    "id": "RA-TEST-001:ORG-010:属地组织:B1",
+                    "organizationCode": "ORG-010",
+                    "organizationName": "组织十",
+                    "orgUnitName": "华南单位",
+                    "warZone": "华南战区",
+                    "physicalLevel": "10",
+                    "processLevelCategory": "属地组织",
+                    "orgAuthLevel": "B1",
+                    "aggregatedRowCount": 1,
+                    "skipOrgScopeCheck": "否",
+                },
+                {
+                    "id": "RA-TEST-001:ORG-NULL:-:-",
+                    "organizationCode": "ORG-NULL",
+                    "organizationName": "未知组织",
+                    "orgUnitName": "-",
+                    "warZone": "-",
+                    "physicalLevel": "-",
+                    "processLevelCategory": "-",
+                    "orgAuthLevel": "-",
+                    "aggregatedRowCount": 1,
+                    "skipOrgScopeCheck": "否",
+                },
+            ],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

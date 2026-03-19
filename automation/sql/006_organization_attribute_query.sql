@@ -337,6 +337,16 @@ BEGIN
         RETURN '三级授权';
     END IF;
 
+    IF normalized_process_level_category = '属地组织'
+       AND physical_level_num >= 4 THEN
+        RETURN '四级授权';
+    END IF;
+
+    IF normalized_process_level_category IS NULL
+       AND physical_level_num >= 6 THEN
+        RETURN '四级授权';
+    END IF;
+
     RETURN NULL;
 END;
 $$;
@@ -412,6 +422,16 @@ BEGIN
 
     IF physical_level_num = 3 THEN
         RETURN 'physical_level:eq_3';
+    END IF;
+
+    IF normalized_process_level_category = '属地组织'
+       AND physical_level_num >= 4 THEN
+        RETURN 'process_level_category:属地组织_and_physical_level:gte_4';
+    END IF;
+
+    IF normalized_process_level_category IS NULL
+       AND physical_level_num >= 6 THEN
+        RETURN 'process_level_category:<NULL>_and_physical_level:gte_6';
     END IF;
 
     RETURN 'unresolved';

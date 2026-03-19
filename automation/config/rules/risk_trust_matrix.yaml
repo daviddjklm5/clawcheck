@@ -190,52 +190,12 @@ dimensions:
         summary: "S2 类权限需人工复核"
         low_score_detail: "S2 类权限需人工复核后放行"
         intervention_action: "复核限定权限申请依据"
-      - id: "PERMISSION_B1_HR_STAFF"
+      - id: "PERMISSION_B_AND_BELOW_SKIPPED"
         when:
           apply_type_not_in_ref: "cancel_role_apply_types"
-          permission_level_equals: "B1类-涉薪"
-          applicant_hr_type_in_ref: "applicant_hr_staff_types"
-        score: 1.0
-        summary: "HR 申请 B1 类权限"
-        low_score_detail: "B1 类涉薪权限需要人工关注"
-        intervention_action: "复核涉薪权限申请依据"
-      - id: "PERMISSION_B1_NON_HR"
-        when:
-          apply_type_not_in_ref: "cancel_role_apply_types"
-          permission_level_equals: "B1类-涉薪"
-          applicant_hr_type_not_in_ref: "applicant_hr_staff_types"
-        score: 0.0
-        summary: "非 HR 申请 B1 类权限"
-        low_score_detail: "非 HR 申请 B1 类涉薪权限，建议拒绝"
-      - id: "PERMISSION_B2_HR_STAFF"
-        when:
-          apply_type_not_in_ref: "cancel_role_apply_types"
-          permission_level_equals: "B2类-涉档案绩效"
-          applicant_hr_type_in_ref: "applicant_hr_staff_types"
+          permission_level_in_ref: "permission_level_skip_assessment_levels"
         score: 2.5
-        summary: "HR 申请 B2 类权限"
-      - id: "PERMISSION_B2_NON_HR"
-        when:
-          apply_type_not_in_ref: "cancel_role_apply_types"
-          permission_level_equals: "B2类-涉档案绩效"
-          applicant_hr_type_not_in_ref: "applicant_hr_staff_types"
-        score: 1.0
-        summary: "非 HR 申请 B2 类权限"
-        low_score_detail: "非 HR 申请 B2 类权限，需人工关注"
-        intervention_action: "复核档案绩效权限申请依据"
-      - id: "PERMISSION_C_HR_STAFF"
-        when:
-          apply_type_not_in_ref: "cancel_role_apply_types"
-          permission_level_equals: "C类-常规"
-          applicant_hr_type_in_ref: "applicant_hr_staff_types"
-        score: 2.5
-        summary: "HR 申请 C 类权限"
-      - id: "PERMISSION_C_DEFAULT"
-        when:
-          apply_type_not_in_ref: "cancel_role_apply_types"
-          permission_level_equals: "C类-常规"
-        score: 2.5
-        summary: "常规权限申请"
+        summary: "B级及以下权限不单独评估"
 
   target_organization:
     scope: "detail_org"
@@ -246,6 +206,11 @@ dimensions:
           target_org_code_is_null: true
         score: 2.5
         summary: "角色不检查组织范围"
+      - id: "TARGET_ORG_L4_SKIPPED"
+        when:
+          target_org_auth_level_in_ref: "target_org_auth_level_skip_assessment_levels"
+        score: 2.5
+        summary: "四级授权组织不单独评估"
       - id: "TARGET_ORG_L1_NOT_ALLOWED"
         when:
           target_org_auth_level_equals: "一级授权"
@@ -264,6 +229,7 @@ dimensions:
         when:
           applicant_org_unit_not_equal_target_org_unit: true
           applicant_process_level_category_not_in_ref: "cross_org_assessment_exempt_process_categories"
+          target_org_auth_level_not_in_ref: "target_org_auth_level_skip_assessment_levels"
           applicant_process_level_category_in:
             - "属地组织"
             - "<NULL>"
@@ -275,6 +241,7 @@ dimensions:
         when:
           applicant_org_unit_not_equal_target_org_unit: true
           applicant_process_level_category_not_in_ref: "cross_org_assessment_exempt_process_categories"
+          target_org_auth_level_not_in_ref: "target_org_auth_level_skip_assessment_levels"
           applicant_process_level_category_in_ref: "cross_org_high_trust_process_categories"
         score: 2.5
         summary: "高信任组织跨组织单位申请"
@@ -282,6 +249,7 @@ dimensions:
         when:
           applicant_org_unit_not_equal_target_org_unit: true
           applicant_process_level_category_not_in_ref: "cross_org_assessment_exempt_process_categories"
+          target_org_auth_level_not_in_ref: "target_org_auth_level_skip_assessment_levels"
         score: 1.0
         summary: "其他组织跨组织单位申请"
         low_score_detail: "跨组织单位申请，需人工关注"
@@ -289,6 +257,7 @@ dimensions:
       - id: "TARGET_ORG_AUTH_LEVEL_MAP"
         when:
           role_skip_org_scope_check: false
+          target_org_auth_level_not_in_ref: "target_org_auth_level_skip_assessment_levels"
         score_map_ref: "organization_auth_level_scores"
         score_source_fact: "target_org_auth_level"
 

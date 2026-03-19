@@ -235,6 +235,7 @@ const orgScopeColumns: GridColDef<OrgScopeRow>[] = [
   { field: "organizationCode", headerName: "组织编码", minWidth: 120 },
   { field: "organizationName", headerName: "组织名称", minWidth: 180, flex: 1.1 },
   { field: "orgUnitName", headerName: "组织单位", minWidth: 150 },
+  { field: "warZone", headerName: "所属战区", minWidth: 140 },
   { field: "physicalLevel", headerName: "物理层级", minWidth: 110, sortComparator: comparePhysicalLevel },
   { field: "processLevelCategory", headerName: "组织流程层级分类", minWidth: 180 },
   { field: "orgAuthLevel", headerName: "组织授权级别", minWidth: 140 },
@@ -548,6 +549,14 @@ export function ProcessDocumentsPage() {
         </Button>
       ),
     },
+    {
+      field: "finalScore",
+      headerName: "最终信任分",
+      minWidth: 110,
+      renderCell: (params) => (
+        <StatusTag label={formatScoreLabel(params.value as number)} tone={getScoreTone(params.value as number)} />
+      ),
+    },
     { field: "permissionTarget", headerName: "权限对象", minWidth: 130, flex: 0.9 },
     { field: "orgUnitName", headerName: "组织单位", minWidth: 160 },
     { field: "warZone", headerName: "所属战区", minWidth: 140 },
@@ -558,14 +567,6 @@ export function ProcessDocumentsPage() {
     { field: "applicantName", headerName: "申请人", minWidth: 110 },
     { field: "applicantNo", headerName: "工号", minWidth: 100 },
     { field: "department", headerName: "部门", minWidth: 180, flex: 1 },
-    {
-      field: "finalScore",
-      headerName: "最终信任分",
-      minWidth: 110,
-      renderCell: (params) => (
-        <StatusTag label={formatScoreLabel(params.value as number)} tone={getScoreTone(params.value as number)} />
-      ),
-    },
     {
       field: "summaryConclusion",
       headerName: "总结论",
@@ -1194,7 +1195,7 @@ export function ProcessDocumentsPage() {
                 pageSizeOptions={[10, 20, 50]}
                 initialState={{
                   sorting: {
-                    sortModel: [{ field: "physicalLevel", sort: "desc" }],
+                    sortModel: [{ field: "physicalLevel", sort: "asc" }],
                   },
                   pagination: {
                     paginationModel: {

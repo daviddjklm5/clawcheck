@@ -378,7 +378,7 @@ class _PostgresStoreBase:
         org_attributes_by_code: dict[str, dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
         grouped_rows: dict[
-            tuple[str, str | None, str | None, str | None, str | None, str | None, str | None, bool],
+            tuple[str, str | None, str | None, str | None, str | None, str | None, str | None, str | None, bool],
             dict[str, Any],
         ] = {}
         org_attributes_by_code = org_attributes_by_code or {}
@@ -396,6 +396,7 @@ class _PostgresStoreBase:
             org_unit_name = cls._strip_text(row.get("org_unit_name")) or cls._strip_text(
                 org_attributes.get("org_unit_name")
             )
+            war_zone = cls._strip_text(row.get("war_zone")) or cls._strip_text(org_attributes.get("war_zone"))
             physical_level = cls._strip_text(row.get("physical_level")) or cls._strip_text(
                 org_attributes.get("physical_level")
             )
@@ -415,6 +416,7 @@ class _PostgresStoreBase:
                 org_code,
                 organization_name,
                 org_unit_name,
+                war_zone,
                 physical_level,
                 process_level_category,
                 org_auth_level,
@@ -426,6 +428,7 @@ class _PostgresStoreBase:
                     "org_code": org_code,
                     "organization_name": organization_name,
                     "org_unit_name": org_unit_name,
+                    "war_zone": war_zone,
                     "physical_level": physical_level,
                     "process_level_category": process_level_category,
                     "org_auth_level": org_auth_level,
@@ -448,7 +451,7 @@ class _PostgresStoreBase:
             key=lambda row: (
                 row["document_no"] or "",
                 0 if cls._physical_level_to_int(row["physical_level"]) is not None else 1,
-                -(cls._physical_level_to_int(row["physical_level"]) or 0),
+                cls._physical_level_to_int(row["physical_level"]) or 0,
                 0 if cls._strip_text(row["org_code"]) is not None else 1,
                 cls._strip_text(row["org_code"]) or "",
                 cls._strip_text(row["organization_name"]) or "",
@@ -1488,6 +1491,7 @@ class PostgresPermissionStore(_PostgresStoreBase):
                     "organizationCode": row["org_code"] or "-",
                     "organizationName": row["organization_name"] or "-",
                     "orgUnitName": row["org_unit_name"] or "-",
+                    "warZone": row["war_zone"] or "-",
                     "physicalLevel": row["physical_level"] or "-",
                     "processLevelCategory": row["process_level_category"] or "-",
                     "orgAuthLevel": row["org_auth_level"] or "-",
@@ -2871,6 +2875,7 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                     "organizationCode": row["org_code"] or "-",
                     "organizationName": row["organization_name"] or "-",
                     "orgUnitName": row["org_unit_name"] or "-",
+                    "warZone": row["war_zone"] or "-",
                     "physicalLevel": row["physical_level"] or "-",
                     "processLevelCategory": row["process_level_category"] or "-",
                     "orgAuthLevel": row["org_auth_level"] or "-",
@@ -3705,6 +3710,7 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                 catalog.{self._quote_identifier(PERMISSION_CATALOG_COLUMNS["skip_org_scope_check"])},
                 org.{self._quote_identifier(ORG_ATTRIBUTE_COLUMNS["org_name"])},
                 org.{self._quote_identifier(ORG_ATTRIBUTE_COLUMNS["org_unit_name"])},
+                org.{self._quote_identifier(ORG_ATTRIBUTE_COLUMNS["war_zone"])},
                 org.{self._quote_identifier(ORG_ATTRIBUTE_COLUMNS["physical_level"])},
                 org.{self._quote_identifier(ORG_ATTRIBUTE_COLUMNS["process_level_category"])},
                 org.{self._quote_identifier(ORG_ATTRIBUTE_COLUMNS["org_auth_level"])}
@@ -3733,9 +3739,10 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                 "skip_org_scope_check": bool(row[4]),
                 "organization_name": self._strip_text(row[5]),
                 "org_unit_name": self._strip_text(row[6]),
-                "physical_level": self._strip_text(row[7]),
-                "process_level_category": self._strip_text(row[8]),
-                "org_auth_level": self._strip_text(row[9]),
+                "war_zone": self._strip_text(row[7]),
+                "physical_level": self._strip_text(row[8]),
+                "process_level_category": self._strip_text(row[9]),
+                "org_auth_level": self._strip_text(row[10]),
             }
             for row in rows
             if self._strip_text(row[0]) is not None and self._strip_text(row[1]) is not None

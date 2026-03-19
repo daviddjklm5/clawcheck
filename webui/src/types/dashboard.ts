@@ -261,6 +261,7 @@ export interface OrgScopeRow {
   organizationCode: string;
   organizationName: string;
   orgUnitName: string;
+  warZone: string;
   physicalLevel: string;
   processLevelCategory: string;
   orgAuthLevel: string;

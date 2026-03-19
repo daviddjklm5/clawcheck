@@ -91,8 +91,9 @@ class RiskTrustYamlAssetsTest(unittest.TestCase):
         approval_warzone_history_rule = next(rule for rule in approval_rules if rule["id"] == "APPROVAL_LOCAL_WITHOUT_WARZONE_HISTORY")
         missing_catalog_rule = next(rule for rule in permission_rules if rule["id"] == "PERMISSION_CATALOG_MISSING")
         cancel_role_rule = next(rule for rule in permission_rules if rule["id"] == "PERMISSION_CANCEL_ROLE")
-        b1_non_hr_rule = next(rule for rule in permission_rules if rule["id"] == "PERMISSION_B1_NON_HR")
+        b_and_below_skip_rule = next(rule for rule in permission_rules if rule["id"] == "PERMISSION_B_AND_BELOW_SKIPPED")
         skipped_scope_rule = next(rule for rule in target_org_rules if rule["id"] == "TARGET_ORG_SCOPE_SKIPPED")
+        l4_skip_rule = next(rule for rule in target_org_rules if rule["id"] == "TARGET_ORG_L4_SKIPPED")
         cross_unit_low_rule = next(rule for rule in target_org_rules if rule["id"] == "TARGET_ORG_CROSS_UNIT_LOW")
         cross_unit_high_rule = next(rule for rule in target_org_rules if rule["id"] == "TARGET_ORG_CROSS_UNIT_HIGH")
         cross_unit_other_rule = next(rule for rule in target_org_rules if rule["id"] == "TARGET_ORG_CROSS_UNIT_OTHER")
@@ -114,10 +115,28 @@ class RiskTrustYamlAssetsTest(unittest.TestCase):
             ["取消角色"],
         )
         self.assertEqual(
-            b1_non_hr_rule["when"]["apply_type_not_in_ref"],
+            constants["constants"]["permission_level_skip_assessment_levels"],
+            ["B1类-涉薪", "B2类-涉档案绩效", "C类-常规"],
+        )
+        self.assertEqual(
+            constants["constants"]["target_org_auth_level_skip_assessment_levels"],
+            ["四级授权"],
+        )
+        self.assertEqual(
+            b_and_below_skip_rule["when"]["apply_type_not_in_ref"],
             "cancel_role_apply_types",
         )
+        self.assertEqual(
+            b_and_below_skip_rule["when"]["permission_level_in_ref"],
+            "permission_level_skip_assessment_levels",
+        )
+        self.assertEqual(b_and_below_skip_rule["score"], 2.5)
         self.assertEqual(skipped_scope_rule["score"], 2.5)
+        self.assertEqual(l4_skip_rule["score"], 2.5)
+        self.assertEqual(
+            l4_skip_rule["when"]["target_org_auth_level_in_ref"],
+            "target_org_auth_level_skip_assessment_levels",
+        )
         self.assertEqual(
             constants["constants"]["cross_org_assessment_exempt_process_categories"],
             ["人事远程交付中心", "BG人行中心与学社", "蝶发人行部", "战区人行部门", "属地服务站"],
@@ -131,12 +150,24 @@ class RiskTrustYamlAssetsTest(unittest.TestCase):
             "cross_org_assessment_exempt_process_categories",
         )
         self.assertEqual(
+            cross_unit_low_rule["when"]["target_org_auth_level_not_in_ref"],
+            "target_org_auth_level_skip_assessment_levels",
+        )
+        self.assertEqual(
             cross_unit_high_rule["when"]["applicant_process_level_category_not_in_ref"],
             "cross_org_assessment_exempt_process_categories",
         )
         self.assertEqual(
+            cross_unit_high_rule["when"]["target_org_auth_level_not_in_ref"],
+            "target_org_auth_level_skip_assessment_levels",
+        )
+        self.assertEqual(
             cross_unit_other_rule["when"]["applicant_process_level_category_not_in_ref"],
             "cross_org_assessment_exempt_process_categories",
+        )
+        self.assertEqual(
+            cross_unit_other_rule["when"]["target_org_auth_level_not_in_ref"],
+            "target_org_auth_level_skip_assessment_levels",
         )
 
     def test_constants_yaml_contains_summary_conclusion_mapping(self) -> None:

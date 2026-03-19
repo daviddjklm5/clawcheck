@@ -21,6 +21,11 @@ constants:
   cancel_role_apply_types:
     - "取消角色"
 
+  permission_level_skip_assessment_levels:
+    - "B1类-涉薪"
+    - "B2类-涉档案绩效"
+    - "C类-常规"
+
   s1_allowed_process_categories:
     - "BG人行中心与学社"
     - "人事远程交付中心"
@@ -62,6 +67,9 @@ constants:
     "二级授权": 1.0
     "三级授权": 1.5
     "<NULL>": 2.0
+
+  target_org_auth_level_skip_assessment_levels:
+    - "四级授权"
 
   summary_conclusion_mapping:
     "0.0":

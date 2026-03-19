@@ -183,7 +183,7 @@ class RiskTrustEvaluatorTest(unittest.TestCase):
         self.assertEqual(approval_detail["score"], 0.0)
         self.assertEqual(summary_rows[0]["final_score"], 0.0)
 
-    def test_hr_b1_permission_does_not_fall_into_non_hr_rule(self) -> None:
+    def test_b_and_below_permission_is_skipped_in_permission_dimension(self) -> None:
         bundle = {
             "basic_info": {"document_no": "RA-5", "employee_no": "001"},
             "applicant_person_attributes": {"hr_type": "H1"},
@@ -220,9 +220,94 @@ class RiskTrustEvaluatorTest(unittest.TestCase):
         summary_rows, detail_rows = self.evaluator.evaluate_documents([bundle], assessment_batch_no="audit_batch_5")
 
         permission_detail = next(row for row in detail_rows if row["dimension_name"] == "申请的权限")
-        self.assertEqual(permission_detail["rule_id"], "PERMISSION_B1_HR_STAFF")
-        self.assertEqual(permission_detail["score"], 1.0)
-        self.assertEqual(summary_rows[0]["final_score"], 1.0)
+        self.assertEqual(permission_detail["rule_id"], "PERMISSION_B_AND_BELOW_SKIPPED")
+        self.assertEqual(permission_detail["score"], 2.5)
+        self.assertEqual(summary_rows[0]["final_score"], 2.5)
+
+    def test_b_and_below_permission_skip_does_not_affect_target_org_dimension(self) -> None:
+        bundle = {
+            "basic_info": {"document_no": "RA-10", "employee_no": "001"},
+            "applicant_person_attributes": {"hr_type": "H1"},
+            "applicant_org_attributes": {"process_level_category": "属地组织", "org_unit_name": "组织A"},
+            "approval_records": [
+                {
+                    "node_name": "权限申请提交",
+                    "approver_employee_no": "001",
+                    "approval_action": "提交",
+                    "approval_time": "2026-03-19 10:00:00",
+                    "approver_org_attributes": {"process_level_category": "属地组织"},
+                },
+                {
+                    "node_name": "战区权限对接人",
+                    "approver_employee_no": "008",
+                    "approval_action": "同意",
+                    "approval_time": "2026-03-19 11:00:00",
+                    "approver_org_attributes": {"process_level_category": "战区人行部门"},
+                },
+            ],
+            "permission_details": [
+                {
+                    "document_no": "RA-10",
+                    "role_code": "B200",
+                    "role_name": "涉薪权限",
+                    "catalog_matched": True,
+                    "permission_level": "B1类-涉薪",
+                    "skip_org_scope_check": False,
+                    "targets": [{"org_code": "ORG10", "org_auth_level": None, "org_unit_name": "组织A"}],
+                }
+            ],
+        }
+
+        summary_rows, detail_rows = self.evaluator.evaluate_documents([bundle], assessment_batch_no="audit_batch_10")
+
+        permission_detail = next(row for row in detail_rows if row["dimension_name"] == "申请的权限")
+        target_org_detail = next(row for row in detail_rows if row["dimension_name"] == "申请的组织")
+        self.assertEqual(permission_detail["rule_id"], "PERMISSION_B_AND_BELOW_SKIPPED")
+        self.assertEqual(permission_detail["score"], 2.5)
+        self.assertEqual(target_org_detail["rule_id"], "TARGET_ORG_AUTH_LEVEL_MAP")
+        self.assertEqual(target_org_detail["score"], 2.0)
+        self.assertEqual(summary_rows[0]["final_score"], 2.0)
+
+    def test_fourth_auth_level_target_org_skips_org_dimension_even_when_cross_unit(self) -> None:
+        bundle = {
+            "basic_info": {"document_no": "RA-11", "employee_no": "001"},
+            "applicant_person_attributes": {"hr_type": "H1"},
+            "applicant_org_attributes": {"process_level_category": "属地组织", "org_unit_name": "组织A"},
+            "approval_records": [
+                {
+                    "node_name": "权限申请提交",
+                    "approver_employee_no": "001",
+                    "approval_action": "提交",
+                    "approval_time": "2026-03-19 10:00:00",
+                    "approver_org_attributes": {"process_level_category": "属地组织"},
+                },
+                {
+                    "node_name": "战区权限对接人",
+                    "approver_employee_no": "008",
+                    "approval_action": "同意",
+                    "approval_time": "2026-03-19 11:00:00",
+                    "approver_org_attributes": {"process_level_category": "战区人行部门"},
+                },
+            ],
+            "permission_details": [
+                {
+                    "document_no": "RA-11",
+                    "role_code": "C011",
+                    "role_name": "常规权限",
+                    "catalog_matched": True,
+                    "permission_level": "C类-常规",
+                    "skip_org_scope_check": False,
+                    "targets": [{"org_code": "ORG11", "org_auth_level": "四级授权", "org_unit_name": "组织B"}],
+                }
+            ],
+        }
+
+        summary_rows, detail_rows = self.evaluator.evaluate_documents([bundle], assessment_batch_no="audit_batch_11")
+
+        target_org_detail = next(row for row in detail_rows if row["dimension_name"] == "申请的组织")
+        self.assertEqual(target_org_detail["rule_id"], "TARGET_ORG_L4_SKIPPED")
+        self.assertEqual(target_org_detail["score"], 2.5)
+        self.assertEqual(summary_rows[0]["final_score"], 2.5)
 
     def test_cancel_role_apply_type_uses_revoke_permission_rule(self) -> None:
         bundle = {
@@ -315,7 +400,7 @@ class RiskTrustEvaluatorTest(unittest.TestCase):
         self.assertEqual(summary_rows[0]["summary_conclusion"], "可信任")
         self.assertFalse(summary_rows[0]["has_low_score_details"])
 
-    def test_cross_org_unit_risk_is_skipped_for_exempt_process_categories(self) -> None:
+    def test_cross_org_unit_rules_do_not_match_for_exempt_process_categories(self) -> None:
         bundle = {
             "basic_info": {"document_no": "RA-9", "employee_no": "001"},
             "applicant_person_attributes": {"hr_type": "H1"},
@@ -343,19 +428,27 @@ class RiskTrustEvaluatorTest(unittest.TestCase):
                     "role_name": "常规权限",
                     "catalog_matched": True,
                     "permission_level": "C类-常规",
-                    "skip_org_scope_check": True,
-                    "targets": [{"org_code": "ORG9", "org_auth_level": None, "org_unit_name": "组织B"}],
+                    "skip_org_scope_check": False,
+                    "targets": [{"org_code": "ORG9", "org_auth_level": "三级授权", "org_unit_name": "组织B"}],
                 }
             ],
         }
 
-        summary_rows, detail_rows = self.evaluator.evaluate_documents([bundle], assessment_batch_no="audit_batch_9")
+        facts = self.evaluator._build_facts(bundle)
+        role_row = facts["details"][0]
+        target_row = role_row["targets"][0]
+        context = self.evaluator._build_rule_context(facts, role_row, target_row)
+        target_org_rules = self.evaluator.matrix["dimensions"]["target_organization"]["rules"]
 
-        target_org_detail = next(row for row in detail_rows if row["dimension_name"] == "申请的组织")
-        self.assertEqual(target_org_detail["rule_id"], "TARGET_ORG_SCOPE_SKIPPED")
-        self.assertEqual(target_org_detail["score"], 2.5)
-        self.assertEqual(summary_rows[0]["summary_conclusion"], "可信任")
-        self.assertFalse(summary_rows[0]["has_low_score_details"])
+        cross_unit_low_rule = next(rule for rule in target_org_rules if rule["id"] == "TARGET_ORG_CROSS_UNIT_LOW")
+        cross_unit_high_rule = next(rule for rule in target_org_rules if rule["id"] == "TARGET_ORG_CROSS_UNIT_HIGH")
+        cross_unit_other_rule = next(rule for rule in target_org_rules if rule["id"] == "TARGET_ORG_CROSS_UNIT_OTHER")
+        auth_level_map_rule = next(rule for rule in target_org_rules if rule["id"] == "TARGET_ORG_AUTH_LEVEL_MAP")
+
+        self.assertFalse(self.evaluator._rule_matches(cross_unit_low_rule["when"], context))
+        self.assertFalse(self.evaluator._rule_matches(cross_unit_high_rule["when"], context))
+        self.assertFalse(self.evaluator._rule_matches(cross_unit_other_rule["when"], context))
+        self.assertTrue(self.evaluator._rule_matches(auth_level_map_rule["when"], context))
 
     def test_none_payload_sections_do_not_break_evaluation(self) -> None:
         bundle = {
