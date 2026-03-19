@@ -99,6 +99,29 @@ function normalizeText(value: string): string {
   return value.trim().toLowerCase();
 }
 
+function toPhysicalLevelNumber(value: unknown): number | null {
+  const text = String(value ?? "").trim();
+  if (!/^-?\d+$/.test(text)) {
+    return null;
+  }
+  return Number.parseInt(text, 10);
+}
+
+function comparePhysicalLevel(left: unknown, right: unknown): number {
+  const leftNumber = toPhysicalLevelNumber(left);
+  const rightNumber = toPhysicalLevelNumber(right);
+  if (leftNumber === null && rightNumber === null) {
+    return 0;
+  }
+  if (leftNumber === null) {
+    return 1;
+  }
+  if (rightNumber === null) {
+    return -1;
+  }
+  return leftNumber - rightNumber;
+}
+
 function formatScoreLabel(score: number | null | undefined): string {
   if (typeof score !== "number" || Number.isNaN(score)) {
     return "-";
@@ -166,6 +189,7 @@ function isProcessDetailResponse(value: unknown): value is ProcessDetail {
   const candidate = value as Partial<ProcessDetail>;
   return (
     typeof candidate.documentNo === "string" &&
+    typeof candidate.applyReason === "string" &&
     Array.isArray(candidate.overviewFields) &&
     Boolean(candidate.feedbackOverview) &&
     Array.isArray(candidate.roles) &&
@@ -222,12 +246,13 @@ const approvalColumns: GridColDef<ApprovalRow>[] = [
 ];
 
 const orgScopeColumns: GridColDef<OrgScopeRow>[] = [
-  { field: "roleCode", headerName: "角色编码", minWidth: 130 },
-  { field: "roleName", headerName: "角色名称", minWidth: 200, flex: 1.1 },
   { field: "organizationCode", headerName: "组织编码", minWidth: 120 },
   { field: "organizationName", headerName: "组织名称", minWidth: 180, flex: 1.1 },
   { field: "orgUnitName", headerName: "组织单位", minWidth: 150 },
-  { field: "physicalLevel", headerName: "物理层级", minWidth: 110 },
+  { field: "physicalLevel", headerName: "物理层级", minWidth: 110, sortComparator: comparePhysicalLevel },
+  { field: "processLevelCategory", headerName: "组织流程层级分类", minWidth: 180 },
+  { field: "orgAuthLevel", headerName: "组织授权级别", minWidth: 140 },
+  { field: "aggregatedRowCount", headerName: "聚合行数", minWidth: 110, type: "number" },
   { field: "skipOrgScopeCheck", headerName: "跳过组织范围", minWidth: 130 },
 ];
 
@@ -1040,6 +1065,12 @@ export function ProcessDocumentsPage() {
 
                   <KeyValueList
                     items={[
+                      {
+                        label: "申请理由",
+                        value: detail?.applyReason ?? "-",
+                        hint: "来自 `申请单基本信息.申请理由`。",
+                        columnSpan: 2,
+                      },
                       { label: "单据编号", value: selectedDocumentNo || "-", hint: "当前将对该单据执行审批动作。" },
                       { label: "权限对象", value: selectedDocumentRow?.permissionTarget ?? "-", hint: "来自处理单据主表。" },
                       {
@@ -1189,7 +1220,7 @@ export function ProcessDocumentsPage() {
             {detail && activeTab === "orgScopes" ? (
               <AppDataGrid<OrgScopeRow>
                 title="目标组织"
-                subtitle="结合 013 与 104 方案查看角色、组织、组织单位与物理层级。"
+                subtitle="按组织聚合展示，聚合行数表示命中的角色-组织明细条数。"
                 rows={detailOrgScopes}
                 columns={orgScopeColumns}
                 loading={detailLoading}
@@ -1197,6 +1228,9 @@ export function ProcessDocumentsPage() {
                 minHeight={DETAIL_GRID_HEIGHT}
                 pageSizeOptions={[10, 20, 50]}
                 initialState={{
+                  sorting: {
+                    sortModel: [{ field: "physicalLevel", sort: "desc" }],
+                  },
                   pagination: {
                     paginationModel: {
                       pageSize: DETAIL_GRID_PAGE_SIZE,

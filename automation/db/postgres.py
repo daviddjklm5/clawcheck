@@ -15,6 +15,7 @@ from automation.utils.approval_record_helpers import (
 )
 from automation.utils.config_loader import DatabaseSettings
 from automation.reporting.low_score_feedback import (
+    PERMISSION_PRIORITY,
     build_low_score_feedback,
     display_summary_conclusion,
 )
@@ -35,6 +36,24 @@ RISK_TRUST_ASSESSMENT_TABLE = '"申请单风险信任评估"'
 RISK_TRUST_ASSESSMENT_DETAIL_TABLE = '"申请单风险信任评估明细"'
 RISK_TRUST_LOW_SCORE_ENRICHED_VIEW = '"申请单低分明细富化视图"'
 RISK_TRUST_LOW_SCORE_FEEDBACK_GROUP_VIEW = '"申请单低分反馈预聚合视图"'
+PROCESS_ROLE_PERMISSION_ORDER_FALLBACK = len(PERMISSION_PRIORITY) + 1
+
+
+def _line_no_sort_key(value: Any) -> tuple[int, int | str]:
+    text = str(value or "").strip()
+    if not text:
+        return (1, "")
+    if text.isdigit():
+        return (0, int(text))
+    return (1, text)
+
+
+def _process_role_sort_key(row: dict[str, Any]) -> tuple[int, tuple[int, int | str]]:
+    permission_level = str(row.get("permission_level") or "").strip()
+    return (
+        PERMISSION_PRIORITY.get(permission_level, PROCESS_ROLE_PERMISSION_ORDER_FALLBACK),
+        _line_no_sort_key(row.get("line_no")),
+    )
 
 BASIC_INFO_COLUMNS = {
     "document_no": "单据编号",
@@ -282,6 +301,15 @@ class _PostgresStoreBase:
             return None
         return int(value)
 
+    @classmethod
+    def _physical_level_to_int(cls, value: Any) -> int | None:
+        text = cls._strip_text(value)
+        if text is None:
+            return None
+        if re.fullmatch(r"-?\d+", text):
+            return int(text)
+        return None
+
     @staticmethod
     def _quote_identifier(identifier: str) -> str:
         return f'"{identifier.replace(chr(34), chr(34) * 2)}"'
@@ -342,6 +370,90 @@ class _PostgresStoreBase:
         )
         row = cursor.fetchone()
         return bool(row[0]) if row else False
+
+    @classmethod
+    def _build_org_scope_summary_rows(
+        cls,
+        org_scope_rows: Iterable[dict[str, Any]],
+        org_attributes_by_code: dict[str, dict[str, Any]] | None = None,
+    ) -> list[dict[str, Any]]:
+        grouped_rows: dict[
+            tuple[str, str | None, str | None, str | None, str | None, str | None, str | None, bool],
+            dict[str, Any],
+        ] = {}
+        org_attributes_by_code = org_attributes_by_code or {}
+
+        for row in org_scope_rows:
+            document_no = cls._strip_text(row.get("document_no"))
+            if document_no is None:
+                continue
+
+            org_code = cls._strip_text(row.get("org_code"))
+            org_attributes = org_attributes_by_code.get(org_code or "", {})
+            organization_name = cls._strip_text(row.get("organization_name")) or cls._strip_text(
+                org_attributes.get("org_name")
+            )
+            org_unit_name = cls._strip_text(row.get("org_unit_name")) or cls._strip_text(
+                org_attributes.get("org_unit_name")
+            )
+            physical_level = cls._strip_text(row.get("physical_level")) or cls._strip_text(
+                org_attributes.get("physical_level")
+            )
+            process_level_category = cls._strip_text(row.get("process_level_category")) or cls._strip_text(
+                org_attributes.get("process_level_category")
+            )
+            org_auth_level = cls._strip_text(row.get("org_auth_level")) or cls._strip_text(
+                org_attributes.get("org_auth_level")
+            )
+            skip_org_scope_check = bool(row.get("skip_org_scope_check"))
+
+            if org_code is None and skip_org_scope_check and organization_name is None:
+                organization_name = "不检查组织范围"
+
+            key = (
+                document_no,
+                org_code,
+                organization_name,
+                org_unit_name,
+                physical_level,
+                process_level_category,
+                org_auth_level,
+                skip_org_scope_check,
+            )
+            if key not in grouped_rows:
+                grouped_rows[key] = {
+                    "document_no": document_no,
+                    "org_code": org_code,
+                    "organization_name": organization_name,
+                    "org_unit_name": org_unit_name,
+                    "physical_level": physical_level,
+                    "process_level_category": process_level_category,
+                    "org_auth_level": org_auth_level,
+                    "skip_org_scope_check": skip_org_scope_check,
+                    "aggregated_row_count": 0,
+                }
+            grouped_rows[key]["aggregated_row_count"] += 1
+
+        return sorted(
+            [
+                {
+                    **row,
+                    "id": (
+                        f"{row['document_no']}:{row['org_code'] or '<NONE>'}:"
+                        f"{row['process_level_category'] or '-'}:{row['org_auth_level'] or '-'}"
+                    ),
+                }
+                for row in grouped_rows.values()
+            ],
+            key=lambda row: (
+                row["document_no"] or "",
+                0 if cls._physical_level_to_int(row["physical_level"]) is not None else 1,
+                -(cls._physical_level_to_int(row["physical_level"]) or 0),
+                0 if cls._strip_text(row["org_code"]) is not None else 1,
+                cls._strip_text(row["org_code"]) or "",
+                cls._strip_text(row["organization_name"]) or "",
+            ),
+        )
 
 
 class PostgresPermissionStore(_PostgresStoreBase):
@@ -1251,6 +1363,7 @@ class PostgresPermissionStore(_PostgresStoreBase):
                 )
 
         applicant_profile = applicant_profiles.get(basic_row["employee_no"] or "", {})
+        org_scope_summary_rows = self._build_org_scope_summary_rows(org_scope_rows, org_attributes)
         permission_count = int(table_metrics.get("permission", {}).get("records") or 0)
         approval_count = int(table_metrics.get("approval", {}).get("records") or 0)
         org_scope_count = int(table_metrics.get("orgScope", {}).get("records") or 0)
@@ -1371,18 +1484,17 @@ class PostgresPermissionStore(_PostgresStoreBase):
             ],
             "orgScopes": [
                 {
-                    "id": f"{normalized_document_no}-{row['role_code'] or 'role'}-{row['org_code'] or 'null'}-{index}",
-                    "roleCode": row["role_code"] or "-",
-                    "roleName": row["role_name"] or permission_catalog.get(row["role_code"] or "", {}).get("role_name") or "-",
+                    "id": row["id"],
                     "organizationCode": row["org_code"] or "-",
-                    "organizationName": org_attributes.get(row["org_code"] or "", {}).get("org_name") or "-",
-                    "orgUnitName": org_attributes.get(row["org_code"] or "", {}).get("org_unit_name") or "-",
-                    "physicalLevel": org_attributes.get(row["org_code"] or "", {}).get("physical_level") or "-",
-                    "skipOrgScopeCheck": self._format_bool_label(
-                        permission_catalog.get(row["role_code"] or "", {}).get("skip_org_scope_check"),
-                    ),
+                    "organizationName": row["organization_name"] or "-",
+                    "orgUnitName": row["org_unit_name"] or "-",
+                    "physicalLevel": row["physical_level"] or "-",
+                    "processLevelCategory": row["process_level_category"] or "-",
+                    "orgAuthLevel": row["org_auth_level"] or "-",
+                    "aggregatedRowCount": int(row["aggregated_row_count"] or 0),
+                    "skipOrgScopeCheck": self._format_bool_label(row["skip_org_scope_check"]),
                 }
-                for index, row in enumerate(org_scope_rows, start=1)
+                for row in org_scope_summary_rows
             ],
             "notes": notes,
         }
@@ -2500,9 +2612,14 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                 if not summary_rows:
                     return None
                 summary_row = summary_rows[0]
-                role_rows = self._fetch_process_role_rows(cursor, [normalized_document_no])
+                role_rows = sorted(
+                    self._fetch_process_role_rows(cursor, [normalized_document_no]),
+                    key=_process_role_sort_key,
+                )
                 approval_rows = self._fetch_approval_rows(cursor, [normalized_document_no])
-                org_scope_rows = self._fetch_process_org_scope_display_rows(cursor, [normalized_document_no])
+                org_scope_rows = self._build_org_scope_summary_rows(
+                    self._fetch_process_org_scope_display_rows(cursor, [normalized_document_no])
+                )
                 low_score_rows = self._fetch_process_low_score_rows(
                     cursor,
                     batch_no,
@@ -2534,6 +2651,7 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
 
         return {
             "documentNo": summary_row["document_no"],
+            "applyReason": summary_row["apply_reason"] or "-",
             "overviewFields": [
                 {"label": "单据编号", "value": summary_row["document_no"] or "-", "hint": "当前选中单据"},
                 {
@@ -2649,12 +2767,13 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
             "orgScopes": [
                 {
                     "id": row["id"],
-                    "roleCode": row["role_code"] or "-",
-                    "roleName": row["role_name"] or "-",
                     "organizationCode": row["org_code"] or "-",
                     "organizationName": row["organization_name"] or "-",
                     "orgUnitName": row["org_unit_name"] or "-",
                     "physicalLevel": row["physical_level"] or "-",
+                    "processLevelCategory": row["process_level_category"] or "-",
+                    "orgAuthLevel": row["org_auth_level"] or "-",
+                    "aggregatedRowCount": int(row["aggregated_row_count"] or 0),
                     "skipOrgScopeCheck": self._format_bool_label(row["skip_org_scope_check"]),
                 }
                 for row in org_scope_rows
@@ -3207,6 +3326,7 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                 person.{self._quote_identifier(PERSON_ATTRIBUTES_COLUMNS["level1_function_name"])},
                 person.{self._quote_identifier(PERSON_ATTRIBUTES_COLUMNS["position_name"])},
                 basic.{self._quote_identifier(BASIC_INFO_COLUMNS["permission_target"])},
+                basic.{self._quote_identifier(BASIC_INFO_COLUMNS["apply_reason"])},
                 basic.{self._quote_identifier(BASIC_INFO_COLUMNS["document_status"])},
                 basic.{self._quote_identifier(BASIC_INFO_COLUMNS["company_name"])},
                 basic.{self._quote_identifier(BASIC_INFO_COLUMNS["department_name"])},
@@ -3266,34 +3386,35 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                 "level1_function_name": self._strip_text(row[3]),
                 "applicant_position_name": self._strip_text(row[4]),
                 "permission_target": self._strip_text(row[5]),
-                "document_status": self._strip_text(row[6]),
-                "company_name": self._strip_text(row[7]),
-                "department_name": self._strip_text(row[8]),
-                "position_name": self._strip_text(row[9]),
-                "apply_time": row[10],
-                "latest_approval_time": row[11],
-                "todo_process_status": self._strip_text(row[12]) or "待处理",
-                "todo_status_updated_at": row[13],
-                "applicant_org_unit_name": self._strip_text(row[14]),
-                "assessment_batch_no": self._strip_text(row[15]),
-                "assessment_version": self._strip_text(row[16]),
-                "applicant_hr_type": self._strip_text(row[17]),
-                "applicant_process_level_category": self._strip_text(row[18]),
-                "final_score": self._format_score_value(row[19]),
-                "summary_conclusion": self._strip_text(row[20]),
-                "suggested_action": self._strip_text(row[21]),
-                "lowest_hit_dimension": self._strip_text(row[22]),
-                "lowest_hit_role_code": self._strip_text(row[23]),
-                "lowest_hit_org_code": self._strip_text(row[24]),
-                "hit_manual_review": bool(row[25]),
-                "has_low_score_details": bool(row[26]),
-                "low_score_detail_count": row[27],
-                "low_score_detail_conclusion": self._strip_text(row[28]),
-                "assessment_explain": self._strip_text(row[29]),
-                "assessed_at": row[30],
+                "apply_reason": self._strip_text(row[6]),
+                "document_status": self._strip_text(row[7]),
+                "company_name": self._strip_text(row[8]),
+                "department_name": self._strip_text(row[9]),
+                "position_name": self._strip_text(row[10]),
+                "apply_time": row[11],
+                "latest_approval_time": row[12],
+                "todo_process_status": self._strip_text(row[13]) or "待处理",
+                "todo_status_updated_at": row[14],
+                "applicant_org_unit_name": self._strip_text(row[15]),
+                "assessment_batch_no": self._strip_text(row[16]),
+                "assessment_version": self._strip_text(row[17]),
+                "applicant_hr_type": self._strip_text(row[18]),
+                "applicant_process_level_category": self._strip_text(row[19]),
+                "final_score": self._format_score_value(row[20]),
+                "summary_conclusion": self._strip_text(row[21]),
+                "suggested_action": self._strip_text(row[22]),
+                "lowest_hit_dimension": self._strip_text(row[23]),
+                "lowest_hit_role_code": self._strip_text(row[24]),
+                "lowest_hit_org_code": self._strip_text(row[25]),
+                "hit_manual_review": bool(row[26]),
+                "has_low_score_details": bool(row[27]),
+                "low_score_detail_count": row[28],
+                "low_score_detail_conclusion": self._strip_text(row[29]),
+                "assessment_explain": self._strip_text(row[30]),
+                "assessed_at": row[31],
                 "applicant_identity_label": self._applicant_identity_label(
-                    hr_type=self._strip_text(row[17]),
-                    position_name=self._strip_text(row[4]) or self._strip_text(row[9]),
+                    hr_type=self._strip_text(row[18]),
+                    position_name=self._strip_text(row[4]) or self._strip_text(row[10]),
                     level1_function_name=self._strip_text(row[3]),
                 ),
             }
@@ -3324,6 +3445,7 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                 person.{self._quote_identifier(PERSON_ATTRIBUTES_COLUMNS["level1_function_name"])},
                 person.{self._quote_identifier(PERSON_ATTRIBUTES_COLUMNS["position_name"])},
                 basic.{self._quote_identifier(BASIC_INFO_COLUMNS["permission_target"])},
+                basic.{self._quote_identifier(BASIC_INFO_COLUMNS["apply_reason"])},
                 basic.{self._quote_identifier(BASIC_INFO_COLUMNS["document_status"])},
                 basic.{self._quote_identifier(BASIC_INFO_COLUMNS["company_name"])},
                 basic.{self._quote_identifier(BASIC_INFO_COLUMNS["department_name"])},
@@ -3383,34 +3505,35 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                 "level1_function_name": self._strip_text(row[3]),
                 "applicant_position_name": self._strip_text(row[4]),
                 "permission_target": self._strip_text(row[5]),
-                "document_status": self._strip_text(row[6]),
-                "company_name": self._strip_text(row[7]),
-                "department_name": self._strip_text(row[8]),
-                "position_name": self._strip_text(row[9]),
-                "apply_time": row[10],
-                "latest_approval_time": row[11],
-                "todo_process_status": self._strip_text(row[12]) or "待处理",
-                "todo_status_updated_at": row[13],
-                "applicant_org_unit_name": self._strip_text(row[14]),
-                "assessment_batch_no": self._strip_text(row[15]),
-                "assessment_version": self._strip_text(row[16]),
-                "applicant_hr_type": self._strip_text(row[17]),
-                "applicant_process_level_category": self._strip_text(row[18]),
-                "final_score": self._format_score_value(row[19]),
-                "summary_conclusion": self._strip_text(row[20]),
-                "suggested_action": self._strip_text(row[21]),
-                "lowest_hit_dimension": self._strip_text(row[22]),
-                "lowest_hit_role_code": self._strip_text(row[23]),
-                "lowest_hit_org_code": self._strip_text(row[24]),
-                "hit_manual_review": bool(row[25]),
-                "has_low_score_details": bool(row[26]),
-                "low_score_detail_count": row[27],
-                "low_score_detail_conclusion": self._strip_text(row[28]),
-                "assessment_explain": self._strip_text(row[29]),
-                "assessed_at": row[30],
+                "apply_reason": self._strip_text(row[6]),
+                "document_status": self._strip_text(row[7]),
+                "company_name": self._strip_text(row[8]),
+                "department_name": self._strip_text(row[9]),
+                "position_name": self._strip_text(row[10]),
+                "apply_time": row[11],
+                "latest_approval_time": row[12],
+                "todo_process_status": self._strip_text(row[13]) or "待处理",
+                "todo_status_updated_at": row[14],
+                "applicant_org_unit_name": self._strip_text(row[15]),
+                "assessment_batch_no": self._strip_text(row[16]),
+                "assessment_version": self._strip_text(row[17]),
+                "applicant_hr_type": self._strip_text(row[18]),
+                "applicant_process_level_category": self._strip_text(row[19]),
+                "final_score": self._format_score_value(row[20]),
+                "summary_conclusion": self._strip_text(row[21]),
+                "suggested_action": self._strip_text(row[22]),
+                "lowest_hit_dimension": self._strip_text(row[23]),
+                "lowest_hit_role_code": self._strip_text(row[24]),
+                "lowest_hit_org_code": self._strip_text(row[25]),
+                "hit_manual_review": bool(row[26]),
+                "has_low_score_details": bool(row[27]),
+                "low_score_detail_count": row[28],
+                "low_score_detail_conclusion": self._strip_text(row[29]),
+                "assessment_explain": self._strip_text(row[30]),
+                "assessed_at": row[31],
                 "applicant_identity_label": self._applicant_identity_label(
-                    hr_type=self._strip_text(row[17]),
-                    position_name=self._strip_text(row[4]) or self._strip_text(row[9]),
+                    hr_type=self._strip_text(row[18]),
+                    position_name=self._strip_text(row[4]) or self._strip_text(row[10]),
                     level1_function_name=self._strip_text(row[3]),
                 ),
             }
@@ -3475,7 +3598,9 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                 catalog.{self._quote_identifier(PERMISSION_CATALOG_COLUMNS["skip_org_scope_check"])},
                 org.{self._quote_identifier(ORG_ATTRIBUTE_COLUMNS["org_name"])},
                 org.{self._quote_identifier(ORG_ATTRIBUTE_COLUMNS["org_unit_name"])},
-                org.{self._quote_identifier(ORG_ATTRIBUTE_COLUMNS["physical_level"])}
+                org.{self._quote_identifier(ORG_ATTRIBUTE_COLUMNS["physical_level"])},
+                org.{self._quote_identifier(ORG_ATTRIBUTE_COLUMNS["process_level_category"])},
+                org.{self._quote_identifier(ORG_ATTRIBUTE_COLUMNS["org_auth_level"])}
             FROM {APPLY_FORM_ORG_SCOPE_TABLE} AS scope
             LEFT JOIN "权限列表" AS catalog
                 ON catalog.{self._quote_identifier(PERMISSION_CATALOG_COLUMNS["role_code"])} =
@@ -3502,6 +3627,8 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                 "organization_name": self._strip_text(row[5]),
                 "org_unit_name": self._strip_text(row[6]),
                 "physical_level": self._strip_text(row[7]),
+                "process_level_category": self._strip_text(row[8]),
+                "org_auth_level": self._strip_text(row[9]),
             }
             for row in rows
             if self._strip_text(row[0]) is not None and self._strip_text(row[1]) is not None

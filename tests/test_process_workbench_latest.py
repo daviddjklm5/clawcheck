@@ -111,6 +111,7 @@ class ProcessWorkbenchLatestSnapshotTest(unittest.TestCase):
             "applicant_name": "张三",
             "employee_no": "0001",
             "permission_target": "张三",
+            "apply_reason": "测试申请原因",
             "document_status": "已提交",
             "todo_process_status": "已处理",
             "todo_status_updated_at": datetime(2026, 3, 16, 12, 31, 0),
@@ -169,6 +170,150 @@ class ProcessWorkbenchLatestSnapshotTest(unittest.TestCase):
         self.assertEqual(batch_field["value"], "audit_20260316_121915")
         self.assertEqual(todo_field["value"], "已处理")
         self.assertEqual(result["feedbackOverview"]["summaryConclusionLabel"], "加强审核")
+
+    def test_fetch_process_document_detail_sorts_roles_by_permission_level_priority(self) -> None:
+        summary_row = {
+            "document_no": "RA-TEST-001",
+            "applicant_name": "张三",
+            "employee_no": "0001",
+            "permission_target": "张三",
+            "apply_reason": "测试申请原因",
+            "document_status": "已提交",
+            "todo_process_status": "待处理",
+            "todo_status_updated_at": datetime(2026, 3, 16, 12, 31, 0),
+            "department_name": "人事部",
+            "apply_time": None,
+            "applicant_identity_label": "属地 HR",
+            "applicant_org_unit_name": "人力资源与行政服务中心",
+            "latest_approval_time": datetime(2026, 3, 16, 10, 42, 2),
+            "applicant_process_level_category": "属地服务站",
+            "final_score": 1.0,
+            "summary_conclusion": "人工干预",
+            "suggested_action": "manual_review",
+            "lowest_hit_dimension": "申请的权限",
+            "low_score_detail_count": 3,
+            "assessment_batch_no": "audit_20260316_121915",
+            "assessment_version": "2026-03-15",
+            "assessed_at": datetime(2026, 3, 16, 12, 19, 15),
+            "assessment_explain": "",
+        }
+        role_rows = [
+            {
+                "id": "r5",
+                "line_no": "5",
+                "role_code": "ROLE-C",
+                "role_name": "C 类角色",
+                "apply_type": "新增",
+                "org_scope_count": 1,
+                "skip_org_scope_check": False,
+                "permission_level": "C类-常规",
+            },
+            {
+                "id": "r3",
+                "line_no": "3",
+                "role_code": "ROLE-S2",
+                "role_name": "S2 类角色",
+                "apply_type": "新增",
+                "org_scope_count": 1,
+                "skip_org_scope_check": False,
+                "permission_level": "S2类-限定",
+            },
+            {
+                "id": "r1",
+                "line_no": "1",
+                "role_code": "ROLE-A",
+                "role_name": "A 类角色",
+                "apply_type": "新增",
+                "org_scope_count": 1,
+                "skip_org_scope_check": False,
+                "permission_level": "A类-远程",
+            },
+            {
+                "id": "r7",
+                "line_no": "7",
+                "role_code": "ROLE-UNKNOWN",
+                "role_name": "未知级别角色",
+                "apply_type": "新增",
+                "org_scope_count": 1,
+                "skip_org_scope_check": False,
+                "permission_level": "",
+            },
+            {
+                "id": "r2",
+                "line_no": "2",
+                "role_code": "ROLE-S1",
+                "role_name": "S1 类角色",
+                "apply_type": "新增",
+                "org_scope_count": 1,
+                "skip_org_scope_check": False,
+                "permission_level": "S1类-限定",
+            },
+            {
+                "id": "r4",
+                "line_no": "4",
+                "role_code": "ROLE-W",
+                "role_name": "W 类角色",
+                "apply_type": "新增",
+                "org_scope_count": 1,
+                "skip_org_scope_check": False,
+                "permission_level": "W类-取消",
+            },
+            {
+                "id": "r6",
+                "line_no": "6",
+                "role_code": "ROLE-B1",
+                "role_name": "B1 类角色",
+                "apply_type": "新增",
+                "org_scope_count": 1,
+                "skip_org_scope_check": False,
+                "permission_level": "B1类-涉薪",
+            },
+            {
+                "id": "r8",
+                "line_no": "8",
+                "role_code": "ROLE-B2",
+                "role_name": "B2 类角色",
+                "apply_type": "新增",
+                "org_scope_count": 1,
+                "skip_org_scope_check": False,
+                "permission_level": "B2类-涉档案绩效",
+            },
+        ]
+
+        with (
+            patch.object(self.store, "ensure_table"),
+            patch.object(self.store, "connect", self._fake_connect),
+            patch.object(self.store, "_fetch_latest_process_summary_rows", return_value=[summary_row]),
+            patch.object(self.store, "_fetch_process_role_rows", return_value=role_rows),
+            patch.object(self.store, "_fetch_approval_rows", return_value=[]),
+            patch.object(self.store, "_fetch_process_org_scope_display_rows", return_value=[]),
+            patch.object(self.store, "_fetch_process_low_score_rows", return_value=[]),
+            patch.object(self.store, "_fetch_process_feedback_group_rows", return_value=[]),
+            patch(
+                "automation.db.postgres.build_low_score_feedback",
+                return_value={
+                    "summaryConclusionLabel": "加强审核",
+                    "feedbackStats": [],
+                    "feedbackGroups": [],
+                    "feedbackLines": [],
+                },
+            ),
+        ):
+            result = self.store.fetch_process_document_detail("RA-TEST-001")
+
+        self.assertEqual(
+            [row["permissionLevel"] for row in result["roles"]],
+            [
+                "S1类-限定",
+                "S2类-限定",
+                "A类-远程",
+                "W类-取消",
+                "B1类-涉薪",
+                "B2类-涉档案绩效",
+                "C类-常规",
+                "-",
+            ],
+        )
 
 
 if __name__ == "__main__":

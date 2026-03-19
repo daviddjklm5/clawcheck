@@ -20,6 +20,7 @@ export interface DetailField {
   label: string;
   value: string;
   hint?: string;
+  columnSpan?: 1 | 2;
 }
 
 export interface JobRow {
@@ -130,12 +131,13 @@ export interface CollectApprovalRow {
 
 export interface CollectOrgScopeRow {
   id: string;
-  roleCode: string;
-  roleName: string;
   organizationCode: string;
   organizationName: string;
   orgUnitName: string;
   physicalLevel: string;
+  processLevelCategory: string;
+  orgAuthLevel: string;
+  aggregatedRowCount: number;
   skipOrgScopeCheck: string;
 }
 
@@ -245,12 +247,13 @@ export interface ApprovalRow {
 
 export interface OrgScopeRow {
   id: string;
-  roleCode: string;
-  roleName: string;
   organizationCode: string;
   organizationName: string;
   orgUnitName: string;
   physicalLevel: string;
+  processLevelCategory: string;
+  orgAuthLevel: string;
+  aggregatedRowCount: number;
   skipOrgScopeCheck: string;
 }
 
@@ -289,6 +292,7 @@ export interface FeedbackOverview {
 
 export interface ProcessDetail {
   documentNo: string;
+  applyReason: string;
   overviewFields: DetailField[];
   feedbackOverview: FeedbackOverview;
   roles: RoleRow[];

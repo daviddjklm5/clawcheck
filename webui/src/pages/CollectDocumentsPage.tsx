@@ -80,6 +80,29 @@ function normalizeText(value: string): string {
   return value.trim().toLowerCase();
 }
 
+function toPhysicalLevelNumber(value: unknown): number | null {
+  const text = String(value ?? "").trim();
+  if (!/^-?\d+$/.test(text)) {
+    return null;
+  }
+  return Number.parseInt(text, 10);
+}
+
+function comparePhysicalLevel(left: unknown, right: unknown): number {
+  const leftNumber = toPhysicalLevelNumber(left);
+  const rightNumber = toPhysicalLevelNumber(right);
+  if (leftNumber === null && rightNumber === null) {
+    return 0;
+  }
+  if (leftNumber === null) {
+    return 1;
+  }
+  if (rightNumber === null) {
+    return -1;
+  }
+  return leftNumber - rightNumber;
+}
+
 function formatTaskStatusLabel(value: string): string {
   return (
     {
@@ -152,12 +175,13 @@ const approvalColumns: GridColDef<CollectApprovalRow>[] = [
 ];
 
 const orgScopeColumns: GridColDef<CollectOrgScopeRow>[] = [
-  { field: "roleCode", headerName: "角色编码", minWidth: 130 },
-  { field: "roleName", headerName: "角色名称", minWidth: 220, flex: 1.1 },
   { field: "organizationCode", headerName: "组织编码", minWidth: 120 },
   { field: "organizationName", headerName: "组织名称", minWidth: 180, flex: 1 },
   { field: "orgUnitName", headerName: "组织单位", minWidth: 160 },
-  { field: "physicalLevel", headerName: "物理层级", minWidth: 110 },
+  { field: "physicalLevel", headerName: "物理层级", minWidth: 110, sortComparator: comparePhysicalLevel },
+  { field: "processLevelCategory", headerName: "组织流程层级分类", minWidth: 180 },
+  { field: "orgAuthLevel", headerName: "组织授权级别", minWidth: 140 },
+  { field: "aggregatedRowCount", headerName: "聚合行数", minWidth: 110, type: "number" },
   { field: "skipOrgScopeCheck", headerName: "跳过组织范围", minWidth: 130 },
 ];
 
@@ -1016,7 +1040,7 @@ export function CollectDocumentsPage() {
             {detail && activeTab === "orgScopes" ? (
               <AppDataGrid<CollectOrgScopeRow>
                 title="目标组织"
-                subtitle="按 `013` 方案落库后的角色-组织展开结果。"
+                subtitle="按组织聚合展示，聚合行数表示命中的角色-组织明细条数。"
                 rows={detail.orgScopes}
                 columns={orgScopeColumns}
                 loading={detailLoading}
@@ -1024,6 +1048,9 @@ export function CollectDocumentsPage() {
                 minHeight={DETAIL_GRID_HEIGHT}
                 pageSizeOptions={[10, 20, 50]}
                 initialState={{
+                  sorting: {
+                    sortModel: [{ field: "physicalLevel", sort: "desc" }],
+                  },
                   pagination: {
                     paginationModel: {
                       pageSize: DETAIL_GRID_PAGE_SIZE,

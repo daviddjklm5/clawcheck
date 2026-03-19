@@ -90,6 +90,29 @@ class DocumentsRouterTest(unittest.TestCase):
         self.assertEqual(context.exception.status_code, 404)
         self.assertEqual(context.exception.detail, "未找到单据 RA-TEST-001 的评估详情")
 
+    def test_get_process_workbench_document_returns_detail_with_apply_reason(self) -> None:
+        payload = {
+            "documentNo": "RA-TEST-001",
+            "applyReason": "跨组织协作，需要临时审批处理权限。",
+            "overviewFields": [],
+            "feedbackOverview": {"summaryConclusionLabel": "-", "feedbackStats": [], "feedbackGroups": [], "feedbackLines": []},
+            "roles": [],
+            "approvals": [],
+            "orgScopes": [],
+            "riskDetails": [],
+            "notes": [],
+        }
+
+        with patch("automation.api.routers.documents.get_process_document_detail", return_value=payload) as mocked_detail:
+            result = get_process_workbench_document("RA-TEST-001", "  BATCH-001  ")
+
+        self.assertEqual(result, payload)
+        self.assertEqual(result["applyReason"], "跨组织协作，需要临时审批处理权限。")
+        mocked_detail.assert_called_once_with(
+            document_no="RA-TEST-001",
+            assessment_batch_no="BATCH-001",
+        )
+
     def test_post_process_workbench_audit_forwards_document_nos(self) -> None:
         payload = {
             "taskId": "audit-001",

@@ -19,6 +19,10 @@ export function KeyValueList({ items }: KeyValueListProps) {
         <Box
           key={`${item.label}-${item.value}`}
           sx={{
+            gridColumn: {
+              xs: "auto",
+              md: item.columnSpan === 2 ? "span 2" : "auto",
+            },
             p: 1.5,
             border: "1px solid",
             borderColor: "divider",
@@ -28,7 +32,11 @@ export function KeyValueList({ items }: KeyValueListProps) {
           <Typography variant="body2" color="text.secondary">
             {item.label}
           </Typography>
-          <Typography variant="body1" fontWeight={600} sx={{ mt: 0.75 }}>
+          <Typography
+            variant="body1"
+            fontWeight={600}
+            sx={{ mt: 0.75, whiteSpace: "pre-wrap", wordBreak: "break-word" }}
+          >
             {item.value}
           </Typography>
           {item.hint ? (
