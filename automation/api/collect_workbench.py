@@ -52,6 +52,7 @@ def _task_to_payload(task: dict[str, Any]) -> dict[str, Any]:
         "requestedLimit": int(task.get("requestedLimit") or 0),
         "dryRun": bool(task.get("dryRun")),
         "autoAudit": bool(task.get("autoAudit")),
+        "forceRecollect": bool(task.get("forceRecollect")),
         "requestedCount": int(task.get("requestedCount") or 0),
         "successCount": int(task.get("successCount") or 0),
         "skippedCount": int(task.get("skippedCount") or 0),
@@ -186,6 +187,8 @@ def _run_collect_task(task_id: str) -> None:
         command.extend(["--document-no", str(task["requestedDocumentNo"])])
     if task["dryRun"]:
         command.append("--dry-run")
+    if task.get("forceRecollect"):
+        command.append("--force-recollect")
 
     try:
         process = subprocess.run(
@@ -285,6 +288,7 @@ def _load_recent_collect_runs(logs_dir: Path, limit: int = 8) -> list[dict[str, 
         if isinstance(payload, dict):
             payload.setdefault("id", payload.get("taskId") or path.stem)
             payload.setdefault("summaryFile", _to_repo_relative(path))
+            payload.setdefault("forceRecollect", False)
             runs.append(payload)
     return runs
 
@@ -315,6 +319,7 @@ def start_collect_task(
     limit: int = 100,
     dry_run: bool = False,
     auto_audit: bool = True,
+    force_recollect: bool = False,
 ) -> dict[str, Any]:
     normalized_document_no = (document_no or "").strip()
     normalized_limit = 1 if normalized_document_no else max(int(limit or 0), 1)
@@ -337,6 +342,7 @@ def start_collect_task(
         "requestedLimit": normalized_limit,
         "dryRun": bool(dry_run),
         "autoAudit": bool(auto_audit),
+        "forceRecollect": bool(force_recollect),
         "requestedCount": 0,
         "successCount": 0,
         "skippedCount": 0,

@@ -195,6 +195,62 @@ class PermissionCollectFlowTest(unittest.TestCase):
         self.assertIn("scrollTop", script)
         self.assertEqual(selector, "#tabpageap_approvalrecord")
 
+    def test_extract_grid_rows_uses_virtual_scroll_for_detail_grid(self) -> None:
+        detail_grid = {
+            "headers": ["#", "申请类型", "角色名称", "角色编码", "角色描述", "参保单位", "行政组织详情"],
+            "rows": [["1", "新增角色", "EP查看", "EP002", "", "", "查看详情(1)"]],
+            "selector": "#entryentity",
+        }
+        full_rows = [
+            ["1", "新增角色", "EP查看", "EP002", "", "", "查看详情(1)"],
+            ["2", "新增角色", "EP维护", "EP001", "", "", "查看详情(1)"],
+        ]
+        with (
+            patch.object(self.flow, "_extract_best_grid", return_value=detail_grid),
+            patch.object(self.flow, "_extract_all_detail_grid_rows", return_value=full_rows) as extract_all,
+        ):
+            rows = self.flow.extract_grid_rows(["申请类型", "角色名称", "角色编码"])
+
+        extract_all.assert_called_once_with(detail_grid)
+        self.assertEqual([row["line_no"] for row in rows], ["1", "2"])
+        self.assertEqual([row["role_code"] for row in rows], ["EP002", "EP001"])
+
+    def test_extract_all_detail_grid_rows_deduplicates_and_sorts_by_line_no(self) -> None:
+        detail_grid = {
+            "headers": ["#", "申请类型", "角色名称", "角色编码", "角色描述", "参保单位", "行政组织详情"],
+            "rows": [],
+            "selector": "#entryentity",
+        }
+        snapshots = [
+            {
+                "rows": [
+                    ["2", "新增角色", "EP维护", "EP001", "", "", "查看详情(1)"],
+                    ["1", "新增角色", "EP查看", "EP002", "", "", "查看详情(1)"],
+                ],
+                "scrollTop": 0,
+                "scrollHeight": 1200,
+                "clientHeight": 300,
+            },
+            {
+                "rows": [
+                    ["3", "新增角色", "考勤核算（定额新增）", "JQ002", "", "", "查看详情(1)"],
+                    ["2", "新增角色", "EP维护", "EP001", "", "", "查看详情(1)"],
+                ],
+                "scrollTop": 260,
+                "scrollHeight": 1200,
+                "clientHeight": 300,
+            },
+            None,
+        ]
+
+        with (
+            patch.object(self.flow, "_get_grid_virtual_snapshot", side_effect=snapshots),
+            patch.object(self.flow, "_set_grid_vertical_position"),
+        ):
+            rows = self.flow._extract_all_detail_grid_rows(detail_grid)
+
+        self.assertEqual([row[0] for row in rows], ["1", "2", "3"])
+
     def test_parse_approval_record_cards_preserves_multi_round_records(self) -> None:
         records = [
             {

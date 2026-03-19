@@ -47,6 +47,22 @@ class PersonAttributesStoreApplicantHrTest(unittest.TestCase):
         self.assertEqual(tags["hr_subdomain"], "hr_operations")
         self.assertEqual(tags["hr_judgement_reason"], "level1_is_hr")
 
+    def test_excluded_position_overrides_h1_signals(self) -> None:
+        tags = self.store._build_applicant_hr_tags(
+            {
+                "employee_no": "05026859",
+                "employee_name": "张三",
+                "level1_function_name": "人力资源",
+                "position_name": "残疾人",
+            }
+        )
+
+        self.assertEqual(tags["hr_type"], "HX")
+        self.assertFalse(tags["is_hr_staff"])
+        self.assertEqual(tags["hr_primary_evidence"], "position_name")
+        self.assertEqual(tags["hr_primary_value"], "残疾人")
+        self.assertEqual(tags["hr_judgement_reason"], "position_excluded_from_hr")
+
     def test_special_perf_position_requires_hr_org_path(self) -> None:
         tags = self.store._build_applicant_hr_tags(
             {
@@ -111,6 +127,24 @@ class PersonAttributesStoreApplicantHrTest(unittest.TestCase):
         self.assertEqual(tags["hr_primary_evidence"], "responsible_hr_employee_no")
         self.assertEqual(tags["hr_primary_value"], "05026859")
         self.assertIsNone(tags["hr_subdomain"])
+
+    def test_excluded_position_overrides_responsible_hr(self) -> None:
+        tags = self.store._build_applicant_hr_tags(
+            {
+                "employee_no": "05026859",
+                "employee_name": "张三",
+                "position_name": "外场采集人员",
+                "org_path_name": "万物云_祥盈企服_组织发展中心",
+                "is_responsible_hr": True,
+            }
+        )
+
+        self.assertEqual(tags["hr_type"], "HX")
+        self.assertFalse(tags["is_hr_staff"])
+        self.assertFalse(tags["is_suspected_hr_staff"])
+        self.assertEqual(tags["hr_primary_evidence"], "position_name")
+        self.assertEqual(tags["hr_primary_value"], "外场采集人员")
+        self.assertEqual(tags["hr_judgement_reason"], "position_excluded_from_hr")
 
     def test_hr_org_path_only_is_hy(self) -> None:
         tags = self.store._build_applicant_hr_tags(

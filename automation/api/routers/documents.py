@@ -42,6 +42,7 @@ class CollectRunRequest(BaseModel):
     limit: int = Field(default=100, ge=1)
     dryRun: bool = False
     autoAudit: bool = True
+    forceRecollect: bool = False
 
 
 class ProcessAuditRunRequest(BaseModel):
@@ -79,6 +80,7 @@ def post_collect_workbench_run(payload: CollectRunRequest) -> dict[str, object]:
             limit=payload.limit,
             dry_run=payload.dryRun,
             auto_audit=payload.autoAudit,
+            force_recollect=payload.forceRecollect,
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

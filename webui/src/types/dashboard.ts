@@ -164,6 +164,7 @@ export interface CollectRunRequest {
   limit: number;
   dryRun: boolean;
   autoAudit: boolean;
+  forceRecollect: boolean;
 }
 
 export interface CollectRunSummary {
@@ -176,6 +177,7 @@ export interface CollectRunSummary {
   requestedDocumentNo: string;
   requestedLimit: number;
   dryRun: boolean;
+  forceRecollect: boolean;
   requestedCount: number;
   successCount: number;
   skippedCount: number;

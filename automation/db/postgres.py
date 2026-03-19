@@ -214,6 +214,8 @@ APPLICANT_HR_H1_WANYU_POSITION_WHITELIST = {
     "认证中心负责人",
     "服务站总站长",
 }
+APPLICANT_HR_EXCLUDED_POSITION_NAMES = {"残疾人"}
+APPLICANT_HR_EXCLUDED_POSITION_KEYWORD_PATTERN = re.compile(r"采集人")
 
 
 class _PostgresStoreBase:
@@ -439,7 +441,14 @@ class PostgresPermissionStore(_PostgresStoreBase):
         if employee_name is None:
             return result
 
-        if level1_function_name == "人力资源":
+        if position_name in APPLICANT_HR_EXCLUDED_POSITION_NAMES or (
+            position_name is not None and APPLICANT_HR_EXCLUDED_POSITION_KEYWORD_PATTERN.search(position_name)
+        ):
+            hr_type = "HX"
+            hr_primary_evidence = "position_name"
+            hr_primary_value = position_name
+            hr_judgement_reason = "position_excluded_from_hr"
+        elif level1_function_name == "人力资源":
             hr_type = "H1"
             hr_primary_evidence = "level1_function_name"
             hr_primary_value = level1_function_name

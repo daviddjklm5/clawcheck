@@ -195,6 +195,7 @@ export function CollectDocumentsPage() {
   const [runLimit, setRunLimit] = useState("100");
   const [runDryRun, setRunDryRun] = useState(false);
   const [runAutoAudit, setRunAutoAudit] = useState(true);
+  const [runForceRecollect, setRunForceRecollect] = useState(false);
   const [runSubmitting, setRunSubmitting] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
   const [runNotice, setRunNotice] = useState<string | null>(null);
@@ -387,9 +388,10 @@ export function CollectDocumentsPage() {
     };
   }, [currentTaskRunning]);
 
-  async function triggerCollect(payloadOverride?: { documentNo?: string; limit?: number }) {
+  async function triggerCollect(payloadOverride?: { documentNo?: string; limit?: number; forceRecollect?: boolean }) {
     const normalizedDocumentNo = (payloadOverride?.documentNo ?? runDocumentNo).trim();
     const parsedLimit = payloadOverride?.limit ?? Math.max(Number.parseInt(runLimit, 10) || 0, 1);
+    const forceRecollect = payloadOverride?.forceRecollect ?? runForceRecollect;
 
     try {
       setRunSubmitting(true);
@@ -401,6 +403,7 @@ export function CollectDocumentsPage() {
         limit: normalizedDocumentNo ? 1 : parsedLimit,
         dryRun: runDryRun,
         autoAudit: runDryRun ? false : runAutoAudit,
+        forceRecollect: normalizedDocumentNo ? forceRecollect : false,
       });
 
       setRunNotice(result.message || "采集任务已提交。");
@@ -471,6 +474,31 @@ export function CollectDocumentsPage() {
     { field: "approvalCount", headerName: "审批记录", minWidth: 100, type: "number" },
     { field: "orgScopeCount", headerName: "组织范围", minWidth: 100, type: "number" },
     { field: "collectedAt", headerName: "最近落库时间", minWidth: 170 },
+    {
+      field: "recollectAction",
+      headerName: "操作",
+      minWidth: 130,
+      sortable: false,
+      filterable: false,
+      renderCell: (params: GridRenderCellParams<CollectDocumentRow>) => (
+        <Button
+          size="small"
+          variant="outlined"
+          onClick={(event) => {
+            event.stopPropagation();
+            void triggerCollect({
+              documentNo: params.row.documentNo,
+              limit: 1,
+              forceRecollect: true,
+            });
+          }}
+          disabled={runSubmitting || currentTaskRunning}
+          sx={{ textTransform: "none", minWidth: 0 }}
+        >
+          重新采集
+        </Button>
+      ),
+    },
   ];
 
   return (
@@ -564,6 +592,17 @@ export function CollectDocumentsPage() {
                 />
               }
               label="采集后自动评估"
+              sx={{ ml: 0 }}
+            />
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={runForceRecollect}
+                  onChange={(event) => setRunForceRecollect(event.target.checked)}
+                  disabled={!runDocumentNo.trim()}
+                />
+              }
+              label="指定单据强制重采"
               sx={{ ml: 0 }}
             />
             <Stack direction="row" spacing={1}>

@@ -29,6 +29,7 @@ class CollectWorkbenchTaskTest(unittest.TestCase):
         requested_document_no: str = "RA-TEST-001",
         dry_run: bool = False,
         auto_audit: bool = True,
+        force_recollect: bool = False,
     ) -> dict[str, object]:
         return {
             "taskId": task_id,
@@ -40,6 +41,7 @@ class CollectWorkbenchTaskTest(unittest.TestCase):
             "requestedLimit": 1,
             "dryRun": dry_run,
             "autoAudit": auto_audit,
+            "forceRecollect": force_recollect,
             "requestedCount": 0,
             "successCount": 0,
             "skippedCount": 0,
@@ -144,6 +146,41 @@ class CollectWorkbenchTaskTest(unittest.TestCase):
             self.assertEqual(final_task["auditBatchNo"], "")
             self.assertIn("dry-run", str(final_task["message"]))
             mocked_audit.assert_not_called()
+
+    def test_run_collect_task_appends_force_recollect_flag(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            task_state = self._build_task_state(
+                temp_dir,
+                task_id="task-force",
+                requested_document_no="RA-TEST-999",
+                auto_audit=False,
+                dry_run=False,
+                force_recollect=True,
+            )
+            collect_workbench._TASK_STATE_BY_ID["task-force"] = task_state
+            dump_file = Path(str(task_state["dumpFile"]))
+            dump_payload = [{"basic_info": {"document_no": "RA-TEST-999"}}]
+            runtime_settings = SimpleNamespace(runtime=SimpleNamespace(logs_dir=temp_dir))
+
+            with (
+                patch("automation.api.collect_workbench._load_runtime_settings", return_value=(None, runtime_settings)),
+                patch(
+                    "automation.api.collect_workbench.subprocess.run",
+                    return_value=_FakeCompletedProcess(
+                        returncode=0,
+                        stdout="Log file: /tmp/run_collect.log",
+                    ),
+                ) as mocked_run,
+                patch(
+                    "automation.api.collect_workbench._load_json_file",
+                    side_effect=lambda path: dump_payload if path == dump_file else None,
+                ),
+                patch("automation.api.collect_workbench._count_from_sidecar", return_value=0),
+            ):
+                collect_workbench._run_collect_task("task-force")
+
+            command = mocked_run.call_args.kwargs["args"] if "args" in mocked_run.call_args.kwargs else mocked_run.call_args.args[0]
+            self.assertIn("--force-recollect", command)
 
 
 if __name__ == "__main__":

@@ -46,7 +46,13 @@ class DocumentsRouterTest(unittest.TestCase):
             "status": "queued",
             "message": "采集任务已创建，等待执行。",
         }
-        request = CollectRunRequest(documentNo="RA-TEST-001", limit=1, dryRun=True, autoAudit=False)
+        request = CollectRunRequest(
+            documentNo="RA-TEST-001",
+            limit=1,
+            dryRun=True,
+            autoAudit=False,
+            forceRecollect=True,
+        )
 
         with patch("automation.api.routers.documents.start_collect_task", return_value=payload) as mocked_start:
             result = post_collect_workbench_run(request)
@@ -57,6 +63,7 @@ class DocumentsRouterTest(unittest.TestCase):
             limit=1,
             dry_run=True,
             auto_audit=False,
+            force_recollect=True,
         )
 
     def test_get_process_workbench_documents_returns_payload(self) -> None:

@@ -207,6 +207,8 @@ class PermissionCollectFlow:
         rows = grid["rows"]
         if tuple(required_headers) == tuple(TODO_HEADERS):
             rows = self._extract_all_todo_grid_rows(grid)
+        elif tuple(required_headers) == tuple(DETAIL_HEADERS):
+            rows = self._extract_all_detail_grid_rows(grid)
         normalized_rows: list[dict[str, str]] = []
         for row in rows:
             row = self._normalize_row_cells(headers, row)
@@ -289,6 +291,55 @@ class PermissionCollectFlow:
 
         ordered_rows = list(collected_rows.values())
         ordered_rows.sort(key=lambda row: self._todo_row_sort_key(headers, row))
+        return ordered_rows
+
+    def _extract_all_detail_grid_rows(self, grid: dict[str, Any]) -> list[list[str]]:
+        headers = list(grid.get("headers") or [])
+        selector = str(grid.get("selector") or "")
+        if not headers or not selector:
+            return list(grid.get("rows") or [])
+
+        collected_rows: dict[str, list[str]] = {}
+        stagnant_rounds = 0
+        last_seen_size = -1
+
+        self._set_grid_vertical_position(selector, 0)
+        for _ in range(400):
+            snapshot = self._get_grid_virtual_snapshot(selector, headers)
+            if not snapshot:
+                break
+
+            for row in snapshot.get("rows", []):
+                normalized_row = self._normalize_row_cells(headers, row)
+                mapped = {
+                    headers[idx]: normalized_row[idx] if idx < len(normalized_row) else ""
+                    for idx in range(len(headers))
+                }
+                line_no = (mapped.get("#") or "").strip()
+                row_key = line_no or "|".join(normalized_row)
+                if row_key:
+                    collected_rows[row_key] = normalized_row
+
+            if len(collected_rows) == last_seen_size:
+                stagnant_rounds += 1
+            else:
+                stagnant_rounds = 0
+                last_seen_size = len(collected_rows)
+
+            scroll_height = int(snapshot.get("scrollHeight", 0) or 0)
+            client_height = int(snapshot.get("clientHeight", 0) or 0)
+            current_top = int(snapshot.get("scrollTop", 0) or 0)
+            next_top = min(current_top + max(client_height - 40, 200), max(scroll_height - client_height, 0))
+            if next_top <= current_top:
+                stagnant_rounds += 1
+            else:
+                self._set_grid_vertical_position(selector, next_top)
+
+            if stagnant_rounds >= 5:
+                break
+
+        ordered_rows = list(collected_rows.values())
+        ordered_rows.sort(key=lambda row: self._detail_row_sort_key(headers, row))
         return ordered_rows
 
     def extract_role_organization_scopes(
@@ -383,9 +434,6 @@ class PermissionCollectFlow:
         while time.monotonic() < deadline:
             try:
                 grid = self._extract_best_grid(DETAIL_HEADERS)
-                rows = grid.get("rows") or []
-                if row_idx is not None and len(rows) <= row_idx:
-                    raise RuntimeError(f"detail row index {row_idx} out of range, row_count={len(rows)}")
                 return grid
             except Exception as exc:
                 last_error = str(exc)
@@ -578,7 +626,8 @@ class PermissionCollectFlow:
                 clearMarkers();
                 if (markTargetRow()) return true;
 
-                const body = grid.querySelector('.kd-table-body.kd-horizontal-scroll-container');
+                const body = grid.querySelector('.kd-table-body.kd-horizontal-scroll-container')
+                    || grid.querySelector('.kd-table-body');
                 if (!body) return false;
                 const sampleRow = getRenderedRows().find((row) => row.getBoundingClientRect().height > 0);
                 const rowHeight = sampleRow ? Math.max(sampleRow.getBoundingClientRect().height, 1) : 40;
@@ -1365,6 +1414,21 @@ class PermissionCollectFlow:
         if len(normalized) < len(headers):
             normalized.extend([""] * (len(headers) - len(normalized)))
         return normalized
+
+    @staticmethod
+    def _detail_row_sort_key(headers: Sequence[str], row: Sequence[str]) -> tuple[int, str]:
+        normalized_row = PermissionCollectFlow._normalize_row_cells(headers, row)
+        mapped = {
+            headers[idx]: normalized_row[idx] if idx < len(normalized_row) else ""
+            for idx in range(len(headers))
+        }
+        line_text = (mapped.get("#") or "").strip()
+        try:
+            line_no = int(line_text)
+        except ValueError:
+            line_no = 10**9
+        fallback = "|".join(normalized_row)
+        return (line_no, fallback)
 
     @staticmethod
     def _extract_detail_count(detail_text: str) -> int | None:

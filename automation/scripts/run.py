@@ -59,6 +59,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--limit", type=int, default=100, help="Maximum number of permission documents to collect")
     parser.add_argument("--dry-run", action="store_true", help="Collect data without writing PostgreSQL")
+    parser.add_argument(
+        "--force-recollect",
+        action="store_true",
+        help="Force recollect documents even when approval snapshot is unchanged",
+    )
     parser.add_argument("--dump-json", default="", help="Optional JSON dump path for collected payload")
     parser.add_argument(
         "--reason",
@@ -670,7 +675,7 @@ def main() -> int:
                             collector.open_document(target_document_no)
 
                             probe: dict[str, object] | None = None
-                            if existing_state:
+                            if existing_state and not args.force_recollect:
                                 probe = collector.collect_current_document_probe()
                                 live_latest_approval_time = normalize_timestamp_text(
                                     probe.get("latest_approval_time")
@@ -713,6 +718,11 @@ def main() -> int:
                                     live_latest_approval_time or "<empty>",
                                     stored_approval_record_count,
                                     live_approval_record_count,
+                                )
+                            elif existing_state and args.force_recollect:
+                                logger.info(
+                                    "Force recollect enabled for %s; skipping approval snapshot comparison",
+                                    target_document_no,
                                 )
 
                             document = collector.collect_current_document(probe=probe)
