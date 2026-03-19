@@ -249,16 +249,28 @@ class RiskTrustEvaluator:
     ) -> dict[str, Any]:
         applicant = facts["applicant"]
         approval = facts["approval"]
+        basic_info = self._as_dict(facts.get("basic_info"))
         document_flags = self._as_dict(facts.get("document_flags"))
         role_row = role_row or {}
         target_row = target_row or {}
 
         applicant_org_unit = self._normalized_text(applicant.get("org_unit_name"))
         target_org_unit = self._normalized_text(target_row.get("org_unit_name"))
+        permission_target_company_name = self._normalized_text(basic_info.get("company_name"))
+        target_org_company_name = self._normalized_text(target_row.get("org_company_name"))
+        target_org_unit_name = self._normalized_text(target_row.get("org_unit_name"))
 
         return {
             "applicant_hr_type": self._normalized_text(applicant.get("hr_type")),
             "applicant_process_level_category": self._normalized_text(applicant.get("process_level_category")),
+            "applicant_org_unit_name": applicant_org_unit,
+            "permission_target_company_name": permission_target_company_name,
+            "target_org_company_name": target_org_company_name,
+            "permission_target_company_equal_target_org_company": (
+                permission_target_company_name != "<NULL>"
+                and target_org_company_name != "<NULL>"
+                and permission_target_company_name == target_org_company_name
+            ),
             "current_round_all_approvers_equal_submitter": bool(approval.get("current_round_all_approvers_equal_submitter")),
             "has_warzone_hr_in_history": bool(approval.get("has_warzone_hr_in_history")),
             "has_warzone_hr_in_current_round": bool(approval.get("has_warzone_hr_in_current_round")),
@@ -268,6 +280,7 @@ class RiskTrustEvaluator:
             "permission_level": self._normalized_text(role_row.get("permission_level")),
             "role_skip_org_scope_check": bool(role_row.get("skip_org_scope_check")),
             "target_org_auth_level": self._normalized_text(target_row.get("org_auth_level")),
+            "target_org_unit_name": target_org_unit_name,
             "target_org_code": self._normalized_text(target_row.get("org_code")),
             "applicant_org_unit_not_equal_target_org_unit": (
                 applicant_org_unit != "<NULL>"
@@ -335,10 +348,11 @@ class RiskTrustEvaluator:
                         "org_code": target.get("org_code"),
                         "org_auth_level": target.get("org_auth_level"),
                         "org_unit_name": target.get("org_unit_name"),
+                        "org_company_name": target.get("org_company_name"),
                     }
                 )
             if not targets:
-                targets.append({"org_code": None, "org_auth_level": None, "org_unit_name": None})
+                targets.append({"org_code": None, "org_auth_level": None, "org_unit_name": None, "org_company_name": None})
             details.append(
                 {
                     "line_no": detail_row.get("line_no"),

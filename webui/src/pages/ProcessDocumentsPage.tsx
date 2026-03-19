@@ -33,6 +33,7 @@ import type {
   ProcessTodoSyncResponse,
   ProcessWorkbench,
   RiskDetailRow,
+  ScoreBasisDetailRow,
   RoleRow,
   StatItem,
   Tone,
@@ -177,6 +178,7 @@ function isProcessDetailResponse(value: unknown): value is ProcessDetail {
     Array.isArray(candidate.approvals) &&
     Array.isArray(candidate.orgScopes) &&
     Array.isArray(candidate.riskDetails) &&
+    Array.isArray(candidate.scoreBasisDetails) &&
     Array.isArray(candidate.notes)
   );
 }
@@ -299,6 +301,7 @@ export function ProcessDocumentsPage() {
   const detailFeedbackGroups = detailFeedbackOverview?.feedbackGroups ?? [];
   const detailNotes = detail?.notes ?? [];
   const detailRiskDetails = detail?.riskDetails ?? [];
+  const detailScoreBasisDetails = detail?.scoreBasisDetails ?? [];
   const detailRoles = detail?.roles ?? [];
   const detailOrgScopes = detail?.orgScopes ?? [];
   const detailApprovals = detail?.approvals ?? [];
@@ -999,6 +1002,49 @@ export function ProcessDocumentsPage() {
                       </Box>
                     ))}
                   </Stack>
+
+                  {detailScoreBasisDetails.length > 0 ? (
+                    <Box
+                      sx={{
+                        p: 1.75,
+                        border: "1px solid",
+                        borderColor: "divider",
+                        backgroundColor: "rgba(255,255,255,0.7)",
+                      }}
+                    >
+                      <Typography variant="subtitle2">评分依据（得分 &lt; 2.5）</Typography>
+                      <Typography variant="caption" color="text.secondary" sx={{ mt: 0.75, display: "block" }}>
+                        当任一维度得分低于 2.5 时，风险总览会展示对应评分依据，便于快速复核扣分来源。
+                      </Typography>
+                      <Stack spacing={1.25} sx={{ mt: 1.5 }}>
+                        {detailScoreBasisDetails.map((item: ScoreBasisDetailRow) => (
+                          <Box
+                            key={item.id}
+                            sx={{
+                              p: 1.25,
+                              border: "1px solid",
+                              borderColor: "divider",
+                              backgroundColor: "#ffffff",
+                            }}
+                          >
+                            <Stack direction={{ xs: "column", sm: "row" }} spacing={1} alignItems={{ sm: "center" }}>
+                              <StatusTag label={formatScoreLabel(item.score)} tone={getScoreTone(item.score)} />
+                              <Typography variant="body2">
+                                维度 {item.dimensionName}，规则 {item.ruleId}
+                                {item.ruleSummary && item.ruleSummary !== "-" ? `（${item.ruleSummary}）` : ""}
+                              </Typography>
+                            </Stack>
+                            <Typography variant="body2" sx={{ mt: 0.75 }}>
+                              {item.basisText}
+                            </Typography>
+                            <Typography variant="caption" color="text.secondary" sx={{ mt: 0.75, display: "block" }}>
+                              影响明细 {item.rawDetailCount} 条，影响角色 {item.affectedRoleCount} 个，影响组织 {item.affectedOrgCount} 个。
+                            </Typography>
+                          </Box>
+                        ))}
+                      </Stack>
+                    </Box>
+                  ) : null}
 
                   <Box>
                     <Typography variant="subtitle2">处理提示</Typography>

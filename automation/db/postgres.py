@@ -2709,6 +2709,11 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                     batch_no,
                     [normalized_document_no],
                 )
+                score_basis_rows = self._fetch_process_score_basis_rows(
+                    cursor,
+                    batch_no,
+                    [normalized_document_no],
+                )
                 feedback_group_rows = self._fetch_process_feedback_group_rows(
                     cursor,
                     batch_no,
@@ -2725,6 +2730,10 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
         if feedback_overview["feedbackLines"]:
             notes.append(
                 f"默认已按 104 方案聚合为 {len(feedback_overview['feedbackLines'])} 类风险摘要，原始低分明细留在“原始低分明细”页签。"
+            )
+        if score_basis_rows:
+            notes.append(
+                f"当前整单存在 {len(score_basis_rows)} 条 `得分<2.5` 的评分依据，已同步展示在“风险总览”页签。"
             )
         if (summary_row.get("todo_process_status") or "待处理") == "已处理":
             notes.append("该单据最近一次待办同步结果为“已处理”，当前账号 EHR 待办中未命中。")
@@ -2917,6 +2926,20 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                 }
                 for row in low_score_rows
             ],
+            "scoreBasisDetails": [
+                {
+                    "id": row["id"],
+                    "dimensionName": row["dimension_name"] or "-",
+                    "ruleId": row["rule_id"] or "-",
+                    "ruleSummary": row["rule_summary"] or "-",
+                    "score": row["score"],
+                    "basisText": row["basis_text"] or "-",
+                    "rawDetailCount": int(row["raw_detail_count"] or 0),
+                    "affectedRoleCount": int(row["affected_role_count"] or 0),
+                    "affectedOrgCount": int(row["affected_org_count"] or 0),
+                }
+                for row in score_basis_rows
+            ],
             "feedbackOverview": feedback_overview,
             "notes": notes,
         }
@@ -3014,6 +3037,7 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                         {
                             "org_code": target_row["org_code"],
                             "org_name": org_attributes.get("org_name"),
+                            "org_company_name": org_attributes.get("company_name"),
                             "org_auth_level": org_attributes.get("org_auth_level"),
                             "org_unit_name": org_attributes.get("org_unit_name"),
                             "physical_level": org_attributes.get("physical_level"),
@@ -3366,6 +3390,28 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
         )
         if not normalized_org_codes:
             return {}
+        org_company_by_org_code: dict[str, str | None] = {}
+        if (
+            self._table_exists(cursor, "组织列表")
+            and self._column_exists(cursor, "组织列表", "行政组织编码")
+            and self._column_exists(cursor, "组织列表", "所属公司")
+        ):
+            cursor.execute(
+                """
+                SELECT DISTINCT ON (BTRIM("行政组织编码"))
+                    BTRIM("行政组织编码") AS org_code,
+                    NULLIF(BTRIM("所属公司"), '') AS company_name
+                FROM "组织列表"
+                WHERE BTRIM("行政组织编码") = ANY(%s)
+                ORDER BY BTRIM("行政组织编码"), NULLIF(BTRIM("所属公司"), '') DESC
+                """,
+                (normalized_org_codes,),
+            )
+            org_company_by_org_code = {
+                self._strip_text(row[0]) or "": self._strip_text(row[1])
+                for row in cursor.fetchall()
+                if self._strip_text(row[0]) is not None
+            }
         cursor.execute(
             f"""
             SELECT
@@ -3393,6 +3439,7 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                 "physical_level": self._strip_text(row[5]),
                 "war_zone": self._strip_text(row[6]),
                 "org_full_name": self._strip_text(row[7]),
+                "company_name": org_company_by_org_code.get(self._strip_text(row[0]) or ""),
             }
             for row in rows
             if self._strip_text(row[0]) is not None
@@ -3838,6 +3885,73 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                 "detail_conclusion": self._strip_text(row[8]),
                 "intervention_action": self._strip_text(row[9]),
                 "evidence_summary": self._strip_text(row[10]),
+            }
+            for index, row in enumerate(rows, start=1)
+            if self._strip_text(row[0]) is not None
+        ]
+
+    def _fetch_process_score_basis_rows(
+        self,
+        cursor,
+        assessment_batch_no: str,
+        document_nos: Iterable[str],
+    ) -> list[dict[str, Any]]:
+        normalized_document_nos = [document_no for document_no in document_nos if document_no]
+        if not normalized_document_nos:
+            return []
+        cursor.execute(
+            f"""
+            SELECT
+                {self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["document_no"])},
+                {self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["dimension_name"])},
+                {self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["rule_id"])},
+                {self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["rule_summary"])},
+                {self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["score"])},
+                COALESCE(
+                    NULLIF(BTRIM({self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["evidence_summary"])}), ''),
+                    NULLIF(BTRIM({self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["detail_conclusion"])}), ''),
+                    NULLIF(BTRIM({self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["rule_summary"])}), ''),
+                    ''
+                ) AS basis_text,
+                COUNT(*) AS raw_detail_count,
+                COUNT(DISTINCT NULLIF(BTRIM({self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["role_code"])}), '')) AS affected_role_count,
+                COUNT(DISTINCT NULLIF(BTRIM({self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["org_code"])}), '')) AS affected_org_count
+            FROM {RISK_TRUST_ASSESSMENT_DETAIL_TABLE}
+            WHERE {self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["assessment_batch_no"])} = %s
+              AND {self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["document_no"])} = ANY(%s)
+              AND {self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["score"])} < 2.5
+            GROUP BY
+                {self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["document_no"])},
+                {self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["dimension_name"])},
+                {self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["rule_id"])},
+                {self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["rule_summary"])},
+                {self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["score"])},
+                basis_text
+            ORDER BY
+                {self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["document_no"])},
+                {self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["score"])} ASC,
+                {self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["dimension_name"])},
+                {self._quote_identifier(RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS["rule_id"])},
+                basis_text
+            """,
+            (assessment_batch_no, normalized_document_nos),
+        )
+        rows = cursor.fetchall()
+        return [
+            {
+                "document_no": self._strip_text(row[0]),
+                "id": (
+                    f"{self._strip_text(row[0])}:{self._strip_text(row[1]) or '-'}:"
+                    f"{self._strip_text(row[2]) or '-'}:{self._format_score_value(row[4]) or 0}:{index}"
+                ),
+                "dimension_name": self._strip_text(row[1]),
+                "rule_id": self._strip_text(row[2]),
+                "rule_summary": self._strip_text(row[3]),
+                "score": self._format_score_value(row[4]),
+                "basis_text": self._strip_text(row[5]),
+                "raw_detail_count": int(row[6] or 0),
+                "affected_role_count": int(row[7] or 0),
+                "affected_org_count": int(row[8] or 0),
             }
             for index, row in enumerate(rows, start=1)
             if self._strip_text(row[0]) is not None

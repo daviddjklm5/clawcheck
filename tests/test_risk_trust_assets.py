@@ -89,14 +89,35 @@ class RiskTrustYamlAssetsTest(unittest.TestCase):
         cancel_non_hr_skip_rule = next(rule for rule in applicant_rules if rule["id"] == "APPLICANT_CANCEL_ROLE_NON_HR_SKIPPED")
         applicant_non_hr_rule = next(rule for rule in applicant_rules if rule["id"] == "APPLICANT_HR_NON_HR")
         approval_warzone_history_rule = next(rule for rule in approval_rules if rule["id"] == "APPROVAL_LOCAL_WITHOUT_WARZONE_HISTORY")
+        approval_warzone_current_round_rule = next(
+            rule for rule in approval_rules if rule["id"] == "APPROVAL_LOCAL_WITHOUT_WARZONE_CURRENT_ROUND"
+        )
         missing_catalog_rule = next(rule for rule in permission_rules if rule["id"] == "PERMISSION_CATALOG_MISSING")
         cancel_role_rule = next(rule for rule in permission_rules if rule["id"] == "PERMISSION_CANCEL_ROLE")
         b_and_below_skip_rule = next(rule for rule in permission_rules if rule["id"] == "PERMISSION_B_AND_BELOW_SKIPPED")
+        cancel_role_target_org_skip_rule = next(
+            rule for rule in target_org_rules if rule["id"] == "TARGET_ORG_CANCEL_ROLE_SKIPPED"
+        )
         skipped_scope_rule = next(rule for rule in target_org_rules if rule["id"] == "TARGET_ORG_SCOPE_SKIPPED")
         l4_skip_rule = next(rule for rule in target_org_rules if rule["id"] == "TARGET_ORG_L4_SKIPPED")
+        local_same_company_trusted_rule = next(
+            rule for rule in target_org_rules if rule["id"] == "TARGET_ORG_LOCAL_SAME_COMPANY_TRUSTED"
+        )
+        same_company_auth_map_rule = next(
+            rule for rule in target_org_rules if rule["id"] == "TARGET_ORG_SAME_COMPANY_AUTH_LEVEL_MAP"
+        )
+        l1_not_allowed_rule = next(rule for rule in target_org_rules if rule["id"] == "TARGET_ORG_L1_NOT_ALLOWED")
+        l2_not_allowed_rule = next(rule for rule in target_org_rules if rule["id"] == "TARGET_ORG_L2_NOT_ALLOWED")
+        l2_representative_office_as_l3_rule = next(
+            rule for rule in target_org_rules if rule["id"] == "TARGET_ORG_L2_REPRESENTATIVE_OFFICE_AS_L3"
+        )
+        representative_office_auth_map_rule = next(
+            rule for rule in target_org_rules if rule["id"] == "TARGET_ORG_REPRESENTATIVE_OFFICE_AUTH_LEVEL_MAP"
+        )
         cross_unit_low_rule = next(rule for rule in target_org_rules if rule["id"] == "TARGET_ORG_CROSS_UNIT_LOW")
         cross_unit_high_rule = next(rule for rule in target_org_rules if rule["id"] == "TARGET_ORG_CROSS_UNIT_HIGH")
         cross_unit_other_rule = next(rule for rule in target_org_rules if rule["id"] == "TARGET_ORG_CROSS_UNIT_OTHER")
+        auth_level_map_rule = next(rule for rule in target_org_rules if rule["id"] == "TARGET_ORG_AUTH_LEVEL_MAP")
 
         self.assertEqual(cancel_non_hr_skip_rule["score"], 2.5)
         self.assertEqual(
@@ -106,6 +127,18 @@ class RiskTrustYamlAssetsTest(unittest.TestCase):
         self.assertEqual(
             approval_warzone_history_rule["when"]["all_details_cancel_role_apply_type"],
             False,
+        )
+        self.assertEqual(
+            approval_warzone_history_rule["when"]["applicant_org_unit_name_not_in_ref"],
+            "approval_warzone_check_exempt_org_units",
+        )
+        self.assertEqual(
+            approval_warzone_current_round_rule["when"]["applicant_org_unit_name_not_in_ref"],
+            "approval_warzone_check_exempt_org_units",
+        )
+        self.assertEqual(
+            constants["constants"]["approval_warzone_check_exempt_org_units"],
+            ["祥盈企服"],
         )
         self.assertEqual(missing_catalog_rule["score"], 0.5)
         self.assertEqual(missing_catalog_rule["intervention_action"], "管理员更新权限列表后复核")
@@ -131,6 +164,11 @@ class RiskTrustYamlAssetsTest(unittest.TestCase):
             "permission_level_skip_assessment_levels",
         )
         self.assertEqual(b_and_below_skip_rule["score"], 2.5)
+        self.assertEqual(cancel_role_target_org_skip_rule["score"], 2.5)
+        self.assertEqual(
+            cancel_role_target_org_skip_rule["when"]["apply_type_in_ref"],
+            "cancel_role_apply_types",
+        )
         self.assertEqual(skipped_scope_rule["score"], 2.5)
         self.assertEqual(l4_skip_rule["score"], 2.5)
         self.assertEqual(
@@ -138,8 +176,104 @@ class RiskTrustYamlAssetsTest(unittest.TestCase):
             "target_org_auth_level_skip_assessment_levels",
         )
         self.assertEqual(
+            l4_skip_rule["when"]["applicant_org_unit_not_equal_target_org_unit"],
+            False,
+        )
+        self.assertEqual(local_same_company_trusted_rule["score"], 2.5)
+        self.assertEqual(
+            local_same_company_trusted_rule["when"]["applicant_process_level_category_equals"],
+            "属地组织",
+        )
+        self.assertEqual(
+            local_same_company_trusted_rule["when"]["permission_target_company_equal_target_org_company"],
+            True,
+        )
+        self.assertEqual(
+            same_company_auth_map_rule["when"]["permission_target_company_equal_target_org_company"],
+            True,
+        )
+        self.assertEqual(
+            same_company_auth_map_rule["when"]["applicant_process_level_category_not_in_ref"],
+            "target_org_same_company_trusted_process_categories",
+        )
+        self.assertEqual(
+            same_company_auth_map_rule["when"]["target_org_unit_name_not_in_ref"],
+            "target_org_l2_representative_office_org_units",
+        )
+        self.assertEqual(
+            same_company_auth_map_rule["score_map_ref"],
+            "organization_auth_level_scores",
+        )
+        self.assertEqual(
+            constants["constants"]["target_org_same_company_trusted_process_categories"],
+            ["属地组织"],
+        )
+        self.assertEqual(
+            l1_not_allowed_rule["when"]["apply_type_not_in_ref"],
+            "cancel_role_apply_types",
+        )
+        self.assertEqual(
+            l1_not_allowed_rule["when"]["permission_target_company_equal_target_org_company"],
+            False,
+        )
+        self.assertEqual(
+            l2_not_allowed_rule["when"]["apply_type_not_in_ref"],
+            "cancel_role_apply_types",
+        )
+        self.assertEqual(
+            l2_not_allowed_rule["when"]["target_org_unit_name_not_in_ref"],
+            "target_org_l2_representative_office_org_units",
+        )
+        self.assertEqual(
+            l2_not_allowed_rule["when"]["permission_target_company_equal_target_org_company"],
+            False,
+        )
+        self.assertEqual(
+            l2_representative_office_as_l3_rule["when"]["target_org_unit_name_in_ref"],
+            "target_org_l2_representative_office_org_units",
+        )
+        self.assertEqual(l2_representative_office_as_l3_rule["score"], 1.5)
+        self.assertEqual(
+            representative_office_auth_map_rule["when"]["target_org_unit_name_in_ref"],
+            "target_org_l2_representative_office_org_units",
+        )
+        self.assertEqual(
+            representative_office_auth_map_rule["when"]["target_org_auth_level_in_ref"],
+            "target_org_representative_office_auth_level_map_levels",
+        )
+        self.assertEqual(
+            constants["constants"]["target_org_representative_office_auth_level_map_levels"],
+            ["一级授权", "三级授权", "<NULL>"],
+        )
+        self.assertEqual(
             constants["constants"]["cross_org_assessment_exempt_process_categories"],
             ["人事远程交付中心", "BG人行中心与学社", "蝶发人行部", "战区人行部门", "属地服务站"],
+        )
+        self.assertEqual(
+            constants["constants"]["target_org_l2_representative_office_org_units"],
+            [
+                "安徽战区代表处",
+                "福州战区代表处",
+                "厦门战区代表处",
+                "山东战区代表处",
+                "杭州战区代表处",
+                "东北战区代表处",
+                "鄂豫战区代表处",
+                "湘赣战区代表处",
+                "南京战区代表处",
+                "西北战区代表处",
+                "深圳战区代表处",
+                "津晋战区代表处",
+                "京冀战区代表处",
+                "福建战区代表处",
+                "川云战区代表处",
+                "广州战区代表处",
+                "琼桂战区代表处",
+                "佛山战区代表处",
+                "苏州战区代表处",
+                "上海战区代表处",
+                "渝贵战区代表处",
+            ],
         )
         self.assertEqual(
             constants["constants"]["cross_org_high_trust_process_categories"],
@@ -150,24 +284,51 @@ class RiskTrustYamlAssetsTest(unittest.TestCase):
             "cross_org_assessment_exempt_process_categories",
         )
         self.assertEqual(
-            cross_unit_low_rule["when"]["target_org_auth_level_not_in_ref"],
-            "target_org_auth_level_skip_assessment_levels",
+            cross_unit_low_rule["when"]["apply_type_not_in_ref"],
+            "cancel_role_apply_types",
+        )
+        self.assertNotIn("target_org_auth_level_not_in_ref", cross_unit_low_rule["when"])
+        self.assertEqual(
+            cross_unit_low_rule["when"]["permission_target_company_equal_target_org_company"],
+            False,
         )
         self.assertEqual(
             cross_unit_high_rule["when"]["applicant_process_level_category_not_in_ref"],
             "cross_org_assessment_exempt_process_categories",
         )
         self.assertEqual(
-            cross_unit_high_rule["when"]["target_org_auth_level_not_in_ref"],
-            "target_org_auth_level_skip_assessment_levels",
+            cross_unit_high_rule["when"]["apply_type_not_in_ref"],
+            "cancel_role_apply_types",
+        )
+        self.assertNotIn("target_org_auth_level_not_in_ref", cross_unit_high_rule["when"])
+        self.assertEqual(
+            cross_unit_high_rule["when"]["permission_target_company_equal_target_org_company"],
+            False,
         )
         self.assertEqual(
             cross_unit_other_rule["when"]["applicant_process_level_category_not_in_ref"],
             "cross_org_assessment_exempt_process_categories",
         )
         self.assertEqual(
-            cross_unit_other_rule["when"]["target_org_auth_level_not_in_ref"],
-            "target_org_auth_level_skip_assessment_levels",
+            cross_unit_other_rule["when"]["apply_type_not_in_ref"],
+            "cancel_role_apply_types",
+        )
+        self.assertNotIn("target_org_auth_level_not_in_ref", cross_unit_other_rule["when"])
+        self.assertEqual(
+            cross_unit_other_rule["when"]["permission_target_company_equal_target_org_company"],
+            False,
+        )
+        self.assertEqual(
+            auth_level_map_rule["when"]["apply_type_not_in_ref"],
+            "cancel_role_apply_types",
+        )
+        self.assertEqual(
+            auth_level_map_rule["when"]["target_org_unit_name_not_in_ref"],
+            "target_org_l2_representative_office_org_units",
+        )
+        self.assertEqual(
+            auth_level_map_rule["when"]["permission_target_company_equal_target_org_company"],
+            False,
         )
 
     def test_constants_yaml_contains_summary_conclusion_mapping(self) -> None:

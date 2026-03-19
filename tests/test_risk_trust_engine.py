@@ -107,6 +107,102 @@ class RiskTrustEvaluatorTest(unittest.TestCase):
         self.assertEqual(approval_detail["rule_id"], "APPROVAL_LOCAL_WITHOUT_WARZONE_HISTORY")
         self.assertEqual(approval_detail["score"], 0.0)
 
+    def test_xiangying_org_unit_skips_warzone_history_check(self) -> None:
+        bundle = {
+            "basic_info": {"document_no": "RA-20260318-00020160", "employee_no": "001"},
+            "applicant_person_attributes": {"hr_type": "H1"},
+            "applicant_org_attributes": {"process_level_category": "属地组织", "org_unit_name": "祥盈企服"},
+            "approval_records": [
+                {
+                    "node_name": "权限申请提交",
+                    "approver_employee_no": "001",
+                    "approval_action": "提交",
+                    "approval_time": "2026-03-18 10:00:00",
+                    "approver_org_attributes": {"process_level_category": "属地组织"},
+                },
+                {
+                    "node_name": "部门负责人",
+                    "approver_employee_no": "008",
+                    "approval_action": "同意",
+                    "approval_time": "2026-03-18 11:00:00",
+                    "approver_org_attributes": {"process_level_category": "万物云本部"},
+                },
+            ],
+            "permission_details": [
+                {
+                    "document_no": "RA-20260318-00020160",
+                    "role_code": "C001",
+                    "role_name": "常规权限",
+                    "catalog_matched": True,
+                    "permission_level": "C类-常规",
+                    "skip_org_scope_check": True,
+                    "targets": [{"org_code": None, "org_auth_level": None, "org_unit_name": None}],
+                }
+            ],
+        }
+
+        summary_rows, detail_rows = self.evaluator.evaluate_documents([bundle], assessment_batch_no="audit_batch_20160")
+
+        approval_detail = next(row for row in detail_rows if row["dimension_name"] == "审批人判断")
+        self.assertEqual(approval_detail["rule_id"], "APPROVAL_CHAIN_DEFAULT")
+        self.assertEqual(approval_detail["score"], 2.5)
+        self.assertEqual(summary_rows[0]["final_score"], 2.5)
+
+    def test_xiangying_org_unit_skips_warzone_current_round_check(self) -> None:
+        bundle = {
+            "basic_info": {"document_no": "RA-12", "employee_no": "001"},
+            "applicant_person_attributes": {"hr_type": "H1"},
+            "applicant_org_attributes": {"process_level_category": "属地组织", "org_unit_name": "祥盈企服"},
+            "approval_records": [
+                {
+                    "node_name": "权限申请提交",
+                    "approver_employee_no": "001",
+                    "approval_action": "提交",
+                    "approval_time": "2026-03-19 09:00:00",
+                    "approver_org_attributes": {"process_level_category": "属地组织"},
+                },
+                {
+                    "node_name": "部门负责人",
+                    "approver_employee_no": "008",
+                    "approval_action": "同意",
+                    "approval_time": "2026-03-19 09:30:00",
+                    "approver_org_attributes": {"process_level_category": "战区人行部门"},
+                },
+                {
+                    "node_name": "权限申请提交",
+                    "approver_employee_no": "001",
+                    "approval_action": "提交",
+                    "approval_time": "2026-03-19 10:00:00",
+                    "approver_org_attributes": {"process_level_category": "属地组织"},
+                },
+                {
+                    "node_name": "部门负责人",
+                    "approver_employee_no": "009",
+                    "approval_action": "同意",
+                    "approval_time": "2026-03-19 10:30:00",
+                    "approver_org_attributes": {"process_level_category": "万物云本部"},
+                },
+            ],
+            "permission_details": [
+                {
+                    "document_no": "RA-12",
+                    "role_code": "C001",
+                    "role_name": "常规权限",
+                    "catalog_matched": True,
+                    "permission_level": "C类-常规",
+                    "skip_org_scope_check": True,
+                    "targets": [{"org_code": None, "org_auth_level": None, "org_unit_name": None}],
+                }
+            ],
+        }
+
+        summary_rows, detail_rows = self.evaluator.evaluate_documents([bundle], assessment_batch_no="audit_batch_12")
+
+        approval_detail = next(row for row in detail_rows if row["dimension_name"] == "审批人判断")
+        self.assertEqual(approval_detail["rule_id"], "APPROVAL_CHAIN_DEFAULT")
+        self.assertEqual(approval_detail["score"], 2.5)
+        self.assertEqual(summary_rows[0]["final_score"], 2.5)
+
     def test_low_score_details_are_aggregated(self) -> None:
         bundle = {
             "basic_info": {"document_no": "RA-3", "employee_no": "001"},
@@ -268,7 +364,7 @@ class RiskTrustEvaluatorTest(unittest.TestCase):
         self.assertEqual(target_org_detail["score"], 2.0)
         self.assertEqual(summary_rows[0]["final_score"], 2.0)
 
-    def test_fourth_auth_level_target_org_skips_org_dimension_even_when_cross_unit(self) -> None:
+    def test_cross_org_rule_has_priority_over_l4_skip_when_cross_unit(self) -> None:
         bundle = {
             "basic_info": {"document_no": "RA-11", "employee_no": "001"},
             "applicant_person_attributes": {"hr_type": "H1"},
@@ -305,9 +401,236 @@ class RiskTrustEvaluatorTest(unittest.TestCase):
         summary_rows, detail_rows = self.evaluator.evaluate_documents([bundle], assessment_batch_no="audit_batch_11")
 
         target_org_detail = next(row for row in detail_rows if row["dimension_name"] == "申请的组织")
+        self.assertEqual(target_org_detail["rule_id"], "TARGET_ORG_CROSS_UNIT_LOW")
+        self.assertEqual(target_org_detail["score"], 0.5)
+        self.assertEqual(summary_rows[0]["final_score"], 0.5)
+
+    def test_l4_skip_still_works_when_not_cross_unit(self) -> None:
+        bundle = {
+            "basic_info": {"document_no": "RA-11-SAME-UNIT", "employee_no": "001"},
+            "applicant_person_attributes": {"hr_type": "H1"},
+            "applicant_org_attributes": {"process_level_category": "属地组织", "org_unit_name": "组织A"},
+            "approval_records": [
+                {
+                    "node_name": "权限申请提交",
+                    "approver_employee_no": "001",
+                    "approval_action": "提交",
+                    "approval_time": "2026-03-19 10:00:00",
+                    "approver_org_attributes": {"process_level_category": "属地组织"},
+                },
+                {
+                    "node_name": "战区权限对接人",
+                    "approver_employee_no": "008",
+                    "approval_action": "同意",
+                    "approval_time": "2026-03-19 11:00:00",
+                    "approver_org_attributes": {"process_level_category": "战区人行部门"},
+                },
+            ],
+            "permission_details": [
+                {
+                    "document_no": "RA-11-SAME-UNIT",
+                    "role_code": "C011",
+                    "role_name": "常规权限",
+                    "catalog_matched": True,
+                    "permission_level": "C类-常规",
+                    "skip_org_scope_check": False,
+                    "targets": [{"org_code": "ORG11", "org_auth_level": "四级授权", "org_unit_name": "组织A"}],
+                }
+            ],
+        }
+
+        summary_rows, detail_rows = self.evaluator.evaluate_documents([bundle], assessment_batch_no="audit_batch_11_same_unit")
+
+        target_org_detail = next(row for row in detail_rows if row["dimension_name"] == "申请的组织")
         self.assertEqual(target_org_detail["rule_id"], "TARGET_ORG_L4_SKIPPED")
         self.assertEqual(target_org_detail["score"], 2.5)
         self.assertEqual(summary_rows[0]["final_score"], 2.5)
+
+    def test_l2_representative_office_is_downgraded_to_l3_for_scoring(self) -> None:
+        bundle = {
+            "basic_info": {"document_no": "RA-13", "employee_no": "001"},
+            "applicant_person_attributes": {"hr_type": "H1"},
+            "applicant_org_attributes": {"process_level_category": "属地组织", "org_unit_name": "广州战区代表处"},
+            "approval_records": [
+                {
+                    "node_name": "权限申请提交",
+                    "approver_employee_no": "001",
+                    "approval_action": "提交",
+                    "approval_time": "2026-03-19 10:00:00",
+                    "approver_org_attributes": {"process_level_category": "属地组织"},
+                },
+                {
+                    "node_name": "战区权限对接人",
+                    "approver_employee_no": "008",
+                    "approval_action": "同意",
+                    "approval_time": "2026-03-19 11:00:00",
+                    "approver_org_attributes": {"process_level_category": "战区人行部门"},
+                },
+            ],
+            "permission_details": [
+                {
+                    "document_no": "RA-13",
+                    "role_code": "C013",
+                    "role_name": "常规权限",
+                    "catalog_matched": True,
+                    "permission_level": "C类-常规",
+                    "skip_org_scope_check": False,
+                    "targets": [{"org_code": "ORG13", "org_auth_level": "二级授权", "org_unit_name": "广州战区代表处"}],
+                }
+            ],
+        }
+
+        summary_rows, detail_rows = self.evaluator.evaluate_documents([bundle], assessment_batch_no="audit_batch_13")
+
+        target_org_detail = next(row for row in detail_rows if row["dimension_name"] == "申请的组织")
+        self.assertEqual(target_org_detail["rule_id"], "TARGET_ORG_L2_REPRESENTATIVE_OFFICE_AS_L3")
+        self.assertEqual(target_org_detail["score"], 1.5)
+        self.assertEqual(summary_rows[0]["final_score"], 1.5)
+
+    def test_representative_office_non_l2_auth_still_uses_auth_level_map(self) -> None:
+        bundle = {
+            "basic_info": {"document_no": "RA-13B", "employee_no": "001"},
+            "applicant_person_attributes": {"hr_type": "H1"},
+            "applicant_org_attributes": {"process_level_category": "属地服务站", "org_unit_name": "人力资源与行政服务中心"},
+            "approval_records": [
+                {
+                    "node_name": "权限申请提交",
+                    "approver_employee_no": "001",
+                    "approval_action": "提交",
+                    "approval_time": "2026-03-19 10:00:00",
+                    "approver_org_attributes": {"process_level_category": "属地服务站"},
+                },
+                {
+                    "node_name": "战区权限对接人",
+                    "approver_employee_no": "008",
+                    "approval_action": "同意",
+                    "approval_time": "2026-03-19 11:00:00",
+                    "approver_org_attributes": {"process_level_category": "战区人行部门"},
+                },
+            ],
+            "permission_details": [
+                {
+                    "document_no": "RA-13B",
+                    "role_code": "C013B",
+                    "role_name": "常规权限",
+                    "catalog_matched": True,
+                    "permission_level": "C类-常规",
+                    "skip_org_scope_check": False,
+                    "targets": [
+                        {
+                            "org_code": "ORG13B",
+                            "org_auth_level": "三级授权",
+                            "org_unit_name": "琼桂战区代表处",
+                            "org_company_name": "琼桂战区代表处",
+                        }
+                    ],
+                }
+            ],
+        }
+
+        summary_rows, detail_rows = self.evaluator.evaluate_documents([bundle], assessment_batch_no="audit_batch_13b")
+
+        target_org_detail = next(row for row in detail_rows if row["dimension_name"] == "申请的组织")
+        self.assertEqual(target_org_detail["rule_id"], "TARGET_ORG_REPRESENTATIVE_OFFICE_AUTH_LEVEL_MAP")
+        self.assertEqual(target_org_detail["score"], 1.5)
+        self.assertEqual(summary_rows[0]["final_score"], 1.5)
+
+    def test_local_org_same_company_sets_target_org_to_high_trust(self) -> None:
+        bundle = {
+            "basic_info": {"document_no": "RA-LOCAL-1", "employee_no": "001", "company_name": "东莞滨海湾城资"},
+            "applicant_person_attributes": {"hr_type": "H1"},
+            "applicant_org_attributes": {"process_level_category": "属地组织", "org_unit_name": "万物云城"},
+            "approval_records": [
+                {
+                    "node_name": "权限申请提交",
+                    "approver_employee_no": "001",
+                    "approval_action": "提交",
+                    "approval_time": "2026-03-20 10:00:00",
+                    "approver_org_attributes": {"process_level_category": "属地组织"},
+                },
+                {
+                    "node_name": "战区权限对接人",
+                    "approver_employee_no": "008",
+                    "approval_action": "同意",
+                    "approval_time": "2026-03-20 11:00:00",
+                    "approver_org_attributes": {"process_level_category": "战区人行部门"},
+                },
+            ],
+            "permission_details": [
+                {
+                    "document_no": "RA-LOCAL-1",
+                    "role_code": "C001",
+                    "role_name": "常规权限",
+                    "catalog_matched": True,
+                    "permission_level": "C类-常规",
+                    "skip_org_scope_check": False,
+                    "targets": [
+                        {
+                            "org_code": "ORG-LOCAL-1",
+                            "org_auth_level": "一级授权",
+                            "org_unit_name": "万物云城",
+                            "org_company_name": "东莞滨海湾城资",
+                        }
+                    ],
+                }
+            ],
+        }
+
+        summary_rows, detail_rows = self.evaluator.evaluate_documents([bundle], assessment_batch_no="audit_batch_local_same_company")
+
+        target_org_detail = next(row for row in detail_rows if row["dimension_name"] == "申请的组织")
+        self.assertEqual(target_org_detail["rule_id"], "TARGET_ORG_LOCAL_SAME_COMPANY_TRUSTED")
+        self.assertEqual(target_org_detail["score"], 2.5)
+        self.assertEqual(summary_rows[0]["final_score"], 2.5)
+        self.assertEqual(summary_rows[0]["summary_conclusion"], "可信任")
+
+    def test_same_company_non_local_category_uses_auth_level_map(self) -> None:
+        bundle = {
+            "basic_info": {"document_no": "RA-SAME-1", "employee_no": "001", "company_name": "万物云本部"},
+            "applicant_person_attributes": {"hr_type": "H1"},
+            "applicant_org_attributes": {"process_level_category": "属地服务站", "org_unit_name": "人力资源与行政服务中心"},
+            "approval_records": [
+                {
+                    "node_name": "权限申请提交",
+                    "approver_employee_no": "001",
+                    "approval_action": "提交",
+                    "approval_time": "2026-03-20 10:00:00",
+                    "approver_org_attributes": {"process_level_category": "属地服务站"},
+                },
+                {
+                    "node_name": "战区权限对接人",
+                    "approver_employee_no": "008",
+                    "approval_action": "同意",
+                    "approval_time": "2026-03-20 11:00:00",
+                    "approver_org_attributes": {"process_level_category": "战区人行部门"},
+                },
+            ],
+            "permission_details": [
+                {
+                    "document_no": "RA-SAME-1",
+                    "role_code": "ZZ001",
+                    "role_name": "组织/岗位查看",
+                    "catalog_matched": True,
+                    "permission_level": "C类-常规",
+                    "skip_org_scope_check": False,
+                    "targets": [
+                        {
+                            "org_code": "ORG-SAME-1",
+                            "org_auth_level": None,
+                            "org_unit_name": "财务与资金管理中心",
+                            "org_company_name": "万物云本部",
+                        }
+                    ],
+                }
+            ],
+        }
+
+        summary_rows, detail_rows = self.evaluator.evaluate_documents([bundle], assessment_batch_no="audit_batch_same_company")
+
+        target_org_detail = next(row for row in detail_rows if row["dimension_name"] == "申请的组织")
+        self.assertEqual(target_org_detail["rule_id"], "TARGET_ORG_SAME_COMPANY_AUTH_LEVEL_MAP")
+        self.assertEqual(target_org_detail["score"], 2.0)
+        self.assertEqual(summary_rows[0]["final_score"], 2.0)
 
     def test_cancel_role_apply_type_uses_revoke_permission_rule(self) -> None:
         bundle = {
@@ -398,6 +721,49 @@ class RiskTrustEvaluatorTest(unittest.TestCase):
         self.assertEqual(permission_detail["rule_id"], "PERMISSION_CANCEL_ROLE")
         self.assertEqual(summary_rows[0]["final_score"], 2.5)
         self.assertEqual(summary_rows[0]["summary_conclusion"], "可信任")
+        self.assertFalse(summary_rows[0]["has_low_score_details"])
+
+    def test_cancel_role_skips_target_org_auth_level_and_cross_unit_risks(self) -> None:
+        bundle = {
+            "basic_info": {"document_no": "RA-12", "employee_no": "001"},
+            "applicant_person_attributes": {"hr_type": "H1"},
+            "applicant_org_attributes": {"process_level_category": "属地组织", "org_unit_name": "为家-朴邻"},
+            "approval_records": [
+                {
+                    "node_name": "权限申请提交",
+                    "approver_employee_no": "001",
+                    "approval_action": "提交",
+                    "approval_time": "2026-03-20 10:00:00",
+                    "approver_org_attributes": {"process_level_category": "属地组织"},
+                },
+                {
+                    "node_name": "战区权限对接人",
+                    "approver_employee_no": "008",
+                    "approval_action": "同意",
+                    "approval_time": "2026-03-20 11:00:00",
+                    "approver_org_attributes": {"process_level_category": "战区人行部门"},
+                },
+            ],
+            "permission_details": [
+                {
+                    "document_no": "RA-12",
+                    "role_code": "YG003",
+                    "role_name": "人员档案-可查看引出-无定薪无绩效",
+                    "apply_type": "取消角色",
+                    "catalog_matched": True,
+                    "permission_level": "B1类-涉薪",
+                    "skip_org_scope_check": False,
+                    "targets": [{"org_code": "ORG12", "org_auth_level": "二级授权", "org_unit_name": "蝶城发展中心"}],
+                }
+            ],
+        }
+
+        summary_rows, detail_rows = self.evaluator.evaluate_documents([bundle], assessment_batch_no="audit_batch_12")
+
+        target_org_detail = next(row for row in detail_rows if row["dimension_name"] == "申请的组织")
+        self.assertEqual(target_org_detail["rule_id"], "TARGET_ORG_CANCEL_ROLE_SKIPPED")
+        self.assertEqual(target_org_detail["score"], 2.5)
+        self.assertEqual(summary_rows[0]["final_score"], 2.5)
         self.assertFalse(summary_rows[0]["has_low_score_details"])
 
     def test_cross_org_unit_rules_do_not_match_for_exempt_process_categories(self) -> None:

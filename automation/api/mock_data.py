@@ -333,6 +333,7 @@ PROCESS_DASHBOARD = {
                 {"id": "d1", "ruleCode": "RT-001", "ruleName": "申请人 HR 类型匹配", "result": "命中", "riskLevel": "低", "trustLevel": "高", "hitDetail": "申请人属于财务条线，角色权限与岗位相符"},
                 {"id": "d2", "ruleCode": "RT-013", "ruleName": "组织范围例外校验", "result": "命中", "riskLevel": "中", "trustLevel": "中", "hitDetail": "存在 1 个跳过组织范围角色，需要人工确认"},
             ],
+            "scoreBasisDetails": [],
             "notes": [
                 "当前页面仅展示建议，不直接回写审批动作。",
                 "103 计划接入后，可在此位置增加审批 / 驳回 / 加签按钮。",
@@ -360,6 +361,7 @@ PROCESS_DASHBOARD = {
                 {"id": "d3", "ruleCode": "RT-021", "ruleName": "岗位与权限级别偏差", "result": "命中", "riskLevel": "高", "trustLevel": "低", "hitDetail": "采购管理部申请总账查询，超出常规岗位边界"},
                 {"id": "d4", "ruleCode": "RT-031", "ruleName": "审批轨迹完整性", "result": "命中", "riskLevel": "高", "trustLevel": "低", "hitDetail": "审批记录当前不完整，建议补采后再进入审批建议"},
             ],
+            "scoreBasisDetails": [],
             "notes": [
                 "建议在单据详情顶部保留“重新采集”快捷入口。",
                 "当前为 DataGrid 社区版方案，详情区域采用列表 + 页签，不依赖 master-detail。",
@@ -387,6 +389,7 @@ PROCESS_DASHBOARD = {
             "riskDetails": [
                 {"id": "d5", "ruleCode": "RT-011", "ruleName": "组织范围与角色匹配", "result": "命中", "riskLevel": "中", "trustLevel": "中", "hitDetail": "角色与项目中心组织范围匹配，但仍需业务确认"},
             ],
+            "scoreBasisDetails": [],
             "notes": [
                 "适合作为 103 计划补审批动作后的联动验收样例。",
                 "后续可追加任务日志页签，用于展示详细执行轨迹。",

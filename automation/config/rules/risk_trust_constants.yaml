@@ -15,6 +15,9 @@ constants:
   ignored_approval_node_names:
     - "平台运营组对接人"
 
+  approval_warzone_check_exempt_org_units:
+    - "祥盈企服"
+
   remote_allowed_process_categories:
     - "人事远程交付中心"
 
@@ -51,6 +54,9 @@ constants:
   cross_org_high_trust_process_categories:
     - "万物云本部"
 
+  target_org_same_company_trusted_process_categories:
+    - "属地组织"
+
   applicant_process_category_scores:
     "战区人行部门": 2.5
     "属地服务站": 2.5
@@ -58,7 +64,7 @@ constants:
     "BG人行中心与学社": 1.0
     "属地组织": 2.5
     "万物云本部": 1.0
-    "业务单元本部": 1.5
+    "业务单元本部": 2.0
     "<NULL>": 0.5
     "蝶发人行部": 1.0
 
@@ -70,6 +76,34 @@ constants:
 
   target_org_auth_level_skip_assessment_levels:
     - "四级授权"
+
+  target_org_l2_representative_office_org_units:
+    - "安徽战区代表处"
+    - "福州战区代表处"
+    - "厦门战区代表处"
+    - "山东战区代表处"
+    - "杭州战区代表处"
+    - "东北战区代表处"
+    - "鄂豫战区代表处"
+    - "湘赣战区代表处"
+    - "南京战区代表处"
+    - "西北战区代表处"
+    - "深圳战区代表处"
+    - "津晋战区代表处"
+    - "京冀战区代表处"
+    - "福建战区代表处"
+    - "川云战区代表处"
+    - "广州战区代表处"
+    - "琼桂战区代表处"
+    - "佛山战区代表处"
+    - "苏州战区代表处"
+    - "上海战区代表处"
+    - "渝贵战区代表处"
+
+  target_org_representative_office_auth_level_map_levels:
+    - "一级授权"
+    - "三级授权"
+    - "<NULL>"
 
   summary_conclusion_mapping:
     "0.0":

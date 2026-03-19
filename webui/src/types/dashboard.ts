@@ -283,6 +283,18 @@ export interface RiskDetailRow {
   interventionAction: string;
 }
 
+export interface ScoreBasisDetailRow {
+  id: string;
+  dimensionName: string;
+  ruleId: string;
+  ruleSummary: string;
+  score: number;
+  basisText: string;
+  rawDetailCount: number;
+  affectedRoleCount: number;
+  affectedOrgCount: number;
+}
+
 export interface FeedbackGroupRow {
   id: string;
   category: string;
@@ -312,6 +324,7 @@ export interface ProcessDetail {
   approvals: ApprovalRow[];
   orgScopes: OrgScopeRow[];
   riskDetails: RiskDetailRow[];
+  scoreBasisDetails: ScoreBasisDetailRow[];
   notes: string[];
 }
 

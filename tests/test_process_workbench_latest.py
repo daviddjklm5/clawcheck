@@ -190,6 +190,7 @@ class ProcessWorkbenchLatestSnapshotTest(unittest.TestCase):
             patch.object(self.store, "_fetch_org_attributes_map", return_value={}),
             patch.object(self.store, "_fetch_process_org_scope_display_rows", return_value=[]),
             patch.object(self.store, "_fetch_process_low_score_rows", return_value=[]) as mocked_fetch_low_score,
+            patch.object(self.store, "_fetch_process_score_basis_rows", return_value=[]) as mocked_fetch_score_basis,
             patch.object(self.store, "_fetch_process_feedback_group_rows", return_value=[]),
             patch(
                 "automation.db.postgres.build_low_score_feedback",
@@ -205,13 +206,85 @@ class ProcessWorkbenchLatestSnapshotTest(unittest.TestCase):
 
         mocked_fetch_latest.assert_called_once_with(self.cursor, document_no="RA-TEST-001")
         mocked_fetch_low_score.assert_called_once_with(self.cursor, "audit_20260316_121915", ["RA-TEST-001"])
+        mocked_fetch_score_basis.assert_called_once_with(self.cursor, "audit_20260316_121915", ["RA-TEST-001"])
         batch_field = next(field for field in result["overviewFields"] if field["label"] == "评估批次号")
         todo_field = next(field for field in result["overviewFields"] if field["label"] == "待办处理状态")
         self.assertEqual(result["documentNo"], "RA-TEST-001")
         self.assertEqual(batch_field["value"], "audit_20260316_121915")
         self.assertEqual(todo_field["value"], "已处理")
         self.assertEqual(result["feedbackOverview"]["summaryConclusionLabel"], "加强审核")
+        self.assertEqual(result["scoreBasisDetails"], [])
         self.assertEqual(result["approvals"], [])
+
+    def test_fetch_process_document_detail_includes_score_basis_details_when_score_below_full_score(self) -> None:
+        summary_row = {
+            "document_no": "RA-TEST-001",
+            "applicant_name": "张三",
+            "employee_no": "0001",
+            "permission_target": "张三",
+            "apply_reason": "测试申请原因",
+            "document_status": "已提交",
+            "todo_process_status": "待处理",
+            "todo_status_updated_at": datetime(2026, 3, 16, 12, 31, 0),
+            "department_name": "人事部",
+            "apply_time": None,
+            "applicant_identity_label": "属地 HR",
+            "applicant_org_unit_name": "人力资源与行政服务中心",
+            "latest_approval_time": datetime(2026, 3, 16, 10, 42, 2),
+            "applicant_process_level_category": "业务单元本部",
+            "final_score": 1.5,
+            "summary_conclusion": "仅关注",
+            "suggested_action": "warning",
+            "lowest_hit_dimension": "申请人所属的组织流程层级分类",
+            "low_score_detail_count": 0,
+            "assessment_batch_no": "audit_20260316_121915",
+            "assessment_version": "2026-03-15",
+            "assessed_at": datetime(2026, 3, 16, 12, 19, 15),
+            "assessment_explain": "",
+        }
+        score_basis_rows = [
+            {
+                "id": "basis-1",
+                "dimension_name": "申请人所属的组织流程层级分类",
+                "rule_id": "APPLICANT_PROCESS_CATEGORY_SCORE_MAP",
+                "rule_summary": "按 applicant_process_category 映射评分",
+                "score": 1.5,
+                "basis_text": "按配置映射得分 1.5",
+                "raw_detail_count": 1,
+                "affected_role_count": 0,
+                "affected_org_count": 0,
+            }
+        ]
+
+        with (
+            patch.object(self.store, "ensure_table"),
+            patch.object(self.store, "connect", self._fake_connect),
+            patch.object(self.store, "_fetch_latest_process_summary_rows", return_value=[summary_row]),
+            patch.object(self.store, "_fetch_process_role_rows", return_value=[]),
+            patch.object(self.store, "_fetch_approval_rows", return_value=[]),
+            patch.object(self.store, "_fetch_person_attributes_map", return_value={}),
+            patch.object(self.store, "_fetch_org_attributes_map", return_value={}),
+            patch.object(self.store, "_fetch_process_org_scope_display_rows", return_value=[]),
+            patch.object(self.store, "_fetch_process_low_score_rows", return_value=[]),
+            patch.object(self.store, "_fetch_process_score_basis_rows", return_value=score_basis_rows),
+            patch.object(self.store, "_fetch_process_feedback_group_rows", return_value=[]),
+            patch(
+                "automation.db.postgres.build_low_score_feedback",
+                return_value={
+                    "summaryConclusionLabel": "仅关注",
+                    "feedbackStats": [],
+                    "feedbackGroups": [],
+                    "feedbackLines": [],
+                },
+            ),
+        ):
+            result = self.store.fetch_process_document_detail("RA-TEST-001")
+
+        self.assertEqual(len(result["scoreBasisDetails"]), 1)
+        self.assertEqual(result["scoreBasisDetails"][0]["ruleId"], "APPLICANT_PROCESS_CATEGORY_SCORE_MAP")
+        self.assertEqual(result["scoreBasisDetails"][0]["score"], 1.5)
+        self.assertEqual(result["scoreBasisDetails"][0]["basisText"], "按配置映射得分 1.5")
+        self.assertTrue(any("得分<2.5" in note for note in result["notes"]))
 
     def test_fetch_process_document_detail_sorts_roles_by_permission_level_priority(self) -> None:
         summary_row = {
@@ -332,6 +405,7 @@ class ProcessWorkbenchLatestSnapshotTest(unittest.TestCase):
             patch.object(self.store, "_fetch_org_attributes_map", return_value={}),
             patch.object(self.store, "_fetch_process_org_scope_display_rows", return_value=[]),
             patch.object(self.store, "_fetch_process_low_score_rows", return_value=[]),
+            patch.object(self.store, "_fetch_process_score_basis_rows", return_value=[]),
             patch.object(self.store, "_fetch_process_feedback_group_rows", return_value=[]),
             patch(
                 "automation.db.postgres.build_low_score_feedback",
@@ -424,6 +498,7 @@ class ProcessWorkbenchLatestSnapshotTest(unittest.TestCase):
             patch.object(self.store, "_fetch_org_attributes_map", return_value=org_attributes),
             patch.object(self.store, "_fetch_process_org_scope_display_rows", return_value=[]),
             patch.object(self.store, "_fetch_process_low_score_rows", return_value=[]),
+            patch.object(self.store, "_fetch_process_score_basis_rows", return_value=[]),
             patch.object(self.store, "_fetch_process_feedback_group_rows", return_value=[]),
             patch(
                 "automation.db.postgres.build_low_score_feedback",
@@ -539,6 +614,7 @@ class ProcessWorkbenchLatestSnapshotTest(unittest.TestCase):
             patch.object(self.store, "_fetch_org_attributes_map", return_value={}),
             patch.object(self.store, "_fetch_process_org_scope_display_rows", return_value=org_scope_rows),
             patch.object(self.store, "_fetch_process_low_score_rows", return_value=[]),
+            patch.object(self.store, "_fetch_process_score_basis_rows", return_value=[]),
             patch.object(self.store, "_fetch_process_feedback_group_rows", return_value=[]),
             patch(
                 "automation.db.postgres.build_low_score_feedback",
