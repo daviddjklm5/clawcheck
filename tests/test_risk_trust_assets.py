@@ -108,6 +108,12 @@ class RiskTrustYamlAssetsTest(unittest.TestCase):
         )
         l1_not_allowed_rule = next(rule for rule in target_org_rules if rule["id"] == "TARGET_ORG_L1_NOT_ALLOWED")
         l2_not_allowed_rule = next(rule for rule in target_org_rules if rule["id"] == "TARGET_ORG_L2_NOT_ALLOWED")
+        l2_local_service_warzone_override_rule = next(
+            rule for rule in target_org_rules if rule["id"] == "TARGET_ORG_L2_LOCAL_SERVICE_WARZONE_OVERRIDE"
+        )
+        l2_local_service_warzone_cross_company_rule = next(
+            rule for rule in target_org_rules if rule["id"] == "TARGET_ORG_L2_LOCAL_SERVICE_WARZONE_CROSS_COMPANY"
+        )
         l2_representative_office_as_l3_rule = next(
             rule for rule in target_org_rules if rule["id"] == "TARGET_ORG_L2_REPRESENTATIVE_OFFICE_AS_L3"
         )
@@ -225,14 +231,38 @@ class RiskTrustYamlAssetsTest(unittest.TestCase):
             "target_org_l2_representative_office_org_units",
         )
         self.assertEqual(
+            l2_not_allowed_rule["when"]["applicant_process_level_category_not_in_ref"],
+            "l2_not_allowed_exempt_process_categories",
+        )
+        self.assertEqual(
             l2_not_allowed_rule["when"]["permission_target_company_equal_target_org_company"],
             False,
+        )
+        self.assertEqual(
+            l2_local_service_warzone_override_rule["when"]["applicant_process_level_category_in_ref"],
+            "l2_auth_level_map_process_categories",
+        )
+        self.assertEqual(
+            l2_local_service_warzone_override_rule["score"],
+            1.5,
+        )
+        self.assertEqual(
+            l2_local_service_warzone_cross_company_rule["when"]["applicant_process_level_category_in_ref"],
+            "l2_auth_level_map_process_categories",
+        )
+        self.assertEqual(
+            l2_local_service_warzone_cross_company_rule["when"]["permission_target_company_equal_target_org_company"],
+            False,
+        )
+        self.assertEqual(
+            l2_local_service_warzone_cross_company_rule["score"],
+            1.5,
         )
         self.assertEqual(
             l2_representative_office_as_l3_rule["when"]["target_org_unit_name_in_ref"],
             "target_org_l2_representative_office_org_units",
         )
-        self.assertEqual(l2_representative_office_as_l3_rule["score"], 1.5)
+        self.assertEqual(l2_representative_office_as_l3_rule["score"], 2.5)
         self.assertEqual(
             representative_office_auth_map_rule["when"]["target_org_unit_name_in_ref"],
             "target_org_l2_representative_office_org_units",
@@ -240,6 +270,22 @@ class RiskTrustYamlAssetsTest(unittest.TestCase):
         self.assertEqual(
             representative_office_auth_map_rule["when"]["target_org_auth_level_in_ref"],
             "target_org_representative_office_auth_level_map_levels",
+        )
+        self.assertEqual(
+            constants["constants"]["l2_auth_level_map_process_categories"],
+            ["属地服务站", "战区人行部门"],
+        )
+        self.assertEqual(
+            constants["constants"]["l2_not_allowed_exempt_process_categories"],
+            ["BG人行中心与学社", "人事远程交付中心", "蝶发人行部", "业务单元本部", "属地服务站", "战区人行部门"],
+        )
+        self.assertEqual(
+            constants["constants"]["organization_auth_level_scores"]["二级授权"],
+            2.0,
+        )
+        self.assertEqual(
+            constants["constants"]["organization_auth_level_scores"]["三级授权"],
+            2.5,
         )
         self.assertEqual(
             constants["constants"]["target_org_representative_office_auth_level_map_levels"],

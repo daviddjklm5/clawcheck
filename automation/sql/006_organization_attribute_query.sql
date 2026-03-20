@@ -326,6 +326,12 @@ BEGIN
     END IF;
 
     IF normalized_process_level_category = '业务单元本部'
+       AND normalized_org_unit_name = '万睿科技'
+       AND physical_level_num <= 4 THEN
+        RETURN '三级授权';
+    END IF;
+
+    IF normalized_process_level_category = '业务单元本部'
        AND physical_level_num <= 4 THEN
         RETURN '二级授权';
     END IF;
@@ -416,6 +422,12 @@ BEGIN
     IF COALESCE(normalized_org_unit_name, '') LIKE '（作废）%'
        AND physical_level_num = 2 THEN
         RETURN 'org_unit_name:startswith_（作废）_and_physical_level:eq_2';
+    END IF;
+
+    IF normalized_process_level_category = '业务单元本部'
+       AND normalized_org_unit_name = '万睿科技'
+       AND physical_level_num <= 4 THEN
+        RETURN 'process_level_category:业务单元本部_and_org_unit_name:万睿科技_and_physical_level:lte_4';
     END IF;
 
     IF normalized_process_level_category = '业务单元本部'

@@ -278,6 +278,9 @@ export function ProcessDocumentsPage() {
   const [todoSyncing, setTodoSyncing] = useState(false);
   const [todoSyncResult, setTodoSyncResult] = useState<ProcessTodoSyncResponse | null>(null);
   const [todoSyncError, setTodoSyncError] = useState<string | null>(null);
+  const [auditSubmittingDocumentNo, setAuditSubmittingDocumentNo] = useState<string | null>(null);
+  const [auditError, setAuditError] = useState<string | null>(null);
+  const [auditNotice, setAuditNotice] = useState<string | null>(null);
   const [refreshVersion, setRefreshVersion] = useState(0);
 
   const queryText = searchParams.get("q") ?? "";
@@ -533,6 +536,30 @@ export function ProcessDocumentsPage() {
     }
   }
 
+  async function triggerReaudit(documentNo: string) {
+    const normalizedDocumentNo = documentNo.trim();
+    if (!normalizedDocumentNo) {
+      return;
+    }
+
+    try {
+      setAuditSubmittingDocumentNo(normalizedDocumentNo);
+      setAuditError(null);
+      setAuditNotice(null);
+      const result = await dashboardApi.startProcessAuditTask({
+        documentNo: normalizedDocumentNo,
+        documentNos: [],
+        limit: 1,
+        dryRun: false,
+      });
+      setAuditNotice(`单据 ${normalizedDocumentNo}：${result.message || "评估任务已提交。"}`);
+    } catch (submitError) {
+      setAuditError(submitError instanceof Error ? submitError.message : "启动评估任务失败");
+    } finally {
+      setAuditSubmittingDocumentNo(null);
+    }
+  }
+
   const documentColumns: GridColDef<ProcessDocumentRow>[] = [
     {
       field: "documentNo",
@@ -589,6 +616,31 @@ export function ProcessDocumentsPage() {
       type: "number",
     },
     { field: "assessedAt", headerName: "评估时间", minWidth: 170 },
+    {
+      field: "reAuditAction",
+      headerName: "重新评估",
+      minWidth: 120,
+      sortable: false,
+      filterable: false,
+      renderCell: (params: GridRenderCellParams<ProcessDocumentRow>) => {
+        const documentNo = params.row.documentNo;
+        const isSubmitting = auditSubmittingDocumentNo === documentNo;
+        return (
+          <Button
+            size="small"
+            variant="outlined"
+            onClick={(event) => {
+              event.stopPropagation();
+              void triggerReaudit(documentNo);
+            }}
+            disabled={Boolean(auditSubmittingDocumentNo)}
+            sx={{ textTransform: "none", minWidth: 0 }}
+          >
+            {isSubmitting ? "提交中..." : "重新评估"}
+          </Button>
+        );
+      },
+    },
   ];
 
   return (
@@ -610,6 +662,8 @@ export function ProcessDocumentsPage() {
 
       {error ? <Alert severity="error">{error}</Alert> : null}
       {todoSyncError ? <Alert severity="error">{todoSyncError}</Alert> : null}
+      {auditError ? <Alert severity="error">{auditError}</Alert> : null}
+      {auditNotice ? <Alert severity="success">{auditNotice}</Alert> : null}
       {todoSyncResult ? (
         <Alert severity={todoSyncResult.status === "succeeded" ? "success" : "warning"}>
           {todoSyncResult.message}

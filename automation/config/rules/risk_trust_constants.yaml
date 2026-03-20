@@ -44,6 +44,18 @@ constants:
     - "蝶发人行部"
     - "业务单元本部"
 
+  l2_auth_level_map_process_categories:
+    - "属地服务站"
+    - "战区人行部门"
+
+  l2_not_allowed_exempt_process_categories:
+    - "BG人行中心与学社"
+    - "人事远程交付中心"
+    - "蝶发人行部"
+    - "业务单元本部"
+    - "属地服务站"
+    - "战区人行部门"
+
   cross_org_assessment_exempt_process_categories:
     - "人事远程交付中心"
     - "BG人行中心与学社"
@@ -70,7 +82,7 @@ constants:
 
   organization_auth_level_scores:
     "一级授权": 0.5
-    "二级授权": 1.5
+    "二级授权": 2.0
     "三级授权": 2.5
     "<NULL>": 2.0
 

@@ -252,7 +252,7 @@ dimensions:
           apply_type_not_in_ref: "cancel_role_apply_types"
           target_org_auth_level_equals: "二级授权"
           target_org_unit_name_not_in_ref: "target_org_l2_representative_office_org_units"
-          applicant_process_level_category_not_in_ref: "l2_allowed_process_categories"
+          applicant_process_level_category_not_in_ref: "l2_not_allowed_exempt_process_categories"
           permission_target_company_equal_target_org_company: false
         score: 0.0
         summary: "非允许组织申请二级授权范围"
@@ -264,11 +264,19 @@ dimensions:
           target_org_auth_level_equals: "二级授权"
           target_org_unit_name_not_in_ref: "target_org_l2_representative_office_org_units"
           permission_target_company_equal_target_org_company: true
-          applicant_process_level_category_in:
-            - "属地服务站"
-            - "战区人行部门"
-        score: 1.0
-        summary: "属地服务站或战区人行部门同公司申请二级授权组织按1分"
+          applicant_process_level_category_in_ref: "l2_auth_level_map_process_categories"
+        score: 1.5
+        summary: "属地服务站或战区人行部门同公司申请二级普通组织按1.5分"
+      - id: "TARGET_ORG_L2_LOCAL_SERVICE_WARZONE_CROSS_COMPANY"
+        when:
+          apply_type_not_in_ref: "cancel_role_apply_types"
+          role_skip_org_scope_check: false
+          target_org_auth_level_equals: "二级授权"
+          target_org_unit_name_not_in_ref: "target_org_l2_representative_office_org_units"
+          permission_target_company_equal_target_org_company: false
+          applicant_process_level_category_in_ref: "l2_auth_level_map_process_categories"
+        score: 1.5
+        summary: "属地服务站或战区人行部门跨公司申请二级普通组织按1.5分"
       - id: "TARGET_ORG_L2_REPRESENTATIVE_OFFICE_AS_L3"
         when:
           apply_type_not_in_ref: "cancel_role_apply_types"
