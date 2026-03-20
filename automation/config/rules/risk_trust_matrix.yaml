@@ -257,13 +257,25 @@ dimensions:
         score: 0.0
         summary: "非允许组织申请二级授权范围"
         low_score_detail: "申请二级授权范围，但申请人组织分类不在允许范围内"
+      - id: "TARGET_ORG_L2_LOCAL_SERVICE_WARZONE_OVERRIDE"
+        when:
+          apply_type_not_in_ref: "cancel_role_apply_types"
+          role_skip_org_scope_check: false
+          target_org_auth_level_equals: "二级授权"
+          target_org_unit_name_not_in_ref: "target_org_l2_representative_office_org_units"
+          permission_target_company_equal_target_org_company: true
+          applicant_process_level_category_in:
+            - "属地服务站"
+            - "战区人行部门"
+        score: 1.0
+        summary: "属地服务站或战区人行部门同公司申请二级授权组织按1分"
       - id: "TARGET_ORG_L2_REPRESENTATIVE_OFFICE_AS_L3"
         when:
           apply_type_not_in_ref: "cancel_role_apply_types"
           role_skip_org_scope_check: false
           target_org_auth_level_equals: "二级授权"
           target_org_unit_name_in_ref: "target_org_l2_representative_office_org_units"
-        score: 1.5
+        score: 2.5
         summary: "二级授权战区代表处按三级授权评分"
       - id: "TARGET_ORG_REPRESENTATIVE_OFFICE_AUTH_LEVEL_MAP"
         when:

@@ -70,8 +70,8 @@ constants:
 
   organization_auth_level_scores:
     "一级授权": 0.5
-    "二级授权": 1.0
-    "三级授权": 1.5
+    "二级授权": 1.5
+    "三级授权": 2.5
     "<NULL>": 2.0
 
   target_org_auth_level_skip_assessment_levels:
