@@ -18,6 +18,7 @@ _LOG_FILE_PATTERN = re.compile(r"Log file:\s*(.+)")
 _SUMMARY_PREFIX = "collect_summary_"
 _TASK_LOCK = threading.Lock()
 _TASK_STATE_BY_ID: dict[str, dict[str, Any]] = {}
+_COLLECT_TIMESTAMP_PATTERN = re.compile(r"collect_(\d{8}_\d{6})_[^.]+\.json$")
 
 
 def _resolve_runtime_path(raw_path: str) -> Path:
@@ -138,6 +139,96 @@ def _build_task_message(
 def _write_summary_file(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _extract_collect_timestamp_slug(path_text: str) -> str:
+    match = _COLLECT_TIMESTAMP_PATTERN.search(Path(path_text).name)
+    if not match:
+        return ""
+    return match.group(1)
+
+
+def _tail_text_file(path: Path, max_chars: int = 4000) -> str:
+    if not path.exists():
+        return ""
+    try:
+        return path.read_text(encoding="utf-8")[-max_chars:]
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _reconcile_stale_collect_run(summary_path: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    status = str(payload.get("status") or "")
+    if status not in {"queued", "running"}:
+        return payload
+
+    dump_path = REPO_ROOT / str(payload.get("dumpFile") or "")
+    skipped_dump_path = REPO_ROOT / str(payload.get("skippedDumpFile") or "")
+    failed_dump_path = REPO_ROOT / str(payload.get("failedDumpFile") or "")
+
+    success_payload = _load_json_file(dump_path)
+    success_count = len(success_payload) if isinstance(success_payload, list) else 0
+    skipped_count = _count_from_sidecar(skipped_dump_path, "skipped_count")
+    failed_count = _count_from_sidecar(failed_dump_path, "failed_count")
+
+    timestamp_slug = _extract_collect_timestamp_slug(str(payload.get("dumpFile") or ""))
+    log_path = REPO_ROOT / f"automation/logs/run_{timestamp_slug}.log" if timestamp_slug else Path()
+    log_tail = _tail_text_file(log_path) if timestamp_slug else ""
+
+    has_terminal_artifact = any(
+        (
+            dump_path.exists(),
+            skipped_dump_path.exists(),
+            failed_dump_path.exists(),
+            bool(log_tail),
+        )
+    )
+    if not has_terminal_artifact:
+        return payload
+
+    finished_candidates = [
+        path.stat().st_mtime
+        for path in (dump_path, skipped_dump_path, failed_dump_path, log_path)
+        if path.exists()
+    ]
+    finished_at = (
+        datetime.fromtimestamp(max(finished_candidates)).strftime("%Y-%m-%d %H:%M:%S")
+        if finished_candidates
+        else ""
+    )
+    requested_document_no = str(payload.get("requestedDocumentNo") or "").strip()
+    requested_limit = int(payload.get("requestedLimit") or 0)
+    requested_count = max(success_count + skipped_count + failed_count, 1 if requested_document_no else requested_limit)
+
+    if failed_count > 0:
+        recovered_status = "partial"
+    elif success_count > 0 or "Automation finished successfully" in log_tail:
+        recovered_status = "succeeded"
+    else:
+        recovered_status = "failed"
+
+    recovered_payload = dict(payload)
+    recovered_payload["status"] = recovered_status
+    recovered_payload["finishedAt"] = finished_at
+    recovered_payload["requestedCount"] = requested_count
+    recovered_payload["successCount"] = success_count
+    recovered_payload["skippedCount"] = skipped_count
+    recovered_payload["failedCount"] = failed_count
+    recovered_payload["message"] = _build_task_message(
+        status=recovered_status,
+        success_count=success_count,
+        skipped_count=skipped_count,
+        failed_count=failed_count,
+        dry_run=bool(payload.get("dryRun")),
+    )
+    recovered_payload["logFile"] = _to_repo_relative(log_path) if timestamp_slug and log_path.exists() else str(
+        payload.get("logFile") or ""
+    )
+    recovered_payload["outputTail"] = log_tail or str(payload.get("outputTail") or "")
+
+    if recovered_payload != payload:
+        _write_summary_file(summary_path, recovered_payload)
+    return recovered_payload
 
 
 def _latest_running_task_locked() -> dict[str, Any] | None:
@@ -276,7 +367,7 @@ def _run_collect_task(task_id: str) -> None:
             _persist_task_snapshot(task_id)
 
 
-def _load_recent_collect_runs(logs_dir: Path, limit: int = 8) -> list[dict[str, Any]]:
+def _load_recent_collect_runs(logs_dir: Path, limit: int = 8, active_task_ids: set[str] | None = None) -> list[dict[str, Any]]:
     summary_paths = sorted(
         logs_dir.glob(f"{_SUMMARY_PREFIX}*.json"),
         key=lambda item: item.stat().st_mtime,
@@ -286,6 +377,9 @@ def _load_recent_collect_runs(logs_dir: Path, limit: int = 8) -> list[dict[str, 
     for path in summary_paths[:limit]:
         payload = _load_json_file(path)
         if isinstance(payload, dict):
+            task_id = str(payload.get("taskId") or payload.get("id") or "")
+            if task_id and task_id not in (active_task_ids or set()):
+                payload = _reconcile_stale_collect_run(path, payload)
             payload.setdefault("id", payload.get("taskId") or path.stem)
             payload.setdefault("summaryFile", _to_repo_relative(path))
             payload.setdefault("forceRecollect", False)
@@ -301,9 +395,10 @@ def get_collect_workbench() -> dict[str, Any]:
 
     with _TASK_LOCK:
         current_task = _latest_running_task_locked()
+        active_task_ids = {str(task_id) for task_id, task in _TASK_STATE_BY_ID.items() if task.get("status") in {"queued", "running"}}
         dashboard["currentTask"] = _task_to_payload(current_task) if current_task is not None else None
 
-    dashboard["recentRuns"] = _load_recent_collect_runs(logs_dir)
+    dashboard["recentRuns"] = _load_recent_collect_runs(logs_dir, active_task_ids=active_task_ids)
     return dashboard
 
 

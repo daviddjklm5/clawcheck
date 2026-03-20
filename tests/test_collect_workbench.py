@@ -8,6 +8,8 @@ import unittest
 from unittest.mock import patch
 
 from automation.api import collect_workbench
+from automation.db.postgres import PostgresPermissionStore
+from automation.utils.config_loader import DatabaseSettings
 
 
 class _FakeCompletedProcess:
@@ -185,3 +187,108 @@ class CollectWorkbenchTaskTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class _FakeCursor:
+    def __enter__(self) -> _FakeCursor:
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        return None
+
+
+class _FakeConnection:
+    def __init__(self, cursor: _FakeCursor) -> None:
+        self._cursor = cursor
+
+    def cursor(self) -> _FakeCursor:
+        return self._cursor
+
+
+class CollectWorkbenchVisibilityTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.store = PostgresPermissionStore(
+            DatabaseSettings(
+                host="localhost",
+                port=5432,
+                dbname="clawcheck",
+                user="tester",
+                password="tester",
+                schema="public",
+                sslmode="disable",
+            )
+        )
+        self.cursor = _FakeCursor()
+        self.connection = _FakeConnection(self.cursor)
+
+    def _fake_connect(self):
+        class _Ctx:
+            def __enter__(_self):
+                return self.connection
+
+            def __exit__(_self, exc_type, exc, tb):
+                return None
+
+        return _Ctx()
+
+    def test_fetch_collect_workbench_only_includes_documents_with_process_results(self) -> None:
+        assessed_basic_rows = [
+            {
+                "document_no": "RA-TEST-001",
+                "employee_no": "0001",
+                "permission_target": "张三",
+                "apply_reason": "测试",
+                "document_status": "已提交",
+                "hr_org": "万物云",
+                "company_name": "万物云本部",
+                "department_name": "人事部",
+                "position_name": "人事经理",
+                "apply_time": None,
+                "latest_approval_time": None,
+                "collection_count": 1,
+                "updated_at": None,
+            }
+        ]
+
+        with (
+            patch.object(self.store, "ensure_table"),
+            patch.object(self.store, "connect", self._fake_connect),
+            patch(
+                "automation.db.postgres.PostgresRiskTrustStore._fetch_latest_process_summary_rows",
+                return_value=[
+                    {"document_no": "RA-TEST-001"},
+                ],
+            ) as mocked_latest_process_rows,
+            patch(
+                "automation.db.postgres.PostgresRiskTrustStore._fetch_basic_info_rows",
+                return_value=assessed_basic_rows,
+            ) as mocked_basic_rows,
+            patch.object(
+                self.store,
+                "_fetch_collect_table_metrics",
+                return_value={
+                    "RA-TEST-001": {
+                        "permission": {"records": 1},
+                        "approval": {"records": 1},
+                        "orgScope": {"records": 1},
+                        "basic": {"updated_at": None},
+                    }
+                },
+            ),
+            patch(
+                "automation.db.postgres.PostgresRiskTrustStore._fetch_person_attributes_map",
+                return_value={"0001": {"employee_name": "张三"}},
+            ),
+        ):
+            result = self.store.fetch_collect_workbench()
+
+        mocked_latest_process_rows.assert_called_once_with(self.cursor)
+        mocked_basic_rows.assert_called_once_with(
+            self.cursor,
+            document_no=None,
+            limit=200,
+            document_nos=["RA-TEST-001"],
+        )
+        self.assertEqual(result["stats"][0]["label"], "已进入处理单据")
+        self.assertEqual(result["stats"][0]["value"], "1")
+        self.assertEqual([row["documentNo"] for row in result["documents"]], ["RA-TEST-001"])

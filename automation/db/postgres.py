@@ -1006,15 +1006,15 @@ class PostgresPermissionStore(_PostgresStoreBase):
         return {
             "stats": [
                 {
-                    "label": "已入库单据",
+                    "label": "已进入处理单据",
                     "value": "0",
-                    "hint": "当前申请单四张表中还没有采集结果。",
+                    "hint": "当前还没有完成采集且成功进入处理工作台的单据。",
                     "tone": "info",
                 },
                 {
                     "label": "待补采单据",
                     "value": "0",
-                    "hint": "当角色明细或组织范围缺失时会计入待补采。",
+                    "hint": "当已进入处理工作台的单据仍缺少角色明细或组织范围时会计入待补采。",
                     "tone": "success",
                 },
                 {
@@ -1262,7 +1262,21 @@ class PostgresPermissionStore(_PostgresStoreBase):
         helper_store = PostgresRiskTrustStore(self.settings)
         with self.connect() as connection:
             with connection.cursor() as cursor:
-                basic_rows = helper_store._fetch_basic_info_rows(cursor, document_no=None, limit=query_limit)
+                latest_process_rows = helper_store._fetch_latest_process_summary_rows(cursor)
+                latest_process_document_nos = [
+                    row["document_no"]
+                    for row in latest_process_rows
+                    if self._strip_text(row.get("document_no")) is not None
+                ]
+                if not latest_process_document_nos:
+                    return self._empty_collect_workbench()
+
+                basic_rows = helper_store._fetch_basic_info_rows(
+                    cursor,
+                    document_no=None,
+                    limit=query_limit,
+                    document_nos=latest_process_document_nos,
+                )
                 if not basic_rows:
                     return self._empty_collect_workbench()
 
@@ -1321,15 +1335,15 @@ class PostgresPermissionStore(_PostgresStoreBase):
         return {
             "stats": [
                 {
-                    "label": "已入库单据",
+                    "label": "已进入处理单据",
                     "value": str(len(documents)),
-                    "hint": "来自 `申请单基本信息` 中当前可查询到的单据数。",
+                    "hint": "仅统计已完成采集且成功进入 `处理单据` 工作台的单据数。",
                     "tone": "info" if documents else "default",
                 },
                 {
                     "label": "待补采单据",
                     "value": str(pending_count),
-                    "hint": "角色明细或组织范围缺失时会计入待补采。",
+                    "hint": "仅在已进入 `处理单据` 的单据中，角色明细或组织范围缺失时计入待补采。",
                     "tone": "warning" if pending_count else "success",
                 },
                 {
