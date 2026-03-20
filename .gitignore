@@ -5,21 +5,25 @@ __pycache__/
 
 # Virtual envs
 .venv/
+.venv-win/
 venv/
 
 # Playwright/session artifacts
 automation/logs/*
+automation/backups/*
 automation/screenshots/*
 automation/state/*
 automation/downloads/*
 automation/config/credentials.local.yaml
 automation/config/credentials.prod.local.yaml
+automation/config/windows_task_daemon.local.json
 webui/node_modules/
 webui/dist/
 *.tsbuildinfo
 
 # Keep folder structure
 automation/logs/.gitkeep
+automation/backups/.gitkeep
 automation/screenshots/.gitkeep
 automation/state/.gitkeep
 automation/downloads/.gitkeep

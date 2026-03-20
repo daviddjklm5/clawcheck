@@ -1,209 +1,391 @@
 # iERP Automation
 
-## 1. Install
-```bash
-cd /home/shangmeilin/clawcheck
-python3 -m venv .venv
-.venv/bin/python -m pip install -r automation/requirements.txt
-.venv/bin/python -m playwright install chromium
+## 1. 推荐运行方式
+
+本项目自 `300` 方案起，正式运行推荐使用：
+
+- Windows 原生 Python
+- Windows 原生 Playwright
+- Windows 原生 PostgreSQL 服务或独立 PostgreSQL 实例
+- FastAPI 承接 API 与 `webui/dist` 静态资源
+- Windows Task Scheduler 承接定时任务
+
+以下形态不再推荐作为正式部署方式：
+
+- WSL 内常驻运行
+- `uvicorn --reload`
+- `npm run dev`
+- Docker Desktop + WSL2 承载 PostgreSQL
+
+WSL 可以继续作为开发辅助环境，但不再是正式运行前提。
+
+## 2. 目录约定
+
+- 配置：`automation/config/`
+- SQL：`automation/sql/`
+- 数据库入口：`automation/db/postgres.py`
+- 自动化流程：`automation/flows/`
+- API：`automation/api/`
+- Windows 脚本：`automation/scripts/*.ps1`
+- 日志：`automation/logs/`
+- 备份：`automation/backups/`
+- 下载文件：`automation/downloads/`
+
+## 3. Windows 环境安装
+
+### 3.1 前置要求
+
+- Windows 10/11
+- Python `3.12.x`
+- Node.js `20+`
+- PostgreSQL Windows 安装版，或可访问的独立 PostgreSQL 实例
+- PowerShell
+
+### 3.2 一键安装 Python 运行环境
+
+在仓库根目录执行：
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\automation\scripts\install_windows_env.ps1 -IncludeDev
 ```
 
-Install test/dev extras:
-```bash
-cd /home/shangmeilin/clawcheck
-.venv/bin/python -m pip install -r automation/requirements-dev.txt
+默认行为：
+
+- 创建 `.venv-win`
+- 安装 `automation/requirements.txt`
+- 安装 `automation/requirements-dev.txt`
+- 安装 Playwright `chromium`
+
+如需指定 Python 版本：
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\automation\scripts\install_windows_env.ps1 -PythonVersion 3.12
 ```
 
-Recommended runtime convention:
-- Use the repository root `.venv` as the only Python environment for this project.
-- Run Python scripts from the repository root with `.venv/bin/python ...`.
-- If the system `python3` is PEP 668 managed, do not install packages into `/usr/bin/python3`.
+## 4. 配置说明
 
-Optional shell activation:
-```bash
-cd /home/shangmeilin/clawcheck
-source .venv/bin/activate
+主要配置文件：
+
+- UAT：`automation/config/settings.yaml`
+- PROD：`automation/config/settings.prod.yaml`
+- UAT 凭据：`automation/config/credentials.local.yaml`
+- PROD 凭据：`automation/config/credentials.prod.local.yaml`
+- 选择器：`automation/config/selectors.yaml`
+- 审核规则：`automation/config/rules/`
+
+数据库连接优先读取：
+
+1. `settings*.yaml`
+2. 环境变量 `IERP_PG_*`
+
+默认口径：
+
+- `check/login/run/collect/roster/orglist/rolecatalog/dbinit/audit/sync-todo-status`
+- 若未显式传入 `--config` / `--credentials`，优先使用 `settings.prod.yaml` 与 `credentials.prod.local.yaml`
+
+## 5. Windows 运行命令
+
+以下命令默认在仓库根目录执行。
+
+### 5.1 直接运行 Python Runner
+
+健康检查：
+
+```powershell
+.\.venv-win\Scripts\python.exe .\automation\scripts\run.py check --headed
 ```
 
-## 2. Config
-- UAT config: `automation/config/settings.yaml`
-- Prod config: `automation/config/settings.prod.yaml`
-- UAT credentials: `automation/config/credentials.local.yaml`
-- Prod credentials: `automation/config/credentials.prod.local.yaml`
-- Selectors: `automation/config/selectors.yaml`
-- Audit rules: `automation/config/rules/`
+登录并刷新登录态：
 
-Default runtime target:
-- `check/login/run/collect/roster/orglist/rolecatalog/dbinit/audit` use prod config by default when `--config` / `--credentials` are not passed.
-- UAT remains available via explicit `--config automation/config/settings.yaml --credentials automation/config/credentials.local.yaml`.
-
-## 3. Commands
-All commands below assume the current directory is the repository root `/home/shangmeilin/clawcheck`.
-
-Health check:
-```bash
-.venv/bin/python automation/scripts/run.py check --headed
+```powershell
+.\.venv-win\Scripts\python.exe .\automation\scripts\run.py login --headed
 ```
 
-Login and save auth state:
-```bash
-.venv/bin/python automation/scripts/run.py login --headed
-.venv/bin/python automation/scripts/run.py login --config automation/config/settings.yaml --credentials automation/config/credentials.local.yaml --headed
+权限申请采集：
+
+```powershell
+.\.venv-win\Scripts\python.exe .\automation\scripts\run.py collect --limit 20 --headless
 ```
 
-Permission collection:
-```bash
-.venv/bin/python automation/scripts/run.py collect --limit 3 --dry-run --headed
+在职花名册同步：
+
+```powershell
+.\.venv-win\Scripts\python.exe .\automation\scripts\run.py roster --headless
 ```
 
-Workflow run:
-```bash
-.venv/bin/python automation/scripts/run.py run --headed
+组织列表同步：
+
+```powershell
+.\.venv-win\Scripts\python.exe .\automation\scripts\run.py orglist --headless
 ```
 
-Active roster download + import:
-```bash
-.venv/bin/python automation/scripts/run.py roster --headed
+风险评估：
+
+```powershell
+.\.venv-win\Scripts\python.exe .\automation\scripts\run.py audit --limit 20
 ```
 
-Recommended explicit prod command:
-```bash
-.venv/bin/python automation/scripts/run.py roster \
-  --config automation/config/settings.prod.yaml \
-  --credentials automation/config/credentials.prod.local.yaml \
-  --headed
+待办状态同步：
+
+```powershell
+.\.venv-win\Scripts\python.exe .\automation\scripts\run.py sync-todo-status --headless
 ```
 
-Import an existing roster file only:
-```bash
-.venv/bin/python automation/scripts/run.py roster \
-  --config automation/config/settings.prod.yaml \
-  --credentials automation/config/credentials.prod.local.yaml \
-  --input-file automation/downloads/example.xlsx \
-  --headless
+权限主数据初始化：
+
+```powershell
+.\.venv-win\Scripts\python.exe .\automation\scripts\run.py rolecatalog
 ```
 
-Query only, without export/import:
-```bash
-.venv/bin/python automation/scripts/run.py roster --skip-export --skip-import --headed
+数据库初始化：
+
+```powershell
+.\.venv-win\Scripts\python.exe .\automation\scripts\run.py dbinit
 ```
 
-Organization list download + import:
-```bash
-.venv/bin/python automation/scripts/run.py orglist --headed
+### 5.2 推荐使用 PowerShell 任务脚本
+
+正式运行更推荐使用已封装的 PowerShell 脚本，而不是直接手写 `run.py` 参数。
+
+采集：
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\automation\scripts\run_collect_task.ps1 -Headless
 ```
 
-Recommended explicit prod command:
-```bash
-.venv/bin/python automation/scripts/run.py orglist   --config automation/config/settings.prod.yaml   --credentials automation/config/credentials.prod.local.yaml   --headed
+花名册：
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\automation\scripts\run_roster_task.ps1 -Headless
 ```
 
-Import an existing organization list file only:
-```bash
-.venv/bin/python automation/scripts/run.py orglist   --config automation/config/settings.prod.yaml   --credentials automation/config/credentials.prod.local.yaml   --input-file automation/downloads/example_orglist.xlsx   --headless
+组织列表：
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\automation\scripts\run_orglist_task.ps1 -Headless
 ```
 
-Query only, without export/import:
-```bash
-.venv/bin/python automation/scripts/run.py orglist --skip-export --skip-import --headed
+评估：
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\automation\scripts\run_audit_task.ps1
 ```
 
-Initialize permission catalog:
-```bash
-.venv/bin/python automation/scripts/run.py rolecatalog \
-  --config automation/config/settings.prod.yaml \
-  --credentials automation/config/credentials.prod.local.yaml
+待办同步：
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\automation\scripts\run_sync_todo_status_task.ps1 -Headless
 ```
 
-Initialize all 12 tables/functions on a new database:
-```bash
-.venv/bin/python automation/scripts/run.py dbinit \
-  --config automation/config/settings.prod.yaml \
-  --credentials automation/config/credentials.prod.local.yaml
+这些脚本统一具备以下特性：
+
+- 默认读取 `.venv-win`
+- 默认优先取 `settings.prod.yaml`
+- 自动落日志到 `automation/logs/windows_tasks`
+- 透传退出码，便于计划任务判定成功失败
+
+## 6. Web UI 与 API
+
+### 6.1 构建前端
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\automation\scripts\build_webui.ps1 -Install
 ```
 
-Run risk-trust audit and write assessment results:
-```bash
-.venv/bin/python automation/scripts/run.py audit --limit 20
+默认行为：
+
+- 执行 `npm ci`
+- 执行 `npm run build`
+- 默认将前端 API Base 设为同源 `/api`
+
+### 6.2 启动 API
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\automation\scripts\start_api.ps1
 ```
 
-Dry-run the audit and dump JSON only:
-```bash
-.venv/bin/python automation/scripts/run.py audit --document-no RA-20260315-00000001 --dry-run
-```
+说明：
 
-Export an audit batch distribution workbook:
-```bash
-.venv/bin/python automation/scripts/export_audit_distribution_report.py --batch-no audit_20260315_112428
-```
+- 默认启动 `uvicorn automation.api.main:app`
+- 默认监听 `127.0.0.1:8000`
+- 若存在 `webui/dist`，FastAPI 会自动托管静态页面
+- 正式运行不使用 `--reload`
 
-## 4. Web UI skeleton
-Start the mock API:
-```bash
-cd /home/shangmeilin/clawcheck
-.venv/bin/uvicorn automation.api.main:app --reload
-```
+### 6.3 本地前端开发
 
-Start the React UI:
-```bash
-cd /home/shangmeilin/clawcheck/webui
+如果仅做前端开发，仍可使用 Vite：
+
+```powershell
+cd .\webui
 npm install
 npm run dev
 ```
 
-Optional API base override:
-```bash
-cd /home/shangmeilin/clawcheck/webui
-VITE_API_BASE_URL=http://127.0.0.1:8000/api npm run dev
+当前默认已配置 `/api -> http://127.0.0.1:8000` 代理，因此前端开发态一般无需再手工设置 `VITE_API_BASE_URL`。
+
+## 7. PostgreSQL 切换与验收
+
+### 7.1 探测目标数据库
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\automation\scripts\probe_postgres.ps1
 ```
 
-## 4.1 Tests
-Run the full Python test suite with the standardized entry:
-```bash
-cd /home/shangmeilin/clawcheck
-.venv/bin/python -m pytest -q
+输出内容包括：
+
+- 当前连接到的数据库、用户、schema、版本
+- `12` 张核心表是否存在
+- `refresh_组织属性查询` 是否存在
+- 主数据摘要
+
+### 7.2 备份旧库
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\automation\scripts\backup_postgres.ps1 -PgBinDir "C:\Program Files\PostgreSQL\17\bin"
 ```
 
-If you only want router tests:
-```bash
-cd /home/shangmeilin/clawcheck
-.venv/bin/python -m pytest tests/test_documents_router.py -q
+### 7.3 恢复到 Windows PostgreSQL
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\automation\scripts\restore_postgres.ps1 -InputFile .\automation\backups\clawcheck_20260320_120000.dump -PgBinDir "C:\Program Files\PostgreSQL\17\bin" -DropAndCreateDb
 ```
 
-## 5. Output
-- logs: `automation/logs/`
-- screenshots: `automation/screenshots/`
-- state: `automation/state/`
-- downloads: `automation/downloads/`
-- SQL: `automation/sql/001_permission_apply_collect.sql`
-- SQL: `automation/sql/002_active_roster.sql`
-- SQL: `automation/sql/003_organization_list.sql`
-- SQL: `automation/sql/004_city_warzone.sql`
-- SQL: `automation/sql/005_organization_list_drop_extra_columns_json.sql`
-- SQL: `automation/sql/007_organization_list_add_process_level_name.sql`
-- SQL: `automation/sql/008_organization_list_standardize_latest_columns.sql`
-- SQL: `automation/sql/009_permission_catalog.sql`
-- SQL: `automation/sql/010_permission_apply_collect_migrate_basic_info.sql`
-- SQL: `automation/sql/019_person_attributes.sql`
-- SQL: `automation/sql/022_risk_trust_assessment.sql`
+### 7.3A 一键执行切库流程
 
-## 6. Notes
-- Default home entry for `001/003/004` related browser actions is `https://hr.onewo.com/ierp/?formId=home_page`.
-- Prod roster flow targets `https://hr.onewo.com/ierp/?formId=home_page`.
-- The permission collect import can still migrate legacy auxiliary tables `basic_info` / `permission_apply_detail` / `approval_record` into the Chinese schema before writing.
-- If the target database is still on the pre-011 English physical columns, run `automation/sql/012_rename_columns_to_cn_fixed_schema.sql` first; the application now blocks mixed/legacy English fixed schemas.
-- The actual recent-menu entry is `在职人员花名册`.
-- The actual export dialog button is `转后台执行`.
-- Report scheme and employment type are both selected through F7 dialogs.
-- The roster import writes into PostgreSQL table `在职花名册表`.
-- The roster import also refreshes PostgreSQL table `人员属性查询`.
+如需将 `probe -> backup -> restore -> dbinit -> acceptance` 串成一次执行，可使用：
 
-- The orglist flow targets `组织快速维护 -> 万物云 -> 业务状态(已启用/已停用) -> 列表包含所有下级`.
-- The actual orglist export path is `更多 -> 引出数据（按列表）`.
-- The orglist import writes into PostgreSQL table `组织列表`.
-- New source headers in the orglist workbook are auto-added as PostgreSQL physical columns (`TEXT`) instead of being kept in JSON.
-- Verified in headed run on `2026-03-13`: the stable recent-menu entry is `li[data-menu-id-info*="217WYC/L9U7E"]`.
-- Verified in headed run on `2026-03-13`: the `业务状态` compact filter uses `.kd-cq-querypanel-compact-item:has(.kd-cq-querypanel-compact-item-text[title="业务状态"])`.
-- Verified in headed run on `2026-03-13`: selecting `已启用` + `已停用` changes the query result from `37` rows to `92` rows before enabling `列表包含所有下级`.
-- Verified in headed run on `2026-03-13`: enabling `列表包含所有下级` after the dual-status filter expands the result to `96017` rows (`4801` pages).
-- Verified in headed run on `2026-03-13`: export completes successfully and downloads `automation/downloads/20260313_115140_引出列表_组织快速维护_0313115015.xlsx`.
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\automation\scripts\cutover_postgres.ps1 `
+  -PgBinDir "C:\Program Files\PostgreSQL\17\bin" `
+  -TargetHost "127.0.0.1" `
+  -TargetPort 5440 `
+  -TargetDbName "clawcheck" `
+  -TargetUser "clawcheck" `
+  -TargetPassword "your_password" `
+  -DropAndCreateDb
+```
+
+如果源库仍是旧环境，可再补：
+
+- `-SourceHost`
+- `-SourcePort`
+- `-SourceDbName`
+- `-SourceUser`
+- `-SourcePassword`
+
+### 7.4 初始化缺失对象
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\automation\scripts\run_dbinit_task.ps1
+```
+
+### 7.5 切库后验收
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\automation\scripts\accept_postgres.ps1
+```
+
+验收通过标准：
+
+- `12` 张核心表全部存在
+- `refresh_组织属性查询` 存在
+- 探针输出无连接异常
+
+## 8. Windows 计划任务
+
+### 8.1 注册单个计划任务
+
+已提供 Windows 计划任务注册脚本：
+
+- `automation/scripts/register_windows_task.ps1`
+
+示例：每天 `08:30` 运行花名册同步
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\automation\scripts\register_windows_task.ps1 `
+  -TaskType roster `
+  -ScheduleType Daily `
+  -At "08:30" `
+  -TaskScriptArguments "-Headless"
+```
+
+示例：每小时运行待办同步
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\automation\scripts\register_windows_task.ps1 `
+  -TaskType sync-todo-status `
+  -ScheduleType Hourly `
+  -At "08:00" `
+  -IntervalMinutes 60 `
+  -TaskScriptArguments "-Headless"
+```
+
+### 8.2 建议的任务拆分
+
+建议至少拆成以下任务：
+
+- `collect`
+- `roster`
+- `orglist`
+- `audit`
+- `sync-todo-status`
+
+不建议把所有动作串成一个超级任务，否则失败定位困难、重跑范围过大。
+
+### 8.3 注册 API 开机自启动
+
+如需把 FastAPI 注册为开机自启动任务：
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\automation\scripts\register_api_startup_task.ps1 -Force
+```
+
+默认行为：
+
+- 通过 `start_api.ps1` 启动 API
+- 默认在系统启动时触发
+- 默认监听 `127.0.0.1:8000`
+
+## 9. 测试
+
+完整 Python 测试：
+
+```powershell
+.\.venv-win\Scripts\python.exe -m pytest -q
+```
+
+仅运行本轮新增的基础测试：
+
+```powershell
+.\.venv-win\Scripts\python.exe -m pytest .\tests\test_api_main.py .\tests\test_db_admin.py -q
+```
+
+## 10. 输出目录
+
+- 日志：`automation/logs/`
+- Windows 任务日志：`automation/logs/windows_tasks/`
+- 截图：`automation/screenshots/`
+- 登录态：`automation/state/`
+- 下载目录：`automation/downloads/`
+- 数据库备份：`automation/backups/`
+
+## 11. 运行注意事项
+
+- 默认首页入口仍为 `https://hr.onewo.com/ierp/?formId=home_page`
+- 花名册实际入口为 `在职人员花名册`
+- 花名册导出按钮实际文案为 `转后台执行`
+- 花名册导入会刷新 PostgreSQL 表 `人员属性查询`
+- 组织列表导入会刷新 PostgreSQL 表 `组织属性查询`
+- 若目标库仍为 `011` 之前的英文固定字段结构，先执行 `automation/sql/012_rename_columns_to_cn_fixed_schema.sql`
+- `run.py collect` 仍支持把旧辅助表 `basic_info` / `permission_apply_detail` / `approval_record` 迁入中文结构
+
+## 12. 与 WSL 的关系
+
+当前 README 不再把 WSL 作为正式运行前提。
+
+如需继续使用 WSL，请明确区分：
+
+- WSL：个人开发辅助环境
+- Windows：正式运行环境
+
+任何正式值班、定时任务、数据库承载、页面发布，均应以 Windows 原生运行链路为准。

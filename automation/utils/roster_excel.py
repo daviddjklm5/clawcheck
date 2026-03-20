@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from datetime import date, datetime
 from pathlib import Path
+
+from automation.utils.install_hints import REQUIREMENTS_INSTALL_HINT
 from typing import Any
 
 ROSTER_FIELD_SPECS = [
@@ -147,7 +149,7 @@ def _load_xlsx_rows(path: Path) -> list[list[str]]:
         from openpyxl import load_workbook
     except ModuleNotFoundError as exc:  # pragma: no cover
         raise ModuleNotFoundError(
-            "Missing dependency: openpyxl. Run `.venv/bin/python -m pip install -r automation/requirements.txt`."
+            f"Missing dependency: openpyxl. Run `{REQUIREMENTS_INSTALL_HINT}`."
         ) from exc
 
     workbook = load_workbook(path, read_only=True, data_only=True)
@@ -178,7 +180,7 @@ def _load_xls_rows(path: Path) -> list[list[str]]:
         import xlrd
     except ModuleNotFoundError as exc:  # pragma: no cover
         raise ModuleNotFoundError(
-            "Missing dependency: xlrd. Run `.venv/bin/python -m pip install -r automation/requirements.txt`."
+            f"Missing dependency: xlrd. Run `{REQUIREMENTS_INSTALL_HINT}`."
         ) from exc
 
     book = xlrd.open_workbook(path)

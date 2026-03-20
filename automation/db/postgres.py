@@ -14,6 +14,7 @@ from automation.utils.approval_record_helpers import (
     normalize_approval_records,
 )
 from automation.utils.config_loader import DatabaseSettings
+from automation.utils.install_hints import REQUIREMENTS_INSTALL_HINT
 from automation.reporting.low_score_feedback import (
     PERMISSION_PRIORITY,
     build_low_score_feedback,
@@ -250,7 +251,7 @@ class _PostgresStoreBase:
     def ensure_available(self) -> None:
         if psycopg is None:
             raise ModuleNotFoundError(
-                "Missing dependency: psycopg. Run `.venv/bin/python -m pip install -r automation/requirements.txt`."
+                f"Missing dependency: psycopg. Run `{REQUIREMENTS_INSTALL_HINT}`."
             )
         if not self.is_configured(self.settings):
             raise ValueError(
@@ -2473,7 +2474,7 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                 {
                     "label": "最近评估批次",
                     "value": "-",
-                    "hint": "执行 `python automation/scripts/run.py audit` 后会显示最新批次。",
+                    "hint": "执行 `powershell.exe -ExecutionPolicy Bypass -File .\\automation\\scripts\\run_windows_task.ps1 -Action audit` 后会显示最新批次。",
                     "tone": "default",
                 },
             ],

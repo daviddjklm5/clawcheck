@@ -9,6 +9,7 @@ import sys
 import time
 from datetime import date, datetime
 from pathlib import Path
+from typing import Mapping
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
@@ -31,6 +32,7 @@ PROD_DEFAULT_ACTIONS = {
     "audit",
     "sync-todo-status",
 }
+WSL_RUNTIME_OVERRIDE_ENV_NAMES = ("CLAWCHECK_ALLOW_WSL_RUNTIME", "IERP_ALLOW_WSL_RUNTIME")
 
 
 def parse_args() -> argparse.Namespace:
@@ -127,6 +129,70 @@ def resolve_runtime_paths(args: argparse.Namespace) -> tuple[Path, Path, Path]:
     return config_path, credentials_path, selectors_path
 
 
+def is_wsl_environment(
+    environ: Mapping[str, str] | None = None,
+    proc_version_text: str | None = None,
+) -> bool:
+    env = environ or os.environ
+    if env.get("WSL_DISTRO_NAME") or env.get("WSL_INTEROP"):
+        return True
+
+    version_text = proc_version_text
+    if version_text is None:
+        for candidate in ("/proc/sys/kernel/osrelease", "/proc/version"):
+            try:
+                version_text = Path(candidate).read_text(encoding="utf-8", errors="ignore")
+                break
+            except OSError:
+                continue
+
+    lowered = (version_text or "").lower()
+    return "microsoft" in lowered or "wsl" in lowered
+
+
+def _is_runtime_override_enabled(environ: Mapping[str, str] | None = None) -> bool:
+    env = environ or os.environ
+    return any(str(env.get(name, "")).strip() == "1" for name in WSL_RUNTIME_OVERRIDE_ENV_NAMES)
+
+
+def should_block_wsl_runtime(
+    args: argparse.Namespace,
+    settings_path: Path,
+    credentials_path: Path,
+    environ: Mapping[str, str] | None = None,
+    proc_version_text: str | None = None,
+) -> bool:
+    if args.action not in PROD_DEFAULT_ACTIONS:
+        return False
+    if _is_runtime_override_enabled(environ):
+        return False
+    if not is_wsl_environment(environ=environ, proc_version_text=proc_version_text):
+        return False
+
+    prod_config_path = resolve_path(PROD_CONFIG_PATH)
+    prod_credentials_path = resolve_path(PROD_CREDENTIALS_PATH)
+    using_prod_config = settings_path == prod_config_path
+    using_prod_credentials = credentials_path == prod_credentials_path
+    return using_prod_config or using_prod_credentials
+
+
+def build_wsl_runtime_block_message(
+    action: str,
+    settings_path: Path,
+    credentials_path: Path,
+) -> str:
+    lines = [
+        f"Blocked Windows-native runtime action on WSL: {action}",
+        "Plan 300 requires formal runtime tasks to be launched from the Windows repo with .venv-win.",
+        f"Resolved config: {settings_path}",
+        f"Resolved credentials: {credentials_path}",
+        r"Use PowerShell on Windows instead, for example:",
+        rf"powershell.exe -ExecutionPolicy Bypass -File .\automation\scripts\run_windows_task.ps1 -Action {action}",
+        "If you are intentionally doing temporary developer-side fallback on WSL, set CLAWCHECK_ALLOW_WSL_RUNTIME=1.",
+    ]
+    return "\n".join(lines)
+
+
 def build_context(playwright, settings, state_file: Path, use_state: bool):
     browser = playwright.chromium.launch(
         headless=not settings.browser.headed,
@@ -204,9 +270,16 @@ def ensure_login(login_page, settings, retries: int, wait_sec: float, retry_call
 def main() -> int:
     args = parse_args()
     from automation.utils.config_loader import load_local_auth, load_selectors, load_settings
+    from automation.utils.install_hints import PLAYWRIGHT_INSTALL_HINT, REQUIREMENTS_INSTALL_HINT
     from automation.utils.logger import setup_logger
 
     settings_path, credentials_path, selectors_path = resolve_runtime_paths(args)
+    if should_block_wsl_runtime(args, settings_path, credentials_path):
+        print(
+            build_wsl_runtime_block_message(args.action, settings_path, credentials_path),
+            file=sys.stderr,
+        )
+        return 2
 
     settings = load_settings(settings_path)
     selectors = load_selectors(selectors_path)
@@ -356,8 +429,8 @@ def main() -> int:
     except ModuleNotFoundError:
         print(
             "Missing dependency: playwright. Run:\n"
-            "1) .venv/bin/python -m pip install -r automation/requirements.txt\n"
-            "2) .venv/bin/python -m playwright install chromium"
+            f"1) {REQUIREMENTS_INSTALL_HINT}\n"
+            f"2) {PLAYWRIGHT_INSTALL_HINT}"
         )
         return 2
 

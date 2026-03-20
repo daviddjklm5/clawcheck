@@ -36,7 +36,7 @@ MASTER_DATA_DASHBOARD = {
             "title": "同步在职花名册",
             "description": "下载最新在职花名册并刷新人员属性查询。",
             "buttonLabel": "执行同步",
-            "command": "python automation/scripts/run.py roster --headed",
+            "command": r"powershell.exe -ExecutionPolicy Bypass -File .\automation\scripts\run_windows_task.ps1 -Action roster -Headed",
             "status": "建议保留人工可见浏览器模式",
         },
         {
@@ -44,7 +44,7 @@ MASTER_DATA_DASHBOARD = {
             "title": "同步组织列表",
             "description": "下载组织快速维护清单并更新组织属性相关表。",
             "buttonLabel": "执行同步",
-            "command": "python automation/scripts/run.py orglist --headed",
+            "command": r"powershell.exe -ExecutionPolicy Bypass -File .\automation\scripts\run_windows_task.ps1 -Action orglist -Headed",
             "status": "导出量大，建议单独观察执行",
         },
         {
@@ -52,7 +52,7 @@ MASTER_DATA_DASHBOARD = {
             "title": "初始化权限主数据",
             "description": "写入权限列表基础字典与权限级别口径。",
             "buttonLabel": "初始化",
-            "command": "python automation/scripts/run.py rolecatalog",
+            "command": r"powershell.exe -ExecutionPolicy Bypass -File .\automation\scripts\run_windows_task.ps1 -Action rolecatalog",
             "status": "适用于新库初始化或口径刷新",
         },
     ],

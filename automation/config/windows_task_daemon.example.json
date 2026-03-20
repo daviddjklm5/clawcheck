@@ -1,0 +1,78 @@
+{
+  "pollSeconds": 30,
+  "logDir": "automation/logs/windows_task_daemon",
+  "tasks": [
+    {
+      "name": "collect",
+      "enabled": false,
+      "script": "automation/scripts/run_windows_task.ps1",
+      "args": [
+        "-Action",
+        "collect",
+        "-Headless",
+        "-Limit",
+        "100"
+      ],
+      "intervalMinutes": 15,
+      "dailyTimes": [],
+      "runOnStartup": false
+    },
+    {
+      "name": "roster",
+      "enabled": false,
+      "script": "automation/scripts/run_windows_task.ps1",
+      "args": [
+        "-Action",
+        "roster",
+        "-Headless"
+      ],
+      "intervalMinutes": 0,
+      "dailyTimes": [
+        "07:30"
+      ],
+      "runOnStartup": false
+    },
+    {
+      "name": "orglist",
+      "enabled": false,
+      "script": "automation/scripts/run_windows_task.ps1",
+      "args": [
+        "-Action",
+        "orglist",
+        "-Headless"
+      ],
+      "intervalMinutes": 0,
+      "dailyTimes": [
+        "08:00"
+      ],
+      "runOnStartup": false
+    },
+    {
+      "name": "audit",
+      "enabled": false,
+      "script": "automation/scripts/run_windows_task.ps1",
+      "args": [
+        "-Action",
+        "audit",
+        "-Limit",
+        "20"
+      ],
+      "intervalMinutes": 20,
+      "dailyTimes": [],
+      "runOnStartup": false
+    },
+    {
+      "name": "sync-todo-status",
+      "enabled": false,
+      "script": "automation/scripts/run_windows_task.ps1",
+      "args": [
+        "-Action",
+        "sync-todo-status",
+        "-Headless"
+      ],
+      "intervalMinutes": 30,
+      "dailyTimes": [],
+      "runOnStartup": false
+    }
+  ]
+}
