@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+
+jobs:
+  quality:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: webui/package-lock.json
+
+      - name: Create venv
+        run: py -3.12 -m venv .venv-win
+
+      - name: Install Python deps
+        run: |
+          .\.venv-win\Scripts\python.exe -m pip install --upgrade pip
+          .\.venv-win\Scripts\python.exe -m pip install -r automation\requirements-dev.txt
+        shell: powershell
+
+      - name: Install webui deps
+        run: npm ci
+        shell: powershell
+        working-directory: webui
+
+      - name: Run quality checks
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\automation\scripts\check_quality.ps1

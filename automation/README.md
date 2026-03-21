@@ -83,6 +83,26 @@ powershell.exe -ExecutionPolicy Bypass -File .\automation\scripts\install_window
 - `check/login/run/collect/roster/orglist/rolecatalog/dbinit/audit/sync-todo-status`
 - 若未显式传入 `--config` / `--credentials`，优先使用 `settings.prod.yaml` 与 `credentials.prod.local.yaml`
 
+### 4.1 GitHub 本地配置
+
+- 本地 GitHub CLI / API 凭据文件：`automation/config/github.local.env`
+- 示例模板：`automation/config/github.local.example.env`
+- 字段：`GH_REPO_OWNER`、`GH_REPO_NAME`、`GH_TOKEN`
+- `automation/config/github.local.env` 已加入 `.gitignore`，不会上传远程
+
+PowerShell 加载示例：
+
+```powershell
+Get-Content .\automation\config\github.local.env | ForEach-Object {
+    if ($_ -match '^\s*#' -or $_ -notmatch '=') { return }
+    $name, $value = $_ -split '=', 2
+    Set-Item -Path "Env:$name" -Value $value
+}
+
+gh repo view "$env:GH_REPO_OWNER/$env:GH_REPO_NAME"
+git push origin main
+```
+
 ## 5. Windows 运行命令
 
 以下命令默认在仓库根目录执行。
@@ -395,3 +415,96 @@ powershell.exe -ExecutionPolicy Bypass -File .\automation\scripts\register_api_s
 - Windows：正式运行环境
 
 任何正式值班、定时任务、数据库承载、页面发布，均应以 Windows 原生运行链路为准。
+
+## 13. 开发环境标准化补充
+
+### 13.1 Python venv 版本校验
+
+`install_windows_env.ps1` 现在会默认校验 `.venv-win` 的 Python 版本。
+
+- 当 venv 不存在时：自动创建
+- 当 venv 版本与 `-PythonVersion` 不一致时：默认自动重建
+- 如需保留现有 venv：显式传入 `-SkipRecreateOnVersionMismatch`
+- 如需强制重建：显式传入 `-ForceRecreateVenv`
+
+示例：
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\automation\scripts\install_windows_env.ps1 -IncludeDev -PythonVersion 3.12
+```
+
+### 13.2 Node.js 与 npm
+
+项目脚本优先按以下顺序定位 Node.js：
+
+1. `-NodeDir`
+2. 用户环境变量 `CLAWCHECK_NODE_DIR`
+3. 系统 `PATH`
+
+安装 Node.js：
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\automation\scripts\install_node_windows.ps1
+```
+
+如需把 Node 安装目录同时写入用户 PATH：
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\automation\scripts\install_node_windows.ps1 -PersistUserPath
+```
+
+### 13.3 本地统一启停
+
+统一开发入口：
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\automation\scripts\start_all.ps1
+powershell.exe -ExecutionPolicy Bypass -File .\automation\scripts\status_all.ps1
+powershell.exe -ExecutionPolicy Bypass -File .\automation\scripts\restart_all.ps1
+powershell.exe -ExecutionPolicy Bypass -File .\automation\scripts\stop_all.ps1
+```
+
+前端开发单独启动：
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\automation\scripts\start_webui_dev.ps1
+```
+
+统一运行状态目录：
+
+- `automation/runtime/dev/`
+
+默认会输出：
+
+- PID 文件
+- stdout / stderr 日志
+- `status.json`
+
+### 13.4 PostgreSQL 探测
+
+标准探测入口：
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\automation\scripts\probe_postgres.ps1
+```
+
+如需统一查看开发服务状态，优先使用：
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\automation\scripts\status_all.ps1
+```
+
+### 13.5 最小质量门禁
+
+统一质量检查入口：
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\automation\scripts\check_quality.ps1
+```
+
+默认包含：
+
+- `ruff check automation tests`
+- `python -m compileall automation`
+- `python -m pytest -q`
+- `npm run build`

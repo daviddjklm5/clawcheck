@@ -2,7 +2,8 @@ param(
     [string]$Version = "24.14.0",
     [string]$InstallRoot = "",
     [switch]$Force,
-    [switch]$PersistUserEnv = $true
+    [switch]$PersistUserEnv = $true,
+    [switch]$PersistUserPath
 )
 
 $ErrorActionPreference = "Stop"
@@ -45,6 +46,19 @@ if ($PersistUserEnv) {
     [Environment]::SetEnvironmentVariable("CLAWCHECK_NODE_DIR", $NodeDir, "User")
 }
 
+if ($PersistUserPath) {
+    $CurrentUserPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    $PathEntries = @()
+    if ($CurrentUserPath) {
+        $PathEntries = $CurrentUserPath.Split(';', [System.StringSplitOptions]::RemoveEmptyEntries)
+    }
+    if ($PathEntries -notcontains $NodeDir) {
+        $NewUserPath = @($NodeDir) + $PathEntries
+        [Environment]::SetEnvironmentVariable("Path", ($NewUserPath -join ';'), "User")
+    }
+}
+
 Write-Host "NodeDir=$NodeDir"
 Write-Host "NodeExe=$NodeExe"
 Write-Host "NpmCmd=$NpmCmd"
+Write-Host "PersistUserPath=$PersistUserPath"

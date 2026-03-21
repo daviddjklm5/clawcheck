@@ -4,13 +4,18 @@ param(
     [string]$VenvDir = ".venv-win",
     [string]$Config = "",
     [string]$PgBinDir = "",
-    [string]$Host = "",
+    [Alias("Host")]
+    [string]$ConnectionHost = "",
     [int]$Port = 0,
     [string]$DbName = "",
-    [string]$User = "",
-    [string]$Password = "",
-    [string]$Schema = "",
-    [string]$SslMode = "",
+    [Alias("User")]
+    [string]$DbUser = "",
+    [Alias("Password")]
+    [string]$DbPassword = "",
+    [Alias("Schema")]
+    [string]$SchemaName = "",
+    [Alias("SslMode")]
+    [string]$ConnectionSslMode = "",
     [switch]$DropAndCreateDb
 )
 
@@ -43,13 +48,13 @@ if (-not (Test-Path $ResolvedInputFile)) {
 
 $ConnectionArgs = @("automation/scripts/db_admin.py", "connection-info", "--include-password")
 if ($Config) { $ConnectionArgs += @("--config", $Config) }
-if ($Host) { $ConnectionArgs += @("--host", $Host) }
+if ($ConnectionHost) { $ConnectionArgs += @("--host", $ConnectionHost) }
 if ($Port -gt 0) { $ConnectionArgs += @("--port", [string]$Port) }
 if ($DbName) { $ConnectionArgs += @("--dbname", $DbName) }
-if ($User) { $ConnectionArgs += @("--user", $User) }
-if ($Password) { $ConnectionArgs += @("--password", $Password) }
-if ($Schema) { $ConnectionArgs += @("--schema", $Schema) }
-if ($SslMode) { $ConnectionArgs += @("--sslmode", $SslMode) }
+if ($DbUser) { $ConnectionArgs += @("--user", $DbUser) }
+if ($DbPassword) { $ConnectionArgs += @("--password", $DbPassword) }
+if ($SchemaName) { $ConnectionArgs += @("--schema", $SchemaName) }
+if ($ConnectionSslMode) { $ConnectionArgs += @("--sslmode", $ConnectionSslMode) }
 
 Push-Location $RepoRoot
 try {

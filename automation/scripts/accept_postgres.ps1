@@ -2,13 +2,18 @@ param(
     [string]$VenvDir = ".venv-win",
     [string]$Config = "",
     [string]$DumpJson = "",
-    [string]$Host = "",
+    [Alias("Host")]
+    [string]$ConnectionHost = "",
     [int]$Port = 0,
     [string]$DbName = "",
-    [string]$User = "",
-    [string]$Password = "",
-    [string]$Schema = "",
-    [string]$SslMode = ""
+    [Alias("User")]
+    [string]$DbUser = "",
+    [Alias("Password")]
+    [string]$DbPassword = "",
+    [Alias("Schema")]
+    [string]$SchemaName = "",
+    [Alias("SslMode")]
+    [string]$ConnectionSslMode = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -22,13 +27,13 @@ if (-not (Test-Path $PythonExe)) {
 $Args = @("automation/scripts/db_admin.py", "acceptance")
 if ($Config) { $Args += @("--config", $Config) }
 if ($DumpJson) { $Args += @("--dump-json", $DumpJson) }
-if ($Host) { $Args += @("--host", $Host) }
+if ($ConnectionHost) { $Args += @("--host", $ConnectionHost) }
 if ($Port -gt 0) { $Args += @("--port", [string]$Port) }
 if ($DbName) { $Args += @("--dbname", $DbName) }
-if ($User) { $Args += @("--user", $User) }
-if ($Password) { $Args += @("--password", $Password) }
-if ($Schema) { $Args += @("--schema", $Schema) }
-if ($SslMode) { $Args += @("--sslmode", $SslMode) }
+if ($DbUser) { $Args += @("--user", $DbUser) }
+if ($DbPassword) { $Args += @("--password", $DbPassword) }
+if ($SchemaName) { $Args += @("--schema", $SchemaName) }
+if ($ConnectionSslMode) { $Args += @("--sslmode", $ConnectionSslMode) }
 
 Push-Location $RepoRoot
 try {

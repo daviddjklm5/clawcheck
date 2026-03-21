@@ -48,15 +48,15 @@ function Resolve-RepoPath([string]$RawPath) {
     return [System.IO.Path]::GetFullPath((Join-Path $RepoRoot $RawPath))
 }
 
-function Add-DbArgs([System.Collections.Generic.List[string]]$List, [string]$Config, [string]$Host, [int]$Port, [string]$DbName, [string]$User, [string]$Password, [string]$Schema, [string]$SslMode) {
+function Add-DbArgs([System.Collections.Generic.List[string]]$List, [string]$Config, [string]$ConnectionHost, [int]$Port, [string]$DbName, [string]$DbUser, [string]$DbPassword, [string]$SchemaName, [string]$ConnectionSslMode) {
     if ($Config) { $List.Add("--config"); $List.Add($Config) }
-    if ($Host) { $List.Add("--host"); $List.Add($Host) }
+    if ($ConnectionHost) { $List.Add("--host"); $List.Add($ConnectionHost) }
     if ($Port -gt 0) { $List.Add("--port"); $List.Add([string]$Port) }
     if ($DbName) { $List.Add("--dbname"); $List.Add($DbName) }
-    if ($User) { $List.Add("--user"); $List.Add($User) }
-    if ($Password) { $List.Add("--password"); $List.Add($Password) }
-    if ($Schema) { $List.Add("--schema"); $List.Add($Schema) }
-    if ($SslMode) { $List.Add("--sslmode"); $List.Add($SslMode) }
+    if ($DbUser) { $List.Add("--user"); $List.Add($DbUser) }
+    if ($DbPassword) { $List.Add("--password"); $List.Add($DbPassword) }
+    if ($SchemaName) { $List.Add("--schema"); $List.Add($SchemaName) }
+    if ($ConnectionSslMode) { $List.Add("--sslmode"); $List.Add($ConnectionSslMode) }
 }
 
 function Invoke-Step([string]$Label, [scriptblock]$Action) {
@@ -72,10 +72,10 @@ $ResolvedBackupFile = Resolve-RepoPath $BackupFile
 $ResolvedBackupDir = Resolve-RepoPath $BackupDir
 
 $SourceArgs = [System.Collections.Generic.List[string]]::new()
-Add-DbArgs -List $SourceArgs -Config $SourceConfig -Host $SourceHost -Port $SourcePort -DbName $SourceDbName -User $SourceUser -Password $SourcePassword -Schema $SourceSchema -SslMode $SourceSslMode
+Add-DbArgs -List $SourceArgs -Config $SourceConfig -ConnectionHost $SourceHost -Port $SourcePort -DbName $SourceDbName -DbUser $SourceUser -DbPassword $SourcePassword -SchemaName $SourceSchema -ConnectionSslMode $SourceSslMode
 
 $TargetArgs = [System.Collections.Generic.List[string]]::new()
-Add-DbArgs -List $TargetArgs -Config $TargetConfig -Host $TargetHost -Port $TargetPort -DbName $TargetDbName -User $TargetUser -Password $TargetPassword -Schema $TargetSchema -SslMode $TargetSslMode
+Add-DbArgs -List $TargetArgs -Config $TargetConfig -ConnectionHost $TargetHost -Port $TargetPort -DbName $TargetDbName -DbUser $TargetUser -DbPassword $TargetPassword -SchemaName $TargetSchema -ConnectionSslMode $TargetSslMode
 
 if (-not $ResolvedBackupFile) {
     if (-not (Test-Path $ResolvedBackupDir)) {
