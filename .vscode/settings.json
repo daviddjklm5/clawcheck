@@ -1,5 +1,5 @@
 {
-  "python.defaultInterpreterPath": "${workspaceFolder}\\.venv-win\\Scripts\\python.exe",
+  "python.defaultInterpreterPath": "C:/Users/Administrator/source/repos/clawcheck/.venv-win/Scripts/python.exe",
   "python.terminal.activateEnvironment": false,
   "python.testing.pytestEnabled": true,
   "python.testing.pytestArgs": [
