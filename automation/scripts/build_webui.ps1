@@ -17,6 +17,7 @@ try {
     Write-Host "NodeSource=$($NodeResolution.Source)"
     Write-Host "NodeDir=$($NodeResolution.NodeDir)"
     $NodeEnvState = Push-NodeEnvironment -NodeResolution $NodeResolution
+    Invoke-WebuiNodePreflight -NodeResolution $NodeResolution
 
     if ($Install -or -not (Test-Path (Join-Path $WebuiDir "node_modules"))) {
         & $NodeResolution.NpmCommand ci

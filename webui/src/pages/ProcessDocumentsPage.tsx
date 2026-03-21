@@ -68,6 +68,31 @@ const workbenchStatusTone: Record<string, Tone> = {
   异常: "danger",
 };
 
+function formatTaskStatusLabel(value: string): string {
+  return (
+    {
+      queued: "排队中",
+      running: "运行中",
+      succeeded: "已完成",
+      partial: "部分失败",
+      failed: "执行失败",
+    }[value] ?? value
+  );
+}
+
+function getTaskAlertSeverity(status: string): "success" | "info" | "warning" | "error" {
+  if (status === "failed") {
+    return "error";
+  }
+  if (status === "partial" || status === "running") {
+    return "warning";
+  }
+  if (status === "queued") {
+    return "info";
+  }
+  return "success";
+}
+
 const detailTabs: Array<{ value: DetailTab; label: string }> = [
   { value: "summary", label: "单据概览" },
   { value: "riskOverview", label: "风险总览" },
@@ -301,8 +326,11 @@ export function ProcessDocumentsPage() {
     ? (searchParams.get("tab") as DetailTab)
     : "summary";
 
+  const currentTask = workbench?.currentTask ?? null;
+  const currentTaskRunning = currentTask?.status === "queued" || currentTask?.status === "running";
   const workbenchStats = workbench?.stats ?? [];
   const workbenchDocuments = workbench?.documents ?? [];
+  const latestAuditRun = workbench?.recentRuns?.[0] ?? null;
   const selectedDocumentRow =
     workbenchDocuments.find((item) => item.documentNo === selectedDocumentNo) ?? null;
   const detailOverviewFields = detail?.overviewFields ?? [];
@@ -471,6 +499,18 @@ export function ProcessDocumentsPage() {
   }, [detailDrawerOpen, selectedDocumentNo, refreshVersion]);
 
   useEffect(() => {
+    if (!currentTaskRunning) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      setRefreshVersion((currentValue) => currentValue + 1);
+    }, 4000);
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [currentTaskRunning]);
+
+  useEffect(() => {
     setApprovalOpinion("同意");
     setApprovalResult(null);
     setApprovalError(null);
@@ -561,6 +601,7 @@ export function ProcessDocumentsPage() {
         dryRun: false,
       });
       setAuditNotice(`单据 ${normalizedDocumentNo}：${result.message || "评估任务已提交。"}`);
+      setRefreshVersion((currentValue) => currentValue + 1);
     } catch (submitError) {
       setAuditError(submitError instanceof Error ? submitError.message : "启动评估任务失败");
     } finally {
@@ -589,6 +630,14 @@ export function ProcessDocumentsPage() {
       ),
     },
     {
+      field: "finalScore",
+      headerName: "最终信任分",
+      minWidth: 110,
+      renderCell: (params) => (
+        <StatusTag label={formatScoreLabel(params.value as number)} tone={getScoreTone(params.value as number)} />
+      ),
+    },
+    {
       field: "workbenchStatus",
       headerName: "工作台状态",
       minWidth: 120,
@@ -600,12 +649,29 @@ export function ProcessDocumentsPage() {
       ),
     },
     {
-      field: "finalScore",
-      headerName: "最终信任分",
-      minWidth: 110,
-      renderCell: (params) => (
-        <StatusTag label={formatScoreLabel(params.value as number)} tone={getScoreTone(params.value as number)} />
-      ),
+      field: "reAuditAction",
+      headerName: "重新评估",
+      minWidth: 120,
+      sortable: false,
+      filterable: false,
+      renderCell: (params: GridRenderCellParams<ProcessDocumentRow>) => {
+        const documentNo = params.row.documentNo;
+        const isSubmitting = auditSubmittingDocumentNo === documentNo;
+        return (
+          <Button
+            size="small"
+            variant="outlined"
+            onClick={(event) => {
+              event.stopPropagation();
+              void triggerReaudit(documentNo);
+            }}
+            disabled={Boolean(auditSubmittingDocumentNo) || currentTaskRunning}
+            sx={{ textTransform: "none", minWidth: 0 }}
+          >
+            {isSubmitting ? "提交中..." : currentTaskRunning ? "评估中..." : "重新评估"}
+          </Button>
+        );
+      },
     },
     { field: "permissionTarget", headerName: "权限对象", minWidth: 130, flex: 0.9 },
     { field: "orgUnitName", headerName: "组织单位", minWidth: 160 },
@@ -635,31 +701,6 @@ export function ProcessDocumentsPage() {
       type: "number",
     },
     { field: "assessedAt", headerName: "评估时间", minWidth: 170 },
-    {
-      field: "reAuditAction",
-      headerName: "重新评估",
-      minWidth: 120,
-      sortable: false,
-      filterable: false,
-      renderCell: (params: GridRenderCellParams<ProcessDocumentRow>) => {
-        const documentNo = params.row.documentNo;
-        const isSubmitting = auditSubmittingDocumentNo === documentNo;
-        return (
-          <Button
-            size="small"
-            variant="outlined"
-            onClick={(event) => {
-              event.stopPropagation();
-              void triggerReaudit(documentNo);
-            }}
-            disabled={Boolean(auditSubmittingDocumentNo)}
-            sx={{ textTransform: "none", minWidth: 0 }}
-          >
-            {isSubmitting ? "提交中..." : "重新评估"}
-          </Button>
-        );
-      },
-    },
   ];
 
   return (
@@ -683,6 +724,17 @@ export function ProcessDocumentsPage() {
       {todoSyncError ? <Alert severity="error">{todoSyncError}</Alert> : null}
       {auditError ? <Alert severity="error">{auditError}</Alert> : null}
       {auditNotice ? <Alert severity="success">{auditNotice}</Alert> : null}
+      {currentTask ? (
+        <Alert severity={getTaskAlertSeverity(currentTask.status)}>
+          评估任务 {formatTaskStatusLabel(currentTask.status)}（任务号 {currentTask.taskId}）：{currentTask.message}
+        </Alert>
+      ) : null}
+      {latestAuditRun && !currentTask ? (
+        <Alert severity={getTaskAlertSeverity(latestAuditRun.status)}>
+          最近一次评估 {formatTaskStatusLabel(latestAuditRun.status)}（任务号 {latestAuditRun.taskId}）：
+          {latestAuditRun.message}
+        </Alert>
+      ) : null}
       {todoSyncResult ? (
         <Alert severity={todoSyncResult.status === "succeeded" ? "success" : "warning"}>
           {todoSyncResult.message}

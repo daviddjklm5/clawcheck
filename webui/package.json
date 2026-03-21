@@ -4,8 +4,9 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "preflight": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ..\\automation\\scripts\\preflight_webui_node.ps1",
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "build": "npm run preflight && tsc --noEmit && vite build",
     "preview": "vite preview"
   },
   "dependencies": {

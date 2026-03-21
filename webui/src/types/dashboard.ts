@@ -443,6 +443,8 @@ export interface ProcessExecutionLogRow {
 export interface ProcessWorkbench {
   stats: StatItem[];
   documents: ProcessDocumentRow[];
+  currentTask?: ProcessAuditRunSummary | null;
+  recentRuns?: ProcessAuditRunSummary[];
 }
 
 export interface ProcessAnalysisDashboard {

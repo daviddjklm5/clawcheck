@@ -241,6 +241,12 @@ powershell.exe -ExecutionPolicy Bypass -File .\automation\scripts\run_sync_todo_
 powershell.exe -ExecutionPolicy Bypass -File .\automation\scripts\build_webui.ps1 -Install
 ```
 
+构建前环境预检查（推荐）：
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\automation\scripts\preflight_webui_node.ps1
+```
+
 默认行为：
 
 - 执行 `npm ci`
@@ -491,6 +497,20 @@ powershell.exe -ExecutionPolicy Bypass -File .\automation\scripts\install_node_w
 
 ```powershell
 powershell.exe -ExecutionPolicy Bypass -File .\automation\scripts\install_node_windows.ps1 -PersistUserPath
+```
+
+排障与执行口径（避免误判）：
+
+- 建议仅保留一个主用 Node 来源（默认推荐 `C:\Program Files\nodejs\`）
+- 修改 Node/PATH 后，先重启终端与当前会话，再执行构建命令
+- 不要仅凭一次 `npm` 失败判断“未安装”，至少执行：
+  - `npm -v`
+  - `npm.cmd -v`
+  - `cmd /c npm -v`
+- 若 PowerShell 下 `npm -v` 失败，优先执行绝对路径：
+
+```powershell
+C:\Program Files\nodejs\npm.cmd -v
 ```
 
 ### 13.3 本地统一启停
