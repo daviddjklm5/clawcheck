@@ -17,9 +17,27 @@ class DocumentApprovalFlow:
         ".kd-cq-dropdown-item",
         ".kd-cq-menu-item",
         ".kd-cq-list-item",
+        "[role='option']",
+        "li[role='option']",
+        ".ant-select-item-option",
+        ".ant-select-dropdown .ant-select-item",
     )
     _SUCCESS_KEYWORDS = ("成功", "提交成功", "处理成功", "审批成功", "操作成功")
     _ERROR_KEYWORDS = ("失败", "错误", "异常", "不能为空", "请填写", "请先填写", "必填", "校验")
+    _ACTION_CONFIG: dict[str, dict[str, Any]] = {
+        "approve": {
+            "decisionValue": "同意",
+            "approvalRecordActions": ("同意",),
+            "submitActionLabel": "批准",
+            "recordSuccessMessage": "审批记录已追加最新同意动作。",
+        },
+        "reject": {
+            "decisionValue": "驳回至已选节点",
+            "approvalRecordActions": ("驳回", "拒绝"),
+            "submitActionLabel": "驳回",
+            "recordSuccessMessage": "审批记录已追加最新驳回动作。",
+        },
+    }
 
     def __init__(
         self,
@@ -140,6 +158,17 @@ class DocumentApprovalFlow:
         approval_tab.click(force=True)
         self.page.wait_for_timeout(600)
 
+    @classmethod
+    def _resolve_action_config(cls, action: str) -> dict[str, Any]:
+        normalized_action = cls._normalize_text(action)
+        config = cls._ACTION_CONFIG.get(normalized_action)
+        if config is None:
+            raise ValueError(f"暂不支持审批动作 {action!r}")
+        return {
+            "action": normalized_action,
+            **config,
+        }
+
     def _task_field_item(self, label: str) -> Locator:
         field = self.page.locator('[data-field-item="true"]').filter(has_text=label).first
         field.wait_for(state="visible", timeout=self.timeout_ms)
@@ -215,11 +244,90 @@ class DocumentApprovalFlow:
             normalized = self._normalize_text(text)
             if normalized and normalized not in deduplicated:
                 deduplicated.append(normalized)
+        if deduplicated:
+            return deduplicated
+
+        fallback_texts = self.page.evaluate(
+            r"""() => {
+                const normalize = (value) => (value || '').replace(/\s+/g, ' ').trim();
+                const visible = (el) => {
+                    const style = window.getComputedStyle(el);
+                    const rect = el.getBoundingClientRect();
+                    return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+                };
+                const containerSelectors = [
+                    '.kd-cq-dropdown',
+                    '.kd-dropdown-menu',
+                    '.kd-cq-select-dropdown',
+                    '.kd-cq-combo-dropdown',
+                    '.ant-select-dropdown',
+                    '[role=\"listbox\"]',
+                ];
+                const containers = containerSelectors.flatMap((selector) =>
+                    [...document.querySelectorAll(selector)].filter(visible)
+                );
+                const roots = containers.length > 0 ? containers : [];
+                const result = [];
+                for (const root of roots) {
+                    for (const element of root.querySelectorAll('li, div, span, a')) {
+                        if (!visible(element)) continue;
+                        const text = normalize(element.innerText || element.textContent || '');
+                        if (!text) continue;
+                        result.push(text);
+                    }
+                }
+                return result;
+            }"""
+        )
+        for text in fallback_texts or []:
+            normalized = self._normalize_text(text)
+            if normalized and normalized not in deduplicated:
+                deduplicated.append(normalized)
         return deduplicated
 
+    def _open_decision_dropdown(self) -> None:
+        trigger = self._decision_trigger()
+        trigger.click(force=True)
+        self.page.wait_for_timeout(250)
+        if self._visible_option_texts():
+            return
+
+        field = self._task_field_item("审批决策")
+        field.evaluate(
+            r"""(item) => {
+                const candidates = [
+                    ".kd-cq-select-arrow",
+                    ".kd-cq-combo-arrow",
+                    ".kd-select-arrow",
+                    "[role='combobox']",
+                    "svg",
+                    "input",
+                    ".kd-cq-combo-selected",
+                    ".kd-cq-select-selection-item",
+                    ".kd-cq-select",
+                    ".kd-cq-combo",
+                ];
+                for (const selector of candidates) {
+                    const target = item.querySelector(selector);
+                    if (!target) continue;
+                    target.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+                    target.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+                    return;
+                }
+                item.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+                item.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+            }"""
+        )
+        self.page.wait_for_timeout(250)
+        if self._visible_option_texts():
+            return
+
+        trigger.click(force=True)
+        self.page.keyboard.press("ArrowDown")
+        self.page.wait_for_timeout(250)
+
     def list_decision_options(self) -> list[str]:
-        self._decision_trigger().click(force=True)
-        self.page.wait_for_timeout(300)
+        self._open_decision_dropdown()
         options = self._visible_option_texts()
         self.page.keyboard.press("Escape")
         return options
@@ -232,10 +340,116 @@ class DocumentApprovalFlow:
         if current_value == target_value:
             return current_value
 
-        self._decision_trigger().click(force=True)
-        option_locator = self.page.locator(",".join(self._OPTION_SELECTORS)).filter(has_text=target_value).first
-        option_locator.wait_for(state="visible", timeout=self.timeout_ms)
-        option_locator.click(force=True)
+        self._open_decision_dropdown()
+        option_selector = ",".join(self._OPTION_SELECTORS)
+        option_candidates = [target_value]
+        if "驳回" in target_value:
+            option_candidates.extend(["驳回至已选", "驳回"])
+        selected = False
+        for option_text in option_candidates:
+            option_locator = self.page.locator(option_selector).filter(has_text=option_text).first
+            try:
+                option_locator.wait_for(state="visible", timeout=min(self.timeout_ms, 2500))
+                option_locator.click(force=True)
+                selected = True
+                break
+            except Exception:  # noqa: BLE001
+                continue
+        if not selected:
+            click_result = self.page.evaluate(
+                r"""(payload) => {
+                    const normalize = (value) => (value || '').replace(/\s+/g, ' ').trim();
+                    const visible = (el) => {
+                        const style = window.getComputedStyle(el);
+                        const rect = el.getBoundingClientRect();
+                        return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+                    };
+                    const containerSelectors = [
+                        '.kd-cq-dropdown',
+                        '.kd-dropdown-menu',
+                        '.kd-cq-select-dropdown',
+                        '.kd-cq-combo-dropdown',
+                        '.ant-select-dropdown',
+                        '[role=\"listbox\"]',
+                    ];
+                    const containers = containerSelectors.flatMap((selector) =>
+                        [...document.querySelectorAll(selector)].filter(visible)
+                    );
+                    const collectBestCandidate = (elements) => {
+                        const matches = [];
+                        for (const element of elements) {
+                            if (!visible(element)) continue;
+                            const text = normalize(element.innerText || element.textContent || '');
+                            if (!text) continue;
+                            if (!payload.candidates.some((candidate) => text.includes(candidate))) continue;
+                            const hasSameTextChild = [...element.querySelectorAll('*')].some((child) => {
+                                if (!visible(child)) return false;
+                                return normalize(child.innerText || child.textContent || '') === text;
+                            });
+                            if (hasSameTextChild) continue;
+                            const exact = payload.candidates.some((candidate) => text === candidate);
+                            matches.push({ element, text, exact, length: text.length });
+                        }
+                        if (matches.length === 0) return null;
+                        matches.sort((left, right) => {
+                            if (left.exact !== right.exact) return left.exact ? -1 : 1;
+                            return left.length - right.length;
+                        });
+                        return matches[0];
+                    };
+                    for (const container of containers) {
+                        const best = collectBestCandidate(container.querySelectorAll('li, div, span, a'));
+                        if (!best) continue;
+                        best.element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+                        best.element.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+                        return { clicked: true, text: best.text };
+                    }
+                    return { clicked: false, text: '' };
+                }""",
+                {"candidates": option_candidates},
+            )
+            selected = bool((click_result or {}).get("clicked"))
+        if not selected:
+            click_result = self.page.evaluate(
+                r"""(payload) => {
+                    const normalize = (value) => (value || '').replace(/\s+/g, ' ').trim();
+                    const visible = (el) => {
+                        const style = window.getComputedStyle(el);
+                        const rect = el.getBoundingClientRect();
+                        return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+                    };
+                    const allElements = [...document.querySelectorAll('body *')].filter(visible);
+                    const matches = [];
+                    for (const candidate of payload.candidates) {
+                        for (const element of allElements) {
+                            const text = normalize(element.innerText || element.textContent || '');
+                            if (!text || !text.includes(candidate)) continue;
+                            const hasSameTextChild = [...element.querySelectorAll('*')].some((child) => {
+                                if (!visible(child)) return false;
+                                return normalize(child.innerText || child.textContent || '') === text;
+                            });
+                            if (hasSameTextChild) continue;
+                            const exact = payload.candidates.some((item) => text === item);
+                            matches.push({ element, text, exact, length: text.length });
+                        }
+                    }
+                    if (matches.length > 0) {
+                        matches.sort((left, right) => {
+                            if (left.exact !== right.exact) return left.exact ? -1 : 1;
+                            return left.length - right.length;
+                        });
+                        const best = matches[0];
+                        best.element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+                        best.element.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+                        return { clicked: true, text: best.text };
+                    }
+                    return { clicked: false, text: '' };
+                }""",
+                {"candidates": option_candidates},
+            )
+            selected = bool((click_result or {}).get("clicked"))
+        if not selected:
+            raise RuntimeError(f"审批决策下拉未找到目标选项：{target_value!r}")
         self.page.wait_for_timeout(500)
 
         current_value = self.read_decision_value()
@@ -589,6 +803,7 @@ class DocumentApprovalFlow:
         document_no: str,
         state_before_todo_probe: dict[str, Any],
         todo_probe: dict[str, Any],
+        submit_action_label: str,
     ) -> dict[str, Any]:
         self._emit_event(
             "approval_confirmation_uncertain",
@@ -605,7 +820,7 @@ class DocumentApprovalFlow:
             "confirmationType": "submitted_pending_confirmation",
             "confirmationMessage": (
                 "提交动作已发出，但当前未拿到强成功回执。"
-                "请先不要重复点击批准，可先查看最新审批日志或执行一次“同步待办状态”确认。"
+                f"请先不要重复点击{submit_action_label}，可先查看最新审批日志或执行一次“同步待办状态”确认。"
             ),
         }
 
@@ -615,6 +830,10 @@ class DocumentApprovalFlow:
         expected_opinion: str,
         approval_count_before: int,
         wait_timeout_ms: int | None = None,
+        *,
+        expected_approval_actions: tuple[str, ...] = ("同意",),
+        record_success_message: str = "审批记录已追加最新同意动作。",
+        submit_action_label: str = "批准",
     ) -> dict[str, Any]:
         total_timeout_ms = wait_timeout_ms or max(self.timeout_ms, 45000)
         started_at = time.monotonic()
@@ -785,7 +1004,12 @@ class DocumentApprovalFlow:
                 latest_record = records[-1]
                 latest_action = self._normalize_text(latest_record.get("approval_action"))
                 latest_opinion = self._normalize_text(latest_record.get("approval_opinion"))
-                if latest_action == "同意" or latest_opinion == self._normalize_text(expected_opinion):
+                normalized_expected_actions = {
+                    self._normalize_text(action)
+                    for action in expected_approval_actions
+                    if self._normalize_text(action)
+                }
+                if latest_action in normalized_expected_actions or latest_opinion == self._normalize_text(expected_opinion):
                     self._emit_event(
                         "approval_record_probe_hit",
                         documentNo=document_no,
@@ -795,7 +1019,7 @@ class DocumentApprovalFlow:
                     return {
                         "status": "succeeded",
                         "confirmationType": "approval_record",
-                        "confirmationMessage": "审批记录已追加最新同意动作。",
+                        "confirmationMessage": record_success_message,
                         "latestApprovalAction": latest_action,
                         "latestApprovalOpinion": latest_opinion,
                     }
@@ -872,7 +1096,12 @@ class DocumentApprovalFlow:
                     "confirmationMessage": "提交后目标单据已不在当前账号待办中。",
                 }
             if todo_probe.get("documentStillInTodo") is False:
-                return self._build_pending_confirmation_result(document_no, state_before_todo_probe, todo_probe)
+                return self._build_pending_confirmation_result(
+                    document_no,
+                    state_before_todo_probe,
+                    todo_probe,
+                    submit_action_label=submit_action_label,
+                )
 
         if todo_probe.get("documentStillInTodo") is True and time.monotonic() < final_deadline:
             self.page.wait_for_timeout(3000)
@@ -910,7 +1139,12 @@ class DocumentApprovalFlow:
             )
 
         if self._should_return_pending_confirmation(state_before_todo_probe, todo_probe):
-            return self._build_pending_confirmation_result(document_no, state_before_todo_probe, todo_probe)
+            return self._build_pending_confirmation_result(
+                document_no,
+                state_before_todo_probe,
+                todo_probe,
+                submit_action_label=submit_action_label,
+            )
 
         raise RuntimeError(
             "点击提交后未在预期时间内观察到成功反馈。"
@@ -971,7 +1205,20 @@ class DocumentApprovalFlow:
             "detailTabs": detail_tabs,
         }
 
-    def execute_approve(self, document_no: str, approval_opinion: str, dry_run: bool = False) -> dict[str, Any]:
+    def execute_action(
+        self,
+        *,
+        action: str,
+        document_no: str,
+        approval_opinion: str,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        action_config = self._resolve_action_config(action)
+        decision_target = str(action_config["decisionValue"])
+        expected_approval_actions = tuple(action_config["approvalRecordActions"])
+        submit_action_label = str(action_config["submitActionLabel"])
+        record_success_message = str(action_config["recordSuccessMessage"])
+
         preparation = self.prepare_document_for_approval(document_no)
         baseline_records = self.capture_approval_records()
 
@@ -985,16 +1232,20 @@ class DocumentApprovalFlow:
             decisionOptionCount=len(decision_options),
             durationMs=round((time.monotonic() - decision_probe_started_at) * 1000, 1),
         )
-        if "同意" not in decision_options and decision_before != "同意":
-            raise RuntimeError(f"当前审批决策不支持“同意”，可用选项={decision_options}")
 
         opinion_probe_started_at = time.monotonic()
         opinion_before = self.read_approval_opinion()
-        decision_after = self.set_decision_value("同意")
+        try:
+            decision_after = self.set_decision_value(decision_target)
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(
+                f"当前审批决策不支持“{decision_target}”，可用选项={decision_options}"
+            ) from exc
         opinion_after = self.write_approval_opinion(approval_opinion)
         self._emit_event(
             "approval_form_filled",
             documentNo=document_no,
+            action=action_config["action"],
             decisionAfter=decision_after,
             approvalOpinionBefore=opinion_before,
             approvalOpinionAfter=opinion_after,
@@ -1009,6 +1260,7 @@ class DocumentApprovalFlow:
         )
 
         response = {
+            "action": action_config["action"],
             "basicInfo": preparation["basicInfo"],
             "detailTabs": preparation["detailTabs"],
             "decisionBefore": decision_before,
@@ -1022,21 +1274,35 @@ class DocumentApprovalFlow:
         }
 
         if dry_run:
+            restore_warnings: list[str] = []
             if opinion_before != approval_opinion:
-                self.write_approval_opinion(opinion_before)
-            if decision_before and decision_before != "同意":
-                self.set_decision_value(decision_before)
+                try:
+                    self.write_approval_opinion(opinion_before)
+                except Exception as exc:  # noqa: BLE001
+                    restore_warnings.append(f"restore_approval_opinion_failed: {exc}")
+            if decision_before and decision_before != decision_target:
+                try:
+                    self.set_decision_value(decision_before)
+                except Exception as exc:  # noqa: BLE001
+                    restore_warnings.append(f"restore_decision_failed: {exc}")
             response["approvalOpinionRestored"] = self.read_approval_opinion()
             response["decisionRestored"] = self.read_decision_value()
+            if restore_warnings:
+                response["dryRunRestoreWarnings"] = restore_warnings
             response["status"] = "succeeded"
             response["confirmationType"] = "dry_run"
-            response["confirmationMessage"] = "已完成页面连通与写入验证，未点击提交。"
+            response["confirmationMessage"] = (
+                "已完成页面连通与写入验证，未点击提交。"
+                if not restore_warnings
+                else "已完成页面连通与写入验证，未点击提交；但页面回滚存在告警，请查看 dryRunRestoreWarnings。"
+            )
             return response
 
         submit_button.click(force=True)
         self._emit_event(
             "approval_submit_clicked",
             documentNo=document_no,
+            action=action_config["action"],
             submitLabel=submit_label,
         )
         self.page.wait_for_timeout(600)
@@ -1045,6 +1311,25 @@ class DocumentApprovalFlow:
             expected_opinion=approval_opinion,
             approval_count_before=len(baseline_records),
             wait_timeout_ms=max(self.timeout_ms, 45000),
+            expected_approval_actions=expected_approval_actions,
+            record_success_message=record_success_message,
+            submit_action_label=submit_action_label,
         )
         response.update(confirmation)
         return response
+
+    def execute_approve(self, document_no: str, approval_opinion: str, dry_run: bool = False) -> dict[str, Any]:
+        return self.execute_action(
+            action="approve",
+            document_no=document_no,
+            approval_opinion=approval_opinion,
+            dry_run=dry_run,
+        )
+
+    def execute_reject(self, document_no: str, approval_opinion: str, dry_run: bool = False) -> dict[str, Any]:
+        return self.execute_action(
+            action="reject",
+            document_no=document_no,
+            approval_opinion=approval_opinion,
+            dry_run=dry_run,
+        )

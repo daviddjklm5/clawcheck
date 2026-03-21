@@ -332,7 +332,7 @@ export interface ProcessDetail {
 }
 
 export interface ProcessApprovalRequest {
-  action: "approve";
+  action: "approve" | "reject";
   approvalOpinion: string;
   dryRun: boolean;
 }
@@ -368,7 +368,7 @@ export interface ProcessAuditRunSummary {
 
 export interface ProcessApprovalResponse {
   documentNo: string;
-  action: string;
+  action: "approve" | "reject" | string;
   ehrDecision: string;
   ehrSubmitLabel: string;
   approvalOpinion: string;

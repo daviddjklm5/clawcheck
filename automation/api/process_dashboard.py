@@ -32,6 +32,20 @@ _AUDIT_LOG_FILENAME_PATTERN = re.compile(r"audit_(\d{8})_(\d{6})$")
 DEFAULT_CREDENTIALS_PATH = REPO_ROOT / "automation/config/credentials.local.yaml"
 PROD_CREDENTIALS_PATH = REPO_ROOT / "automation/config/credentials.prod.local.yaml"
 SELECTORS_PATH = REPO_ROOT / "automation/config/selectors.yaml"
+_APPROVAL_ACTION_CONFIG: dict[str, dict[str, str]] = {
+    "approve": {
+        "ehrDecision": "同意",
+        "submitActionLabel": "批准",
+        "successMessage": "EHR 已完成同意并提交。",
+        "todoProcessStatusOnSucceeded": "已处理",
+    },
+    "reject": {
+        "ehrDecision": "驳回至已选节点",
+        "submitActionLabel": "驳回",
+        "successMessage": "EHR 已完成驳回并提交。",
+        "todoProcessStatusOnSucceeded": "已驳回",
+    },
+}
 
 
 def _to_repo_relative(path: Path) -> str:
@@ -182,8 +196,12 @@ def approve_process_document(
     approval_opinion: str,
     dry_run: bool = False,
 ) -> dict[str, Any]:
-    if action != "approve":
-        raise ValueError(f"暂不支持审批动作 {action!r}，当前仅支持 'approve'")
+    normalized_action = str(action or "").strip().lower()
+    action_config = _APPROVAL_ACTION_CONFIG.get(normalized_action)
+    if action_config is None:
+        raise ValueError(
+            f"暂不支持审批动作 {action!r}，当前仅支持 {sorted(_APPROVAL_ACTION_CONFIG)}"
+        )
 
     settings_path, settings = _load_runtime_settings()
     credentials_path = _apply_runtime_auth(settings_path, settings)
@@ -205,7 +223,7 @@ def approve_process_document(
     execution_log: dict[str, Any] = {
         "request": {
             "documentNo": document_no,
-            "action": action,
+            "action": normalized_action,
             "approvalOpinion": approval_opinion,
             "dryRun": dry_run,
         },
@@ -252,8 +270,8 @@ def approve_process_document(
     browser_session_acquired = False
     response_payload = {
         "documentNo": document_no,
-        "action": action,
-        "ehrDecision": "同意",
+        "action": normalized_action,
+        "ehrDecision": action_config["ehrDecision"],
         "ehrSubmitLabel": "提交",
         "approvalOpinion": approval_opinion,
         "dryRun": dry_run,
@@ -286,12 +304,12 @@ def approve_process_document(
                 todoProcessStatus=todo_process_status,
                 todoStatusUpdatedAt=todo_status_updated_at,
             )
-        if todo_process_status == "已处理":
+        if todo_process_status in {"已处理", "已驳回"}:
             response_payload["status"] = "failed"
             response_payload["finishedAt"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             response_payload["durationMs"] = round((time.perf_counter() - started_perf) * 1000, 1)
             response_payload["message"] = (
-                "该单据最近一次待办同步结果为“已处理”，当前账号待办列表中未找到。"
+                f"该单据最近一次待办同步结果为“{todo_process_status}”，当前账号待办列表中未找到。"
                 "若怀疑单据已驳回后重新提交，请先点击“同步待办状态”后再重试。"
             )
             flush_execution_log()
@@ -377,8 +395,14 @@ def approve_process_document(
             else:
                 add_event("reuse_existing_login_state")
 
-            add_event("approval_flow_started", documentNo=document_no, dryRun=dry_run)
-            flow_result = approval_flow.execute_approve(
+            add_event(
+                "approval_flow_started",
+                documentNo=document_no,
+                action=normalized_action,
+                dryRun=dry_run,
+            )
+            flow_result = approval_flow.execute_action(
+                action=normalized_action,
                 document_no=document_no,
                 approval_opinion=approval_opinion,
                 dry_run=dry_run,
@@ -397,15 +421,23 @@ def approve_process_document(
                 if dry_run
                 else (
                     response_payload["confirmationMessage"]
-                    or "提交动作已发出，但当前未拿到强成功回执。请先不要重复点击批准。"
+                    or (
+                        "提交动作已发出，但当前未拿到强成功回执。"
+                        f"请先不要重复点击{action_config['submitActionLabel']}。"
+                    )
                 )
                 if flow_status == "submitted_pending_confirmation"
-                else "EHR 已完成同意并提交。"
+                else action_config["successMessage"]
             )
             if not dry_run and flow_status == "succeeded":
                 try:
-                    permission_store.update_single_todo_process_status(document_no, "已处理")
-                    add_event("todo_process_status_updated", documentNo=document_no, todoProcessStatus="已处理")
+                    final_todo_process_status = action_config["todoProcessStatusOnSucceeded"]
+                    permission_store.update_single_todo_process_status(document_no, final_todo_process_status)
+                    add_event(
+                        "todo_process_status_updated",
+                        documentNo=document_no,
+                        todoProcessStatus=final_todo_process_status,
+                    )
                 except Exception as exc:  # noqa: BLE001
                     add_event("todo_process_status_update_failed", error=str(exc), documentNo=document_no)
             execution_log["result"] = flow_result

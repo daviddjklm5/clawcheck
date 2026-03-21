@@ -4,6 +4,11 @@ import {
   Alert,
   Box,
   Button,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogContentText,
+  DialogTitle,
   Drawer,
   IconButton,
   MenuItem,
@@ -52,6 +57,7 @@ const MAIN_GRID_PAGE_SIZE = 20;
 const DETAIL_GRID_PAGE_SIZE = 20;
 const MAIN_GRID_HEIGHT = 760;
 const DETAIL_GRID_HEIGHT = 920;
+const APPROVAL_DRAFT_STORAGE_PREFIX = "clawcheck.process.approval_opinion.";
 
 const conclusionTone: Record<string, Tone> = {
   拒绝: "danger",
@@ -176,12 +182,16 @@ function getApprovalResultSeverity(result: ProcessApprovalResponse): "success" |
   return "success";
 }
 
+function getApprovalActionLabel(action: string): string {
+  return action === "reject" ? "驳回" : "批准";
+}
+
 function getApprovalStatusHint(result: ProcessApprovalResponse): string {
   if (result.dryRun) {
     return "当前只做连通性验证，不点击提交。";
   }
   if (result.status === "submitted_pending_confirmation") {
-    return "提交动作已发出，但当前仍处于待确认状态；请先不要重复点击批准。";
+    return `提交动作已发出，但当前仍处于待确认状态；请先不要重复点击${getApprovalActionLabel(result.action)}。`;
   }
   return "已按返回结果完成执行，并已命中成功确认信号。";
 }
@@ -304,7 +314,10 @@ export function ProcessDocumentsPage() {
   const [error, setError] = useState<string | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [approvalOpinion, setApprovalOpinion] = useState("同意");
-  const [approvalSubmittingMode, setApprovalSubmittingMode] = useState<"approve" | "dryRun" | null>(null);
+  const [approvalSubmittingMode, setApprovalSubmittingMode] = useState<
+    "approve" | "reject" | "dryRunApprove" | "dryRunReject" | null
+  >(null);
+  const [rejectConfirmOpen, setRejectConfirmOpen] = useState(false);
   const [approvalResult, setApprovalResult] = useState<ProcessApprovalResponse | null>(null);
   const [approvalError, setApprovalError] = useState<string | null>(null);
   const [todoSyncing, setTodoSyncing] = useState(false);
@@ -343,6 +356,20 @@ export function ProcessDocumentsPage() {
   const detailRoles = detail?.roles ?? [];
   const detailOrgScopes = detail?.orgScopes ?? [];
   const detailApprovals = detail?.approvals ?? [];
+  const documentAlreadyHandled =
+    selectedDocumentRow?.todoProcessStatus === "已处理" || selectedDocumentRow?.todoProcessStatus === "已驳回";
+
+  function getApprovalDraftStorageKey(documentNo: string): string {
+    return `${APPROVAL_DRAFT_STORAGE_PREFIX}${documentNo}`;
+  }
+
+  function collectRiskOverviewPromptLines(): string[] {
+    const lines = detailFeedbackGroups
+      .flatMap((group) => getFeedbackSummaryLines(group))
+      .map((line) => line.trim())
+      .filter((line) => Boolean(line));
+    return Array.from(new Set(lines));
+  }
 
   const normalizedQueryText = normalizeText(deferredQueryText);
   const statusOptions = Array.from(
@@ -511,11 +538,36 @@ export function ProcessDocumentsPage() {
   }, [currentTaskRunning]);
 
   useEffect(() => {
-    setApprovalOpinion("同意");
+    if (!selectedDocumentNo) {
+      setApprovalOpinion("同意");
+      return;
+    }
+    let draftOpinion = "同意";
+    try {
+      const cached = window.localStorage.getItem(getApprovalDraftStorageKey(selectedDocumentNo));
+      if (cached && cached.trim()) {
+        draftOpinion = cached;
+      }
+    } catch {
+      // ignore localStorage read errors
+    }
+    setApprovalOpinion(draftOpinion);
     setApprovalResult(null);
     setApprovalError(null);
     setApprovalSubmittingMode(null);
+    setRejectConfirmOpen(false);
   }, [selectedDocumentNo]);
+
+  useEffect(() => {
+    if (!selectedDocumentNo) {
+      return;
+    }
+    try {
+      window.localStorage.setItem(getApprovalDraftStorageKey(selectedDocumentNo), approvalOpinion);
+    } catch {
+      // ignore localStorage write errors
+    }
+  }, [selectedDocumentNo, approvalOpinion]);
 
   function openDetail(documentNo: string) {
     updateSearchParams(
@@ -537,7 +589,7 @@ export function ProcessDocumentsPage() {
     );
   }
 
-  async function runApproval(dryRun: boolean) {
+  async function runApproval(action: "approve" | "reject", dryRun: boolean) {
     if (!selectedDocumentNo) {
       return;
     }
@@ -550,11 +602,13 @@ export function ProcessDocumentsPage() {
     }
 
     try {
-      setApprovalSubmittingMode(dryRun ? "dryRun" : "approve");
+      setApprovalSubmittingMode(
+        dryRun ? (action === "approve" ? "dryRunApprove" : "dryRunReject") : action,
+      );
       setApprovalError(null);
       setApprovalResult(null);
       const response = await dashboardApi.approveProcessDocument(selectedDocumentNo, {
-        action: "approve",
+        action,
         approvalOpinion: opinion,
         dryRun,
       });
@@ -567,6 +621,40 @@ export function ProcessDocumentsPage() {
     } finally {
       setApprovalSubmittingMode(null);
     }
+  }
+
+  function generateRejectOpinion() {
+    const lines = collectRiskOverviewPromptLines();
+    if (lines.length === 0) {
+      setApprovalError("风险总览中未找到可生成的风险摘要，请先人工填写驳回意见。");
+      return;
+    }
+    const generatedOpinion = lines.join("\n");
+    setApprovalOpinion(generatedOpinion);
+    setApprovalError(null);
+    setApprovalResult(null);
+  }
+
+  function requestRejectConfirm() {
+    if (!selectedDocumentNo) {
+      return;
+    }
+    const opinion = approvalOpinion.trim();
+    if (!opinion) {
+      setApprovalError("请先填写审批意见，再执行驳回。");
+      setApprovalResult(null);
+      return;
+    }
+    setRejectConfirmOpen(true);
+  }
+
+  function cancelRejectConfirm() {
+    setRejectConfirmOpen(false);
+  }
+
+  function confirmReject() {
+    setRejectConfirmOpen(false);
+    void runApproval("reject", false);
   }
 
   async function syncTodoStatus() {
@@ -772,6 +860,7 @@ export function ProcessDocumentsPage() {
               <MenuItem value="待处理">待处理</MenuItem>
               <MenuItem value="all_todo">全部</MenuItem>
               <MenuItem value="已处理">已处理</MenuItem>
+              <MenuItem value="已驳回">已驳回</MenuItem>
             </TextField>
             <TextField
               select
@@ -1212,16 +1301,21 @@ export function ProcessDocumentsPage() {
             ) : null}
 
             {activeTab === "approvalAction" ? (
-              <SectionCard title="审批单据" subtitle="第一阶段仅开放批准动作；前端“批准”会映射到 EHR 的“同意 + 提交”。">
+              <SectionCard
+                title="审批单据"
+                subtitle="当前支持“批准”和“驳回”；驳回可先从风险总览自动生成风险摘要意见，再二次确认后提交。"
+              >
                 <Stack spacing={2}>
                   {!selectedDocumentRow?.hasAssessment ? (
                     <Alert severity="warning">
                       {selectedDocumentRow?.workbenchStatusHint || "该单据尚未产出评估结果，当前不允许直接审批。"}
                     </Alert>
                   ) : null}
-                  {selectedDocumentRow?.todoProcessStatus === "已处理" ? (
+                  {documentAlreadyHandled ? (
                     <Alert severity="info">
-                      该单据最近一次待办同步结果为“已处理”，当前账号 EHR 待办中未命中。
+                      该单据最近一次待办同步结果为“
+                      {selectedDocumentRow?.todoProcessStatus || "已处理"}
+                      ”，当前账号 EHR 待办中未命中。
                       {selectedDocumentRow?.todoStatusUpdatedAt && selectedDocumentRow.todoStatusUpdatedAt !== "-" ? (
                         <> 最近同步时间：{selectedDocumentRow.todoStatusUpdatedAt}。</>
                       ) : null}
@@ -1229,7 +1323,8 @@ export function ProcessDocumentsPage() {
                     </Alert>
                   ) : null}
                   <Alert severity="warning">
-                    本操作会真实写回 EHR。当前实现会自动打开目标单据的 `任务处理`，将 `审批决策` 设为 `同意`，把下方审批意见写入 EHR 后点击 `提交`。
+                    本操作会真实写回 EHR。系统会自动打开目标单据的 `任务处理`，将 `审批意见` 写入 EHR，并按动作选择审批决策：
+                    `批准对应同意`，`驳回对应驳回至已选节点`，最后点击 `提交`。
                   </Alert>
 
                   <KeyValueList
@@ -1262,8 +1357,12 @@ export function ProcessDocumentsPage() {
                         value: selectedDocumentRow?.todoStatusUpdatedAt ?? "-",
                         hint: "最近一次确认该单据是否仍在当前账号待办中的时间。",
                       },
-                      { label: "EHR 审批决策", value: "同意", hint: "后端执行时固定选择该决策值。" },
-                      { label: "EHR 执行按钮", value: "提交", hint: "EHR 实页执行按钮文案。前端按钮文案仍显示“批准”。" },
+                      {
+                        label: "EHR 审批决策",
+                        value: "批准=同意；驳回=驳回至已选节点",
+                        hint: "后端会按前端动作自动选择对应决策值。",
+                      },
+                      { label: "EHR 执行按钮", value: "提交", hint: "EHR 实页执行按钮文案。" },
                     ]}
                   />
 
@@ -1279,6 +1378,21 @@ export function ProcessDocumentsPage() {
 
                   <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5}>
                     <Button
+                      variant="outlined"
+                      disabled={
+                        !selectedDocumentNo ||
+                        approvalSubmittingMode !== null ||
+                        !selectedDocumentRow?.hasAssessment ||
+                        documentAlreadyHandled
+                      }
+                      onClick={generateRejectOpinion}
+                    >
+                      生成驳回意见
+                    </Button>
+                  </Stack>
+
+                  <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5}>
+                    <Button
                       variant="contained"
                       disableElevation
                       disabled={
@@ -1286,11 +1400,26 @@ export function ProcessDocumentsPage() {
                         approvalSubmittingMode !== null ||
                         !approvalOpinion.trim() ||
                         !selectedDocumentRow?.hasAssessment ||
-                        selectedDocumentRow?.todoProcessStatus === "已处理"
+                        documentAlreadyHandled
                       }
-                      onClick={() => void runApproval(false)}
+                      onClick={() => void runApproval("approve", false)}
                     >
                       {approvalSubmittingMode === "approve" ? "批准中..." : "批准"}
+                    </Button>
+                    <Button
+                      variant="contained"
+                      color="error"
+                      disableElevation
+                      disabled={
+                        !selectedDocumentNo ||
+                        approvalSubmittingMode !== null ||
+                        !approvalOpinion.trim() ||
+                        !selectedDocumentRow?.hasAssessment ||
+                        documentAlreadyHandled
+                      }
+                      onClick={requestRejectConfirm}
+                    >
+                      {approvalSubmittingMode === "reject" ? "驳回中..." : "驳回"}
                     </Button>
                     <Button
                       variant="outlined"
@@ -1299,11 +1428,25 @@ export function ProcessDocumentsPage() {
                         approvalSubmittingMode !== null ||
                         !approvalOpinion.trim() ||
                         !selectedDocumentRow?.hasAssessment ||
-                        selectedDocumentRow?.todoProcessStatus === "已处理"
+                        documentAlreadyHandled
                       }
-                      onClick={() => void runApproval(true)}
+                      onClick={() => void runApproval("approve", true)}
                     >
-                      {approvalSubmittingMode === "dryRun" ? "验证中..." : "验证连通性（dry-run）"}
+                      {approvalSubmittingMode === "dryRunApprove" ? "验证中..." : "验证批准连通性（dry-run）"}
+                    </Button>
+                    <Button
+                      variant="outlined"
+                      color="error"
+                      disabled={
+                        !selectedDocumentNo ||
+                        approvalSubmittingMode !== null ||
+                        !approvalOpinion.trim() ||
+                        !selectedDocumentRow?.hasAssessment ||
+                        documentAlreadyHandled
+                      }
+                      onClick={() => void runApproval("reject", true)}
+                    >
+                      {approvalSubmittingMode === "dryRunReject" ? "验证中..." : "验证驳回连通性（dry-run）"}
                     </Button>
                   </Stack>
 
@@ -1317,7 +1460,16 @@ export function ProcessDocumentsPage() {
                           { label: "执行状态", value: approvalResult.status, hint: getApprovalStatusHint(approvalResult) },
                           { label: "开始时间", value: approvalResult.startedAt || "-", hint: "后端开始执行审批的时间。" },
                           { label: "结束时间", value: approvalResult.finishedAt || "-", hint: "后端完成执行或返回结果的时间。" },
-                          { label: "EHR 决策", value: approvalResult.ehrDecision || "-", hint: "当前固定为“同意”。" },
+                          {
+                            label: "执行动作",
+                            value: getApprovalActionLabel(approvalResult.action),
+                            hint: "本次调用后端审批接口时选择的动作。",
+                          },
+                          {
+                            label: "EHR 决策",
+                            value: approvalResult.ehrDecision || "-",
+                            hint: "后端写入 EHR 审批决策下拉框的值。",
+                          },
                           { label: "EHR 提交按钮", value: approvalResult.ehrSubmitLabel || "-", hint: "实际点击的 EHR 页面按钮文案。" },
                           {
                             label: "确认方式",
@@ -1433,6 +1585,28 @@ export function ProcessDocumentsPage() {
               />
             ) : null}
           </Box>
+
+          <Dialog open={rejectConfirmOpen} onClose={cancelRejectConfirm}>
+            <DialogTitle>确认驳回</DialogTitle>
+            <DialogContent>
+              <DialogContentText>
+                即将对单据 {selectedDocumentNo || "-"} 执行驳回，系统会把当前审批意见写入 EHR，
+                并选择“驳回至已选节点”后点击提交。是否继续？
+              </DialogContentText>
+            </DialogContent>
+            <DialogActions>
+              <Button onClick={cancelRejectConfirm}>取消</Button>
+              <Button
+                onClick={confirmReject}
+                color="error"
+                variant="contained"
+                disableElevation
+                autoFocus
+              >
+                确认驳回
+              </Button>
+            </DialogActions>
+          </Dialog>
         </Box>
       </Drawer>
     </Stack>

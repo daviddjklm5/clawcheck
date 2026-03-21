@@ -225,6 +225,29 @@ class DocumentApprovalFlowTest(unittest.TestCase):
         self.assertEqual(result["todoListVisible"], True)
         self.assertEqual(result["documentStillInTodo"], False)
 
+    def test_build_pending_confirmation_result_uses_action_label(self) -> None:
+        result = self.flow._build_pending_confirmation_result(
+            document_no="RA-TEST-001",
+            state_before_todo_probe={},
+            todo_probe={},
+            submit_action_label="驳回",
+        )
+
+        self.assertEqual(result["status"], "submitted_pending_confirmation")
+        self.assertIn("请先不要重复点击驳回", result["confirmationMessage"])
+
+    def test_execute_reject_delegates_to_execute_action(self) -> None:
+        with patch.object(self.flow, "execute_action", return_value={"status": "succeeded"}) as mocked_execute:
+            result = self.flow.execute_reject("RA-TEST-001", "请补齐审批链", dry_run=True)
+
+        self.assertEqual(result["status"], "succeeded")
+        mocked_execute.assert_called_once_with(
+            action="reject",
+            document_no="RA-TEST-001",
+            approval_opinion="请补齐审批链",
+            dry_run=True,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

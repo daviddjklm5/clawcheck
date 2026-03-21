@@ -155,6 +155,24 @@ class DocumentsRouterTest(unittest.TestCase):
 
         self.assertEqual(result, payload)
 
+    def test_post_process_workbench_document_reject_returns_payload(self) -> None:
+        payload = {
+            "documentNo": "RA-TEST-001",
+            "action": "reject",
+            "status": "succeeded",
+            "message": "ok",
+        }
+        request = ProcessDocumentApprovalRequest(
+            action="reject",
+            approvalOpinion="审批链缺少战区人行部门审批，建议拒绝或补齐审批链。",
+            dryRun=True,
+        )
+
+        with patch("automation.api.routers.documents.approve_process_document", return_value=payload):
+            result = post_process_workbench_document_approval("RA-TEST-001", request)
+
+        self.assertEqual(result, payload)
+
     def test_post_process_workbench_todo_sync_returns_payload(self) -> None:
         payload = {
             "taskId": "sync-001",
