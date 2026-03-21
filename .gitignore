@@ -17,6 +17,7 @@ automation/downloads/
 automation/runtime/*
 automation/config/credentials.local.yaml
 automation/config/credentials.prod.local.yaml
+automation/config/github.local.env
 automation/config/windows_task_daemon.local.json
 webui/node_modules/
 webui/dist/
