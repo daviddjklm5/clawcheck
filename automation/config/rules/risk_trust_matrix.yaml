@@ -69,7 +69,7 @@ dimensions:
       - id: "APPLICANT_HR_TYPE_MISSING"
         when:
           applicant_hr_type_is_null: true
-        score: 1.5
+        score: 1.0
         summary: "申请人未命中人员属性"
         low_score_detail: "申请人未匹配人员属性，需人工复核"
         intervention_action: "补齐人员属性后复核"
@@ -192,6 +192,13 @@ dimensions:
         summary: "S2 类权限需人工复核"
         low_score_detail: "S2 类权限需人工复核后放行"
         intervention_action: "复核限定权限申请依据"
+      - id: "PERMISSION_D_NON_HR_OR_UNKNOWN"
+        when:
+          apply_type_not_in_ref: "cancel_role_apply_types"
+          permission_level_equals: "D类-普通"
+          applicant_hr_type_not_in_ref: "applicant_hr_staff_types"
+        score: 2.0
+        summary: "非 H1/H2/H3 申请 D 类普通权限"
       - id: "PERMISSION_B_AND_BELOW_SKIPPED"
         when:
           apply_type_not_in_ref: "cancel_role_apply_types"

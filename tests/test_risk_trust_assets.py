@@ -88,12 +88,14 @@ class RiskTrustYamlAssetsTest(unittest.TestCase):
 
         cancel_non_hr_skip_rule = next(rule for rule in applicant_rules if rule["id"] == "APPLICANT_CANCEL_ROLE_NON_HR_SKIPPED")
         applicant_non_hr_rule = next(rule for rule in applicant_rules if rule["id"] == "APPLICANT_HR_NON_HR")
+        applicant_hr_type_missing_rule = next(rule for rule in applicant_rules if rule["id"] == "APPLICANT_HR_TYPE_MISSING")
         approval_warzone_history_rule = next(rule for rule in approval_rules if rule["id"] == "APPROVAL_LOCAL_WITHOUT_WARZONE_HISTORY")
         approval_warzone_current_round_rule = next(
             rule for rule in approval_rules if rule["id"] == "APPROVAL_LOCAL_WITHOUT_WARZONE_CURRENT_ROUND"
         )
         missing_catalog_rule = next(rule for rule in permission_rules if rule["id"] == "PERMISSION_CATALOG_MISSING")
         cancel_role_rule = next(rule for rule in permission_rules if rule["id"] == "PERMISSION_CANCEL_ROLE")
+        d_non_hr_rule = next(rule for rule in permission_rules if rule["id"] == "PERMISSION_D_NON_HR_OR_UNKNOWN")
         b_and_below_skip_rule = next(rule for rule in permission_rules if rule["id"] == "PERMISSION_B_AND_BELOW_SKIPPED")
         cancel_role_target_org_skip_rule = next(
             rule for rule in target_org_rules if rule["id"] == "TARGET_ORG_CANCEL_ROLE_SKIPPED"
@@ -126,6 +128,7 @@ class RiskTrustYamlAssetsTest(unittest.TestCase):
         auth_level_map_rule = next(rule for rule in target_org_rules if rule["id"] == "TARGET_ORG_AUTH_LEVEL_MAP")
 
         self.assertEqual(cancel_non_hr_skip_rule["score"], 2.5)
+        self.assertEqual(applicant_hr_type_missing_rule["score"], 1.0)
         self.assertEqual(
             applicant_non_hr_rule["when"]["all_details_cancel_role_apply_type"],
             False,
@@ -149,13 +152,16 @@ class RiskTrustYamlAssetsTest(unittest.TestCase):
         self.assertEqual(missing_catalog_rule["score"], 0.5)
         self.assertEqual(missing_catalog_rule["intervention_action"], "管理员更新权限列表后复核")
         self.assertEqual(cancel_role_rule["score"], 2.5)
+        self.assertEqual(d_non_hr_rule["score"], 2.0)
+        self.assertEqual(d_non_hr_rule["when"]["permission_level_equals"], "D类-普通")
+        self.assertEqual(d_non_hr_rule["when"]["applicant_hr_type_not_in_ref"], "applicant_hr_staff_types")
         self.assertEqual(
             constants["constants"]["cancel_role_apply_types"],
             ["取消角色"],
         )
         self.assertEqual(
             constants["constants"]["permission_level_skip_assessment_levels"],
-            ["B1类-涉薪", "B2类-涉档案绩效", "C类-常规"],
+            ["B1类-涉薪", "B2类-涉档案绩效", "C类-常规", "D类-普通"],
         )
         self.assertEqual(
             constants["constants"]["target_org_auth_level_skip_assessment_levels"],
