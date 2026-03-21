@@ -28,6 +28,16 @@ def _load_runtime_settings() -> tuple[Path, Settings]:
     settings.db.password = os.getenv("IERP_PG_PASSWORD", settings.db.password)
     settings.db.schema = os.getenv("IERP_PG_SCHEMA", settings.db.schema)
     settings.db.sslmode = os.getenv("IERP_PG_SSLMODE", settings.db.sslmode)
+    settings.ai.provider = os.getenv("CLAWCHECK_AI_PROVIDER", settings.ai.provider)
+    settings.ai.base_url = os.getenv("CLAWCHECK_AI_BASE_URL", settings.ai.base_url)
+    settings.ai.model = os.getenv("CLAWCHECK_AI_MODEL", settings.ai.model)
+    settings.ai.timeout_seconds = int(
+        os.getenv("CLAWCHECK_AI_TIMEOUT_SECONDS", str(settings.ai.timeout_seconds))
+    )
+    settings.ai.max_output_tokens = int(
+        os.getenv("CLAWCHECK_AI_MAX_OUTPUT_TOKENS", str(settings.ai.max_output_tokens))
+    )
+    settings.ai.api_key_env = os.getenv("CLAWCHECK_AI_API_KEY_ENV", settings.ai.api_key_env)
 
     return settings_path, settings
 
@@ -54,6 +64,13 @@ def get_runtime_configuration_summary() -> dict[str, Any]:
         "IERP_PG_PASSWORD": bool(os.getenv("IERP_PG_PASSWORD")),
         "IERP_PG_SCHEMA": bool(os.getenv("IERP_PG_SCHEMA")),
         "IERP_PG_SSLMODE": bool(os.getenv("IERP_PG_SSLMODE")),
+        "CLAWCHECK_AI_PROVIDER": bool(os.getenv("CLAWCHECK_AI_PROVIDER")),
+        "CLAWCHECK_AI_BASE_URL": bool(os.getenv("CLAWCHECK_AI_BASE_URL")),
+        "CLAWCHECK_AI_MODEL": bool(os.getenv("CLAWCHECK_AI_MODEL")),
+        "CLAWCHECK_AI_TIMEOUT_SECONDS": bool(os.getenv("CLAWCHECK_AI_TIMEOUT_SECONDS")),
+        "CLAWCHECK_AI_MAX_OUTPUT_TOKENS": bool(os.getenv("CLAWCHECK_AI_MAX_OUTPUT_TOKENS")),
+        "CLAWCHECK_AI_API_KEY_ENV": bool(os.getenv("CLAWCHECK_AI_API_KEY_ENV")),
+        settings.ai.api_key_env: bool(os.getenv(settings.ai.api_key_env)),
     }
 
     environment_label = "生产默认配置" if settings_path == PROD_SETTINGS_PATH else "本地默认配置"

@@ -88,12 +88,13 @@ constants:
     "二级授权": 2.0
     "3级授权": 2.5
     "三级授权": 2.5
+    "4级授权": 2.5
+    "四级授权": 2.5
     "未分类": 2.0
     "<NULL>": 2.0
 
   target_org_auth_level_skip_assessment_levels:
     - "4级授权"
-    - "四级授权"
 
   target_org_l2_representative_office_org_units:
     - "安徽战区代表处"
@@ -121,9 +122,6 @@ constants:
   target_org_representative_office_auth_level_map_levels:
     - "1级授权"
     - "3级授权"
-    - "未分类"
-    - "一级授权"
-    - "三级授权"
     - "<NULL>"
 
   summary_conclusion_mapping:

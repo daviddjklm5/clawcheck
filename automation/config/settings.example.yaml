@@ -30,3 +30,12 @@ db:
   password: "your_password"
   schema: "public"
   sslmode: "prefer"
+
+ai:
+  provider: "openai_compatible"
+  base_url: "https://api.openai.com/v1"
+  model: "gpt-5-mini"
+  timeout_seconds: 120
+  max_output_tokens: 4000
+  api_key_env: "CLAWCHECK_AI_API_KEY"
+  api_key: ""

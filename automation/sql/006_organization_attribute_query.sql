@@ -788,3 +788,4 @@ BEGIN
     EXECUTE 'ANALYZE "组织属性查询"';
 END;
 $$;
+

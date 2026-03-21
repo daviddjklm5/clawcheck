@@ -165,7 +165,7 @@ class RiskTrustYamlAssetsTest(unittest.TestCase):
         )
         self.assertEqual(
             constants["constants"]["target_org_auth_level_skip_assessment_levels"],
-            ["四级授权"],
+            ["4级授权"],
         )
         self.assertEqual(
             b_and_below_skip_rule["when"]["apply_type_not_in_ref"],
@@ -286,16 +286,16 @@ class RiskTrustYamlAssetsTest(unittest.TestCase):
             ["BG人行中心与学社", "人事远程交付中心", "蝶发人行部", "业务单元本部", "属地服务站", "战区人行部门"],
         )
         self.assertEqual(
-            constants["constants"]["organization_auth_level_scores"]["二级授权"],
+            constants["constants"]["organization_auth_level_scores"]["2级授权"],
             2.0,
         )
         self.assertEqual(
-            constants["constants"]["organization_auth_level_scores"]["三级授权"],
+            constants["constants"]["organization_auth_level_scores"]["3级授权"],
             2.5,
         )
         self.assertEqual(
             constants["constants"]["target_org_representative_office_auth_level_map_levels"],
-            ["一级授权", "三级授权", "<NULL>"],
+            ["1级授权", "3级授权", "<NULL>"],
         )
         self.assertEqual(
             constants["constants"]["cross_org_assessment_exempt_process_categories"],

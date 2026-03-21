@@ -20,6 +20,7 @@ import DescriptionOutlinedIcon from "@mui/icons-material/DescriptionOutlined";
 import FactCheckOutlinedIcon from "@mui/icons-material/FactCheckOutlined";
 import InsightsOutlinedIcon from "@mui/icons-material/InsightsOutlined";
 import GridViewOutlinedIcon from "@mui/icons-material/GridViewOutlined";
+import SmartToyOutlinedIcon from "@mui/icons-material/SmartToyOutlined";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 
 const drawerWidth = 264;
@@ -54,6 +55,12 @@ const navItems = [
     label: "常规配置",
     description: "浏览器运行参数、路径与数据库摘要",
     icon: <SettingsSuggestOutlinedIcon />,
+  },
+  {
+    path: "/chat-workspace",
+    label: "对话工作台",
+    description: "Web 对话入口，基于 Codex CLI 与外部模型 Key",
+    icon: <SmartToyOutlinedIcon />,
   },
 ];
 

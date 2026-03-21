@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from automation.api.routers import documents, health, jobs, settings
+from automation.api.routers import chat, documents, health, jobs, settings
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_WEBUI_DIST_DIR = REPO_ROOT / "webui" / "dist"
@@ -41,6 +41,7 @@ def create_app(webui_dist_dir: Path | None = None) -> FastAPI:
             "http://127.0.0.1:5173",
             "http://localhost:5173",
         ],
+        allow_origin_regex=r"^vscode-webview://.*$",
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -50,6 +51,7 @@ def create_app(webui_dist_dir: Path | None = None) -> FastAPI:
     app.include_router(jobs.router, prefix="/api")
     app.include_router(documents.router, prefix="/api")
     app.include_router(settings.router, prefix="/api")
+    app.include_router(chat.router, prefix="/api")
 
     resolved_dist_dir = _resolve_webui_dist_dir(webui_dist_dir)
     if resolved_dist_dir is not None:

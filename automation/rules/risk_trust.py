@@ -447,30 +447,39 @@ class RiskTrustEvaluator:
             if key == "default":
                 return bool(expected)
             if key.endswith("_not_in_ref"):
-                actual = self._normalized_text(context[self._base_key(key, "_not_in_ref")])
-                ref_values = {self._normalized_text(value) for value in self.constants.get(str(expected), [])}
+                base_key = self._base_key(key, "_not_in_ref")
+                actual = self._normalize_condition_value(base_key, context[base_key])
+                ref_values = {
+                    self._normalize_condition_value(base_key, value) for value in self.constants.get(str(expected), [])
+                }
                 if actual in ref_values:
                     return False
                 continue
             if key.endswith("_in_ref"):
-                actual = self._normalized_text(context[self._base_key(key, "_in_ref")])
-                ref_values = {self._normalized_text(value) for value in self.constants.get(str(expected), [])}
+                base_key = self._base_key(key, "_in_ref")
+                actual = self._normalize_condition_value(base_key, context[base_key])
+                ref_values = {
+                    self._normalize_condition_value(base_key, value) for value in self.constants.get(str(expected), [])
+                }
                 if actual not in ref_values:
                     return False
                 continue
             if key.endswith("_in"):
-                actual = self._normalized_text(context[self._base_key(key, "_in")])
-                expected_values = {self._normalized_text(value) for value in expected}
+                base_key = self._base_key(key, "_in")
+                actual = self._normalize_condition_value(base_key, context[base_key])
+                expected_values = {self._normalize_condition_value(base_key, value) for value in expected}
                 if actual not in expected_values:
                     return False
                 continue
             if key.endswith("_equals"):
-                actual = self._normalized_text(context[self._base_key(key, "_equals")])
-                if actual != self._normalized_text(expected):
+                base_key = self._base_key(key, "_equals")
+                actual = self._normalize_condition_value(base_key, context[base_key])
+                if actual != self._normalize_condition_value(base_key, expected):
                     return False
                 continue
             if key.endswith("_is_null"):
-                actual = self._normalized_text(context[self._base_key(key, "_is_null")])
+                base_key = self._base_key(key, "_is_null")
+                actual = self._normalize_condition_value(base_key, context[base_key])
                 is_null = actual == "<NULL>"
                 if is_null is not bool(expected):
                     return False
@@ -521,11 +530,14 @@ class RiskTrustEvaluator:
 
     def _score_from_ref(self, ref_name: str, value: Any, default_score: Any) -> float:
         ref_map = self.constants.get(ref_name, {})
-        normalized_value = self._normalized_text(value)
-        if normalized_value in ref_map:
-            return float(ref_map[normalized_value])
+        normalized_candidates = [self._normalized_text(value)]
+        if ref_name == "organization_auth_level_scores":
+            normalized_candidates.insert(0, self._normalized_org_auth_level(value))
+        for normalized_value in dict.fromkeys(normalized_candidates):
+            if normalized_value in ref_map:
+                return float(ref_map[normalized_value])
         if default_score is None:
-            raise ValueError(f"Missing score mapping for ref={ref_name}, value={normalized_value}")
+            raise ValueError(f"Missing score mapping for ref={ref_name}, value={normalized_candidates[0]}")
         return float(default_score)
 
     @staticmethod
@@ -540,6 +552,11 @@ class RiskTrustEvaluator:
     @staticmethod
     def _base_key(condition_key: str, suffix: str) -> str:
         return condition_key[: -len(suffix)]
+
+    def _normalize_condition_value(self, field_name: str, value: Any) -> str:
+        if field_name == "target_org_auth_level":
+            return self._normalized_org_auth_level(value)
+        return self._normalized_text(value)
 
     def _summary_mapping_by_score(self) -> dict[str, dict[str, Any]]:
         mapping: dict[str, dict[str, Any]] = {}

@@ -24,6 +24,8 @@ webui/dist/
 webui/dev.log
 webui/dev.err.log
 webui/dev.pid
+ide-extension/node_modules/
+ide-extension/out/
 *.tsbuildinfo
 
 # Keep folder structure

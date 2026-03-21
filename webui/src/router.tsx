@@ -2,6 +2,7 @@ import { Navigate, createBrowserRouter } from "react-router-dom";
 
 import { AppShell } from "./layout/AppShell";
 import { CollectDocumentsPage } from "./pages/CollectDocumentsPage";
+import { ChatWorkspacePage } from "./pages/ChatWorkspacePage";
 import { MasterDataPage } from "./pages/MasterDataPage";
 import { ProcessAnalysisPage } from "./pages/ProcessAnalysisPage";
 import { ProcessDocumentsPage } from "./pages/ProcessDocumentsPage";
@@ -35,6 +36,10 @@ export const router = createBrowserRouter([
       {
         path: "runtime-settings",
         element: <RuntimeSettingsPage />,
+      },
+      {
+        path: "chat-workspace",
+        element: <ChatWorkspacePage />,
       },
     ],
   },

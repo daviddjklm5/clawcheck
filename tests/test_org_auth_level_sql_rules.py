@@ -19,12 +19,12 @@ class OrgAuthLevelSqlRulesTest(unittest.TestCase):
             "IF normalized_process_level_category = '业务单元本部'\n"
             "       AND normalized_org_unit_name = '万睿科技'\n"
             "       AND physical_level_num <= 4 THEN\n"
-            "        RETURN '三级授权';"
+            "        RETURN '3级授权';"
         )
         generic_snippet = (
             "IF normalized_process_level_category = '业务单元本部'\n"
             "       AND physical_level_num <= 3 THEN\n"
-            "        RETURN '二级授权';"
+            "        RETURN '2级授权';"
         )
 
         self.assertIn(exception_snippet, self.base_sql)
