@@ -4,6 +4,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
+from automation.pages.login_page import LoginPage
 from automation.scripts.run import ensure_login
 from automation.utils.playwright_helpers import save_screenshot
 from automation.utils.retry import retry_call
@@ -11,22 +12,43 @@ from automation.utils.retry import retry_call
 
 class _FakeLogger:
     def __init__(self) -> None:
+        self.infos: list[str] = []
         self.warnings: list[str] = []
+
+    def info(self, message: str, *args) -> None:
+        self.infos.append(message % args if args else message)
 
     def warning(self, message: str, *args) -> None:
         self.warnings.append(message % args if args else message)
 
 
 class _FakePage:
-    def __init__(self, *, closed: bool = False, context=None) -> None:
+    def __init__(self, *, closed: bool = False, context=None, url: str = "about:blank", goto_results: list[object] | None = None) -> None:
         self._closed = closed
         self.context = context
+        self.url = url
+        self.goto_calls: list[tuple[str, str]] = []
+        self.goto_results = list(goto_results or [])
+        self.wait_for_timeout_calls: list[int] = []
 
     def is_closed(self) -> bool:
         return self._closed
 
     def close_for_test(self) -> None:
         self._closed = True
+
+    def goto(self, url: str, *, wait_until: str) -> None:
+        self.goto_calls.append((url, wait_until))
+        if self.goto_results:
+            result = self.goto_results.pop(0)
+            if isinstance(result, Exception):
+                raise result
+            self.url = str(result)
+            return
+        self.url = url
+
+    def wait_for_timeout(self, timeout_ms: int) -> None:
+        self.wait_for_timeout_calls.append(timeout_ms)
 
     def screenshot(self, *, path: str, full_page: bool) -> None:
         _ = (path, full_page)
@@ -101,6 +123,66 @@ class EnsureLoginResilienceTest(unittest.TestCase):
         self.assertIs(login_page.page, final_page)
         self.assertIs(home_page.page, final_page)
         self.assertTrue(any("created a fresh page" in message for message in login_page.logger.warnings))
+
+
+class LoginPageNavigationResilienceTest(unittest.TestCase):
+    def test_open_retries_when_navigation_lands_on_browser_error_page(self) -> None:
+        logger = _FakeLogger()
+        page = _FakePage(
+            url="about:blank",
+            goto_results=[
+                "chrome-error://chromewebdata/",
+                "https://siam.vankeservice.com/login",
+            ],
+        )
+        login_page = LoginPage(
+            home_url="https://hr.onewo.com/ierp/?formId=home_page",
+            page=page,
+            selectors={},
+            logger=logger,
+            timeout_ms=1000,
+        )
+
+        login_page.open()
+
+        self.assertEqual(
+            page.goto_calls,
+            [
+                ("https://hr.onewo.com/ierp/?formId=home_page", "domcontentloaded"),
+                ("https://hr.onewo.com/ierp/?formId=home_page", "domcontentloaded"),
+            ],
+        )
+        self.assertEqual(page.wait_for_timeout_calls, [LoginPage._OPEN_RETRY_WAIT_MS])
+        self.assertEqual(page.url, "https://siam.vankeservice.com/login")
+        self.assertTrue(any("Chromium error page" in message for message in logger.warnings))
+        self.assertTrue(any("recovered on attempt 2" in message for message in logger.infos))
+
+    def test_open_raises_clear_error_after_navigation_retries_are_exhausted(self) -> None:
+        logger = _FakeLogger()
+        page = _FakePage(
+            url="about:blank",
+            goto_results=[
+                "chrome-error://chromewebdata/",
+                "chrome-error://chromewebdata/",
+            ],
+        )
+        login_page = LoginPage(
+            home_url="https://hr.onewo.com/ierp/?formId=home_page",
+            page=page,
+            selectors={},
+            logger=logger,
+            timeout_ms=1000,
+        )
+
+        with self.assertRaises(RuntimeError) as ctx:
+            login_page.open()
+
+        self.assertIn("Unable to open login entry page after navigation retries", str(ctx.exception))
+        self.assertIn("Target URL: https://hr.onewo.com/ierp/?formId=home_page", str(ctx.exception))
+        self.assertIn("current URL: chrome-error://chromewebdata/", str(ctx.exception))
+        self.assertEqual(len(page.goto_calls), LoginPage._OPEN_RETRY_COUNT)
+        self.assertEqual(page.wait_for_timeout_calls, [LoginPage._OPEN_RETRY_WAIT_MS])
+        self.assertEqual(len(logger.warnings), LoginPage._OPEN_RETRY_COUNT)
 
 
 class SaveScreenshotResilienceTest(unittest.TestCase):

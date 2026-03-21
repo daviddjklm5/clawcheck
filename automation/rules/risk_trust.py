@@ -69,6 +69,31 @@ class RiskTrustEvaluator:
             detail_rows.extend(current_detail_rows)
         return summary_rows, detail_rows
 
+    def evaluate_documents_resilient(
+        self,
+        bundles: list[dict[str, Any]],
+        assessment_batch_no: str,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+        summary_rows: list[dict[str, Any]] = []
+        detail_rows: list[dict[str, Any]] = []
+        failed_documents: list[dict[str, Any]] = []
+        for bundle in bundles:
+            document_no = self._bundle_document_no(bundle)
+            try:
+                summary_row, current_detail_rows = self.evaluate_document(bundle, assessment_batch_no)
+            except Exception as exc:  # noqa: BLE001
+                failed_documents.append(
+                    {
+                        "document_no": document_no,
+                        "error_type": type(exc).__name__,
+                        "error_message": str(exc),
+                    }
+                )
+                continue
+            summary_rows.append(summary_row)
+            detail_rows.extend(current_detail_rows)
+        return summary_rows, detail_rows, failed_documents
+
     def evaluate_document(
         self,
         bundle: dict[str, Any],
@@ -493,6 +518,15 @@ class RiskTrustEvaluator:
         if default_score is None:
             raise ValueError(f"Missing score mapping for ref={ref_name}, value={normalized_value}")
         return float(default_score)
+
+    @staticmethod
+    def _bundle_document_no(bundle: dict[str, Any]) -> str:
+        basic_info = bundle.get("basic_info")
+        if isinstance(basic_info, Mapping):
+            value = basic_info.get("document_no")
+            if value is not None:
+                return str(value).strip()
+        return ""
 
     @staticmethod
     def _base_key(condition_key: str, suffix: str) -> str:

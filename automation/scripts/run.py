@@ -397,7 +397,7 @@ def main() -> int:
             )
             assessment_batch_no = f"audit_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
             evaluator = RiskTrustEvaluator(package)
-            summary_rows, detail_rows = evaluator.evaluate_documents(
+            summary_rows, detail_rows, failed_documents = evaluator.evaluate_documents_resilient(
                 bundles=bundles,
                 assessment_batch_no=assessment_batch_no,
             )
@@ -406,6 +406,8 @@ def main() -> int:
                 "assessment_version": package.version,
                 "document_count": len(summary_rows),
                 "detail_count": len(detail_rows),
+                "failed_document_count": len(failed_documents),
+                "failed_documents": failed_documents,
                 "documents": summary_rows,
             }
             dump_path = resolve_path(args.dump_json) if args.dump_json else logs_dir / f"audit_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
@@ -417,9 +419,18 @@ def main() -> int:
             else:
                 store.write_assessment_results(summary_rows, detail_rows)
                 logger.info("Persisted %s assessment summaries and %s detail rows", len(summary_rows), len(detail_rows))
+            if failed_documents:
+                logger.warning(
+                    "Audit skipped %s document(s) because evaluation failed: %s",
+                    len(failed_documents),
+                    ", ".join(item["document_no"] or "<UNKNOWN>" for item in failed_documents[:10]),
+                )
             logger.info("Audit summary: %s", payload)
-            logger.info("Automation finished successfully")
-            return 0
+            if summary_rows or not failed_documents:
+                logger.info("Automation finished successfully")
+                return 0
+            logger.error("Audit failed for all %s document(s)", len(failed_documents))
+            return 1
         except Exception as exc:  # noqa: BLE001
             logger.exception("audit failed: %s", exc)
             return 1
@@ -885,6 +896,19 @@ def main() -> int:
                             " ..." if len(unresolved_approver_names) > 20 else "",
                         )
 
+                    if args.dry_run:
+                        logger.info("Dry-run enabled; skipping PostgreSQL write")
+                    elif documents:
+                        documents, write_failed_documents = store.write_documents(documents)
+                        if write_failed_documents:
+                            failed_documents.extend(write_failed_documents)
+                        logger.info("Persisted %s document(s) to PostgreSQL", len(documents))
+                    else:
+                        logger.info("No document required PostgreSQL write after sync-state comparison")
+
+                    if not documents and not skipped_documents:
+                        raise RuntimeError("No permission application documents were persisted successfully")
+
                     dump_path = resolve_path(args.dump_json) if args.dump_json else logs_dir / f"collect_{timestamp_slug()}.json"
                     dump_path.parent.mkdir(parents=True, exist_ok=True)
                     dump_path.write_text(json.dumps(documents, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -895,14 +919,6 @@ def main() -> int:
                         len(skipped_documents),
                         dump_path,
                     )
-
-                    if args.dry_run:
-                        logger.info("Dry-run enabled; skipping PostgreSQL write")
-                    elif documents:
-                        store.write_documents(documents)
-                        logger.info("Persisted %s document(s) to PostgreSQL", len(documents))
-                    else:
-                        logger.info("No document required PostgreSQL write after sync-state comparison")
 
                     if skipped_documents:
                         logger.info("Skipped document count: %s", len(skipped_documents))

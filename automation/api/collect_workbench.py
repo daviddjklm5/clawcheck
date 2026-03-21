@@ -19,6 +19,7 @@ _SUMMARY_PREFIX = "collect_summary_"
 _TASK_LOCK = threading.Lock()
 _TASK_STATE_BY_ID: dict[str, dict[str, Any]] = {}
 _COLLECT_TIMESTAMP_PATTERN = re.compile(r"collect_(\d{8}_\d{6})_[^.]+\.json$")
+_BACKGROUND_COLLECT_BROWSER_ARG = "--headless"
 
 
 def _resolve_runtime_path(raw_path: str) -> Path:
@@ -269,6 +270,7 @@ def _run_collect_task(task_id: str) -> None:
         sys.executable,
         "automation/scripts/run.py",
         "collect",
+        _BACKGROUND_COLLECT_BROWSER_ARG,
         "--limit",
         str(task["requestedLimit"]),
         "--dump-json",
@@ -335,7 +337,10 @@ def _run_collect_task(task_id: str) -> None:
                 limit=len(success_document_nos),
                 dry_run=False,
             )
-            if audit_result["status"] != "succeeded":
+            if audit_result["status"] == "partial":
+                status = "partial"
+                message = f"{message}；增量评估部分失败：{audit_result['message']}"
+            elif audit_result["status"] != "succeeded":
                 status = "partial"
                 message = f"{message}；增量评估失败：{audit_result['message']}"
             else:

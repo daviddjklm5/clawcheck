@@ -221,7 +221,10 @@ export interface ProcessDocumentRow {
   positionName: string;
   level1FunctionName: string;
   orgPathName: string;
-  finalScore: number;
+  workbenchStatus: string;
+  workbenchStatusHint: string;
+  hasAssessment: boolean;
+  finalScore: number | null;
   summaryConclusion: string;
   summaryConclusionLabel: string;
   suggestedAction: string;
@@ -353,6 +356,7 @@ export interface ProcessAuditRunSummary {
   dryRun: boolean;
   documentCount: number;
   detailCount: number;
+  failedCount: number;
   assessmentBatchNo: string;
   assessmentVersion: string;
   message: string;

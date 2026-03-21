@@ -61,6 +61,13 @@ const conclusionTone: Record<string, Tone> = {
   可信任: "success",
 };
 
+const workbenchStatusTone: Record<string, Tone> = {
+  待评估: "warning",
+  成功: "success",
+  阻塞: "warning",
+  异常: "danger",
+};
+
 const detailTabs: Array<{ value: DetailTab; label: string }> = [
   { value: "summary", label: "单据概览" },
   { value: "riskOverview", label: "风险总览" },
@@ -341,6 +348,7 @@ export function ProcessDocumentsPage() {
         item.level1FunctionName,
         item.orgPathName,
         item.department,
+        item.workbenchStatus,
         item.summaryConclusionLabel,
       ].join(" "),
     ).includes(normalizedQueryText);
@@ -578,6 +586,17 @@ export function ProcessDocumentsPage() {
         >
           {params.row.documentNo}
         </Button>
+      ),
+    },
+    {
+      field: "workbenchStatus",
+      headerName: "工作台状态",
+      minWidth: 120,
+      renderCell: (params) => (
+        <StatusTag
+          label={String(params.row.workbenchStatus ?? params.value ?? "")}
+          tone={workbenchStatusTone[String(params.row.workbenchStatus ?? params.value)] ?? "default"}
+        />
       ),
     },
     {
@@ -885,6 +904,26 @@ export function ProcessDocumentsPage() {
                 }}
               >
                 <Typography variant="caption" color="text.secondary">
+                  当前工作台状态
+                </Typography>
+                <Box sx={{ mt: 0.5 }}>
+                  <StatusTag
+                    label={selectedDocumentRow?.workbenchStatus ?? "-"}
+                    tone={workbenchStatusTone[selectedDocumentRow?.workbenchStatus ?? "-"] ?? "default"}
+                  />
+                </Box>
+              </Paper>
+              <Paper
+                elevation={0}
+                sx={{
+                  px: 1.25,
+                  py: 1,
+                  border: "1px solid",
+                  borderColor: "divider",
+                  backgroundColor: "rgba(255,255,255,0.72)",
+                }}
+              >
+                <Typography variant="caption" color="text.secondary">
                   当前总结论
                 </Typography>
                 <Box sx={{ mt: 0.5 }}>
@@ -915,6 +954,12 @@ export function ProcessDocumentsPage() {
                 </Box>
               </Paper>
             </Stack>
+
+            {!selectedDocumentRow?.hasAssessment ? (
+              <Alert severity="warning" sx={{ mt: 2 }}>
+                {selectedDocumentRow?.workbenchStatusHint || "该单据已采集，但尚未产出评估结果。"}
+              </Alert>
+            ) : null}
 
             <Tabs
               value={activeTab}
@@ -1117,6 +1162,11 @@ export function ProcessDocumentsPage() {
             {activeTab === "approvalAction" ? (
               <SectionCard title="审批单据" subtitle="第一阶段仅开放批准动作；前端“批准”会映射到 EHR 的“同意 + 提交”。">
                 <Stack spacing={2}>
+                  {!selectedDocumentRow?.hasAssessment ? (
+                    <Alert severity="warning">
+                      {selectedDocumentRow?.workbenchStatusHint || "该单据尚未产出评估结果，当前不允许直接审批。"}
+                    </Alert>
+                  ) : null}
                   {selectedDocumentRow?.todoProcessStatus === "已处理" ? (
                     <Alert severity="info">
                       该单据最近一次待办同步结果为“已处理”，当前账号 EHR 待办中未命中。
@@ -1183,6 +1233,7 @@ export function ProcessDocumentsPage() {
                         !selectedDocumentNo ||
                         approvalSubmittingMode !== null ||
                         !approvalOpinion.trim() ||
+                        !selectedDocumentRow?.hasAssessment ||
                         selectedDocumentRow?.todoProcessStatus === "已处理"
                       }
                       onClick={() => void runApproval(false)}
@@ -1195,6 +1246,7 @@ export function ProcessDocumentsPage() {
                         !selectedDocumentNo ||
                         approvalSubmittingMode !== null ||
                         !approvalOpinion.trim() ||
+                        !selectedDocumentRow?.hasAssessment ||
                         selectedDocumentRow?.todoProcessStatus === "已处理"
                       }
                       onClick={() => void runApproval(true)}

@@ -70,6 +70,7 @@ def _audit_task_to_payload(task: dict[str, Any]) -> dict[str, Any]:
         "dryRun": bool(task.get("dryRun")),
         "documentCount": int(task.get("documentCount") or 0),
         "detailCount": int(task.get("detailCount") or 0),
+        "failedCount": int(task.get("failedCount") or 0),
         "assessmentBatchNo": str(task.get("assessmentBatchNo") or ""),
         "assessmentVersion": str(task.get("assessmentVersion") or ""),
         "message": str(task.get("message") or ""),
@@ -122,6 +123,19 @@ def _build_success_message(*, document_count: int, detail_count: int, dry_run: b
     return f"评估执行完成：单据 {document_count} 张，明细 {detail_count} 条{batch_text}{suffix}".strip()
 
 
+def _build_partial_message(
+    *,
+    document_count: int,
+    failed_count: int,
+    detail_count: int,
+    dry_run: bool,
+    batch_no: str,
+) -> str:
+    suffix = "（dry-run，未写入 PostgreSQL）" if dry_run else ""
+    batch_text = f"，批次 {batch_no}" if batch_no else ""
+    return f"评估执行完成：成功 {document_count} 张，失败 {failed_count} 张，明细 {detail_count} 条{batch_text}{suffix}".strip()
+
+
 def _execute_audit_subprocess(
     *,
     requested_document_nos: list[str],
@@ -157,17 +171,28 @@ def _execute_audit_subprocess(
     payload = _load_json_file(dump_path)
     document_count = 0
     detail_count = 0
+    failed_count = 0
     assessment_batch_no = ""
     assessment_version = ""
     if isinstance(payload, dict):
         document_count = int(payload.get("document_count") or 0)
         detail_count = int(payload.get("detail_count") or 0)
+        failed_count = int(payload.get("failed_document_count") or 0)
         assessment_batch_no = str(payload.get("assessment_batch_no") or "")
         assessment_version = str(payload.get("assessment_version") or "")
 
     if process.returncode != 0:
         status = "failed"
         message = output_tail or "audit runner 返回非 0 退出码。"
+    elif failed_count > 0:
+        status = "partial"
+        message = _build_partial_message(
+            document_count=document_count,
+            failed_count=failed_count,
+            detail_count=detail_count,
+            dry_run=dry_run,
+            batch_no=assessment_batch_no,
+        )
     else:
         status = "succeeded"
         message = _build_success_message(
@@ -182,6 +207,7 @@ def _execute_audit_subprocess(
         "message": message,
         "documentCount": document_count,
         "detailCount": detail_count,
+        "failedCount": failed_count,
         "assessmentBatchNo": assessment_batch_no,
         "assessmentVersion": assessment_version,
         "logFile": _extract_log_file(combined_output),
@@ -212,6 +238,7 @@ def _run_audit_task(task_id: str) -> None:
             task["finishedAt"] = _now_text()
             task["documentCount"] = result["documentCount"]
             task["detailCount"] = result["detailCount"]
+            task["failedCount"] = result["failedCount"]
             task["assessmentBatchNo"] = result["assessmentBatchNo"]
             task["assessmentVersion"] = result["assessmentVersion"]
             task["message"] = result["message"]
@@ -289,6 +316,7 @@ def start_audit_task(
         "dryRun": bool(dry_run),
         "documentCount": 0,
         "detailCount": 0,
+        "failedCount": 0,
         "assessmentBatchNo": "",
         "assessmentVersion": "",
         "message": "评估任务已创建，等待执行。",

@@ -6,12 +6,69 @@ from automation.pages.base_page import BasePage
 
 
 class LoginPage(BasePage):
+    _BROWSER_ERROR_PAGE_PREFIXES = ("chrome-error://", "edge-error://")
+    _OPEN_RETRY_COUNT = 2
+    _OPEN_RETRY_WAIT_MS = 1000
+
     def __init__(self, home_url: str, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.home_url = home_url
 
+    def _is_browser_error_page(self) -> bool:
+        try:
+            current_url = str(self.page.url or "")
+        except Exception:  # noqa: BLE001
+            return False
+        return current_url.startswith(self._BROWSER_ERROR_PAGE_PREFIXES)
+
     def open(self) -> None:
-        self.page.goto(self.home_url, wait_until="domcontentloaded")
+        last_exc: Exception | None = None
+
+        for attempt in range(1, self._OPEN_RETRY_COUNT + 1):
+            try:
+                self.page.goto(self.home_url, wait_until="domcontentloaded")
+            except Exception as exc:  # noqa: BLE001
+                last_exc = exc
+                self.logger.warning(
+                    "Login navigation attempt %s/%s failed for %s: %s",
+                    attempt,
+                    self._OPEN_RETRY_COUNT,
+                    self.home_url,
+                    exc,
+                )
+            else:
+                if not self._is_browser_error_page():
+                    if attempt > 1:
+                        self.logger.info(
+                            "Login navigation recovered on attempt %s. Current URL: %s",
+                            attempt,
+                            self.page.url,
+                        )
+                    return
+
+                last_exc = RuntimeError(f"Browser landed on Chromium error page: {self.page.url}")
+                self.logger.warning(
+                    "Login navigation attempt %s/%s landed on Chromium error page. "
+                    "Target URL: %s; current URL: %s",
+                    attempt,
+                    self._OPEN_RETRY_COUNT,
+                    self.home_url,
+                    self.page.url,
+                )
+
+            if attempt < self._OPEN_RETRY_COUNT:
+                self.page.wait_for_timeout(self._OPEN_RETRY_WAIT_MS)
+
+        current_url = ""
+        try:
+            current_url = str(self.page.url or "")
+        except Exception:  # noqa: BLE001
+            current_url = ""
+        message = (
+            "Unable to open login entry page after navigation retries. "
+            f"Target URL: {self.home_url}; current URL: {current_url or 'unknown'}"
+        )
+        raise RuntimeError(message) from last_exc
 
     def is_logged_in(self) -> bool:
         post_markers = self.selectors.get("login", {}).get("post_login_marker", [])
@@ -96,6 +153,14 @@ class LoginPage(BasePage):
         for round_idx in range(1, 5):
             self.logger.info("Login round %s started. Current URL: %s", round_idx, self.page.url)
 
+            if self._is_browser_error_page():
+                self.logger.warning(
+                    "Login round %s detected Chromium error page before input stage. Reopening %s",
+                    round_idx,
+                    self.home_url,
+                )
+                self.open()
+
             if self.is_logged_in():
                 self.logger.info("Login already completed before input stage")
                 return
@@ -110,7 +175,12 @@ class LoginPage(BasePage):
 
             clicked = self._click_submit_if_present()
             if not clicked and not self.is_logged_in():
-                raise RuntimeError("Login submit button not found on current page")
+                if self._is_browser_error_page():
+                    raise RuntimeError(
+                        "Login page became a Chromium error page before submit. "
+                        f"Target URL: {self.home_url}; current URL: {self.page.url}"
+                    )
+                raise RuntimeError(f"Login submit button not found on current page. Current URL: {self.page.url}")
 
             self.page.wait_for_timeout(3000)
             if self.is_logged_in():

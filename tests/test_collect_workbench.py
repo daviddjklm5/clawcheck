@@ -84,7 +84,7 @@ class CollectWorkbenchTaskTest(unittest.TestCase):
                         returncode=0,
                         stdout="Log file: /tmp/run_collect.log",
                     ),
-                ),
+                ) as mocked_run,
                 patch("automation.api.collect_workbench._load_json_file", side_effect=_load_json_file),
                 patch("automation.api.collect_workbench._count_from_sidecar", return_value=0),
                 patch(
@@ -110,6 +110,8 @@ class CollectWorkbenchTaskTest(unittest.TestCase):
                 limit=1,
                 dry_run=False,
             )
+            command = mocked_run.call_args.kwargs["args"] if "args" in mocked_run.call_args.kwargs else mocked_run.call_args.args[0]
+            self.assertIn("--headless", command)
 
             summary_payload = json.loads(Path(str(task_state["summaryFile"])).read_text(encoding="utf-8"))
             self.assertEqual(summary_payload["auditBatchNo"], "audit_20260316_121915")
@@ -182,6 +184,7 @@ class CollectWorkbenchTaskTest(unittest.TestCase):
                 collect_workbench._run_collect_task("task-force")
 
             command = mocked_run.call_args.kwargs["args"] if "args" in mocked_run.call_args.kwargs else mocked_run.call_args.args[0]
+            self.assertIn("--headless", command)
             self.assertIn("--force-recollect", command)
 
 
