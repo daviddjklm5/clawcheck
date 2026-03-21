@@ -111,9 +111,11 @@ class PermissionCollectFlow:
         approval_records = list(probe.get("approval_records", []))
         self._wait_for_permission_detail_grid_ready(basic_info.get("document_no", ""))
         permission_details = self.extract_grid_rows(DETAIL_HEADERS)
+        failed_org_scope_rows: list[dict[str, Any]] = []
         role_organization_scopes = self.extract_role_organization_scopes(
             basic_info.get("document_no", ""),
             permission_details,
+            failed_rows=failed_org_scope_rows,
         )
         organization_codes = sorted(
             {
@@ -129,6 +131,7 @@ class PermissionCollectFlow:
             "approval_records": approval_records,
             "role_organization_scopes": role_organization_scopes,
             "organization_codes": organization_codes,
+            "failed_org_scope_rows": failed_org_scope_rows,
         }
 
     def collect_current_document_probe(self) -> dict[str, Any]:
@@ -228,6 +231,16 @@ class PermissionCollectFlow:
                     "org_scope_count": org_scope_count,
                 }
             )
+            latest_row = normalized_rows[-1]
+            if not self._is_detail_row_business_valid(latest_row):
+                self.logger.warning(
+                    "Discarded invalid permission detail row: line_no=%r, apply_type=%r, role_name=%r, role_code=%r",
+                    latest_row.get("line_no", ""),
+                    latest_row.get("apply_type", ""),
+                    latest_row.get("role_name", ""),
+                    latest_row.get("role_code", ""),
+                )
+                normalized_rows.pop()
         return normalized_rows
 
     def _extract_all_todo_grid_rows(self, grid: dict[str, Any]) -> list[list[str]]:
@@ -348,16 +361,115 @@ class PermissionCollectFlow:
         self,
         document_no: str,
         detail_rows: Sequence[dict[str, str]],
+        failed_rows: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
         role_scopes: list[dict[str, Any]] = []
+        failed_scope_rows = failed_rows if failed_rows is not None else []
         grid_info = self._wait_for_permission_detail_grid_ready(document_no)
         entry_grid_selector = grid_info["selector"]
         row_count = len(detail_rows)
         for row_idx in range(row_count):
             detail_row = detail_rows[row_idx]
-            self._wait_for_grid_row_ready(entry_grid_selector, row_idx, detail_row)
             role_code = (detail_row.get("role_code") or "").strip()
-            if role_code and role_code in self.skip_org_scope_role_codes:
+            role_name = (detail_row.get("role_name") or "").strip()
+            line_no = (detail_row.get("line_no") or "").strip() or str(row_idx + 1)
+            detail_text = ""
+            expected_count = self._coerce_expected_count(detail_row.get("org_scope_count"))
+            try:
+                self._wait_for_grid_row_ready(entry_grid_selector, row_idx, detail_row)
+                if role_code and role_code in self.skip_org_scope_role_codes:
+                    role_scopes.append(
+                        {
+                            "line_no": detail_row.get("line_no", ""),
+                            "role_code": role_code,
+                            "role_name": detail_row.get("role_name", ""),
+                            "organization_codes": [],
+                        }
+                    )
+                    self.logger.info(
+                        "row_skipped reason=skip_org_scope document_no=%s line_no=%s role_code=%s role_name=%s",
+                        document_no,
+                        line_no,
+                        role_code,
+                        role_name,
+                    )
+                    continue
+
+                cell_link = self._wait_for_detail_link_ready(
+                    document_no=document_no,
+                    grid_selector=entry_grid_selector,
+                    row_idx=row_idx,
+                    detail_row=detail_row,
+                )
+                if cell_link.count() > 0:
+                    detail_text = (cell_link.text_content() or "").strip()
+                parsed_count = self._extract_detail_count(detail_text) if detail_text else None
+                if parsed_count is not None:
+                    expected_count = parsed_count
+                if expected_count == 0:
+                    self.logger.info(
+                        "row_skipped reason=expected_count_zero document_no=%s line_no=%s role_code=%s role_name=%s detail_text=%s",
+                        document_no,
+                        line_no,
+                        role_code,
+                        role_name,
+                        detail_text,
+                    )
+                    role_scopes.append(
+                        {
+                            "line_no": detail_row.get("line_no", ""),
+                            "role_code": role_code,
+                            "role_name": detail_row.get("role_name", ""),
+                            "organization_codes": [],
+                        }
+                    )
+                    continue
+
+                collected = self._extract_org_codes_from_detail_link(
+                    document_no=document_no,
+                    grid_selector=entry_grid_selector,
+                    row_idx=row_idx,
+                    detail_row=detail_row,
+                    expected_count=expected_count,
+                    detail_text=detail_text,
+                    cell_link=cell_link,
+                )
+                self.logger.info(
+                    "Collected %s organization codes from detail row %s",
+                    len(collected),
+                    detail_row.get("line_no", row_idx + 1),
+                )
+                role_scopes.append(
+                    {
+                        "line_no": detail_row.get("line_no", ""),
+                        "role_code": role_code,
+                        "role_name": detail_row.get("role_name", ""),
+                        "organization_codes": sorted({code for code in collected if code}),
+                    }
+                )
+            except Exception as exc:  # noqa: BLE001
+                failure = {
+                    "document_no": document_no,
+                    "row_idx": row_idx,
+                    "line_no": detail_row.get("line_no", ""),
+                    "role_code": role_code,
+                    "role_name": detail_row.get("role_name", ""),
+                    "detail_text": detail_text,
+                    "expected_count": expected_count,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+                failed_scope_rows.append(failure)
+                self.logger.warning(
+                    "row_failed_nonblocking document_no=%s row_idx=%s line_no=%s role_code=%s role_name=%s expected_count=%s detail_text=%s error=%s",
+                    document_no,
+                    row_idx,
+                    line_no,
+                    role_code,
+                    role_name,
+                    expected_count,
+                    detail_text,
+                    exc,
+                )
                 role_scopes.append(
                     {
                         "line_no": detail_row.get("line_no", ""),
@@ -366,42 +478,59 @@ class PermissionCollectFlow:
                         "organization_codes": [],
                     }
                 )
-                self.logger.info(
-                    "Skipped organization detail collection for skip-org-scope role %s on row %s",
-                    role_code,
-                    detail_row.get("line_no", row_idx + 1),
-                )
-                continue
-            cell_link = self._wait_for_detail_link_ready(
+        return role_scopes
+
+    def _extract_org_codes_from_detail_link(
+        self,
+        document_no: str,
+        grid_selector: str,
+        row_idx: int,
+        detail_row: dict[str, str],
+        expected_count: int | None,
+        detail_text: str,
+        cell_link,
+    ) -> list[str]:
+        def _click_and_extract(link, expected_count_value: int | None) -> set[str]:
+            link.scroll_into_view_if_needed(timeout=self.timeout_ms)
+            link.click(force=True)
+            self.page.wait_for_timeout(1200)
+            try:
+                return self._extract_codes_from_org_grid(expected_count_value)
+            finally:
+                self._close_org_detail_with_escape()
+
+        try:
+            return sorted(_click_and_extract(cell_link, expected_count))
+        except Exception as exc:  # noqa: BLE001
+            if not self._is_org_grid_missing_error(exc):
+                raise
+            line_no = (detail_row.get("line_no") or "").strip() or str(row_idx + 1)
+            role_code = (detail_row.get("role_code") or "").strip()
+            role_name = (detail_row.get("role_name") or "").strip()
+            self.logger.warning(
+                "row_retrying reason=org_grid_not_found document_no=%s row_idx=%s line_no=%s role_code=%s role_name=%s expected_count=%s detail_text=%s error=%s",
+                document_no,
+                row_idx,
+                line_no,
+                role_code,
+                role_name,
+                expected_count,
+                detail_text,
+                exc,
+            )
+            self._wait_for_grid_row_ready(grid_selector, row_idx, detail_row)
+            retry_link = self._wait_for_detail_link_ready(
                 document_no=document_no,
-                grid_selector=entry_grid_selector,
+                grid_selector=grid_selector,
                 row_idx=row_idx,
                 detail_row=detail_row,
             )
-            detail_text = cell_link.text_content() if cell_link.count() > 0 else ""
-            expected_count = self._extract_detail_count(detail_text) if detail_text else detail_row.get("org_scope_count")
-            collected: list[str] = []
-            if cell_link.count() > 0:
-                cell_link.scroll_into_view_if_needed(timeout=self.timeout_ms)
-                cell_link.click(force=True)
-                self.page.wait_for_timeout(1200)
-                collected = self._extract_codes_from_org_grid(expected_count)
-                self.logger.info(
-                    "Collected %s organization codes from detail row %s",
-                    len(collected),
-                    detail_row.get("line_no", row_idx + 1),
-                )
-                self._close_org_detail_with_escape()
-
-            role_scopes.append(
-                {
-                    "line_no": detail_row.get("line_no", ""),
-                    "role_code": role_code,
-                    "role_name": detail_row.get("role_name", ""),
-                    "organization_codes": sorted({code for code in collected if code}),
-                }
-            )
-        return role_scopes
+            retry_detail_text = (retry_link.text_content() or "").strip() if retry_link.count() > 0 else ""
+            if expected_count is None and retry_detail_text:
+                parsed_count = self._extract_detail_count(retry_detail_text)
+                if parsed_count is not None:
+                    expected_count = parsed_count
+            return sorted(_click_and_extract(retry_link, expected_count))
 
     def _wait_for_document_loaded(self, document_no: str) -> None:
         self.page.locator("#fs_baseinfo").wait_for(state="visible", timeout=self.timeout_ms)
@@ -1407,6 +1536,23 @@ class PermissionCollectFlow:
         return self._org_detail_closed()
 
     @staticmethod
+    def _coerce_expected_count(value: Any) -> int | None:
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            return int(value)
+        value_text = str(value).strip()
+        if not value_text:
+            return None
+        try:
+            parsed = int(value_text)
+        except ValueError:
+            return None
+        if parsed < 0:
+            return None
+        return parsed
+
+    @staticmethod
     def _normalize_row_cells(headers: Sequence[str], row: Sequence[str]) -> list[str]:
         normalized = list(row)
         while len(normalized) > len(headers) and normalized and not normalized[0]:
@@ -1435,16 +1581,26 @@ class PermissionCollectFlow:
     @staticmethod
     def _is_empty_detail_row(mapped: dict[str, str]) -> bool:
         # Virtualized grids can render a trailing placeholder row that only keeps
-        # the org-detail link text but has no real permission detail content.
+        # the row number or org-detail link text but has no real permission detail content.
+        detail_row = {
+            "apply_type": mapped.get("申请类型", ""),
+            "role_name": mapped.get("角色名称", ""),
+            "role_code": mapped.get("角色编码", ""),
+        }
+        return not PermissionCollectFlow._is_detail_row_business_valid(detail_row)
+
+    @staticmethod
+    def _is_detail_row_business_valid(detail_row: dict[str, Any]) -> bool:
         business_fields = (
-            (mapped.get("#") or "").strip(),
-            (mapped.get("申请类型") or "").strip(),
-            (mapped.get("角色名称") or "").strip(),
-            (mapped.get("角色编码") or "").strip(),
-            (mapped.get("角色描述") or "").strip(),
-            (mapped.get("参保单位") or "").strip(),
+            (detail_row.get("apply_type") or "").strip(),
+            (detail_row.get("role_name") or "").strip(),
+            (detail_row.get("role_code") or "").strip(),
         )
-        return not any(business_fields)
+        return any(business_fields)
+
+    @staticmethod
+    def _is_org_grid_missing_error(exc: Exception) -> bool:
+        return "Organization detail grid not found after clicking detail link" in str(exc)
 
     @staticmethod
     def _extract_detail_count(detail_text: str) -> int | None:

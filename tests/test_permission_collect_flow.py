@@ -186,6 +186,141 @@ class PermissionCollectFlowTest(unittest.TestCase):
         wait_link.assert_not_called()
         self.logger.info.assert_called_once()
 
+    def test_extract_role_organization_scopes_skips_expected_count_zero(self) -> None:
+        detail_rows = [
+            {
+                "line_no": "2",
+                "role_code": "EP001",
+                "role_name": "测试角色",
+                "org_scope_count": None,
+            }
+        ]
+        cell_link = MagicMock()
+        cell_link.count.return_value = 1
+        cell_link.text_content.return_value = "查看详情(0)"
+        failed_rows: list[dict[str, object]] = []
+
+        with (
+            patch.object(self.flow, "_wait_for_permission_detail_grid_ready", return_value={"selector": "#entryentity"}),
+            patch.object(self.flow, "_wait_for_grid_row_ready"),
+            patch.object(self.flow, "_wait_for_detail_link_ready", return_value=cell_link),
+            patch.object(self.flow, "_extract_org_codes_from_detail_link") as extract_codes,
+        ):
+            scopes = self.flow.extract_role_organization_scopes(
+                "RA-20260316-00020066",
+                detail_rows,
+                failed_rows=failed_rows,
+            )
+
+        self.assertEqual(
+            scopes,
+            [
+                {
+                    "line_no": "2",
+                    "role_code": "EP001",
+                    "role_name": "测试角色",
+                    "organization_codes": [],
+                }
+            ],
+        )
+        self.assertEqual(failed_rows, [])
+        extract_codes.assert_not_called()
+
+    def test_extract_role_organization_scopes_records_nonblocking_row_failure(self) -> None:
+        detail_rows = [
+            {
+                "line_no": "3",
+                "role_code": "EP002",
+                "role_name": "测试角色",
+                "org_scope_count": None,
+            }
+        ]
+        cell_link = MagicMock()
+        cell_link.count.return_value = 1
+        cell_link.text_content.return_value = "查看详情(2)"
+        failed_rows: list[dict[str, object]] = []
+
+        with (
+            patch.object(self.flow, "_wait_for_permission_detail_grid_ready", return_value={"selector": "#entryentity"}),
+            patch.object(self.flow, "_wait_for_grid_row_ready"),
+            patch.object(self.flow, "_wait_for_detail_link_ready", return_value=cell_link),
+            patch.object(
+                self.flow,
+                "_extract_org_codes_from_detail_link",
+                side_effect=RuntimeError("detail grid unstable"),
+            ),
+        ):
+            scopes = self.flow.extract_role_organization_scopes(
+                "RA-20260316-00020067",
+                detail_rows,
+                failed_rows=failed_rows,
+            )
+
+        self.assertEqual(
+            scopes,
+            [
+                {
+                    "line_no": "3",
+                    "role_code": "EP002",
+                    "role_name": "测试角色",
+                    "organization_codes": [],
+                }
+            ],
+        )
+        self.assertEqual(len(failed_rows), 1)
+        self.assertEqual(failed_rows[0]["role_code"], "EP002")
+        self.assertIn("RuntimeError: detail grid unstable", str(failed_rows[0]["error"]))
+
+    def test_extract_org_codes_from_detail_link_retries_once_when_grid_missing(self) -> None:
+        cell_link = MagicMock()
+        cell_link.count.return_value = 1
+        retry_link = MagicMock()
+        retry_link.count.return_value = 1
+        retry_link.text_content.return_value = "查看详情(1)"
+
+        with (
+            patch.object(self.flow, "_wait_for_grid_row_ready") as wait_row_ready,
+            patch.object(self.flow, "_wait_for_detail_link_ready", return_value=retry_link) as wait_link_ready,
+            patch.object(self.flow, "_close_org_detail_with_escape") as close_detail,
+            patch.object(
+                self.flow,
+                "_extract_codes_from_org_grid",
+                side_effect=[
+                    RuntimeError("Organization detail grid not found after clicking detail link"),
+                    {"A01"},
+                ],
+            ),
+        ):
+            result = self.flow._extract_org_codes_from_detail_link(
+                document_no="RA-20260316-00020068",
+                grid_selector="#entryentity",
+                row_idx=5,
+                detail_row={
+                    "line_no": "6",
+                    "role_code": "EP003",
+                    "role_name": "测试角色",
+                },
+                expected_count=1,
+                detail_text="查看详情(1)",
+                cell_link=cell_link,
+            )
+
+        self.assertEqual(result, ["A01"])
+        wait_row_ready.assert_called_once()
+        wait_link_ready.assert_called_once()
+        self.assertEqual(close_detail.call_count, 2)
+
+    def test_is_empty_detail_row_treats_line_number_only_row_as_empty(self) -> None:
+        mapped = {
+            "#": "18",
+            "申请类型": "",
+            "角色名称": "",
+            "角色编码": "",
+            "角色描述": "",
+            "参保单位": "",
+        }
+        self.assertTrue(PermissionCollectFlow._is_empty_detail_row(mapped))
+
     def test_collect_approval_record_cards_uses_scrollable_tabpage_script(self) -> None:
         self.page.evaluate.return_value = []
 
