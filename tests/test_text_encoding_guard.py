@@ -10,7 +10,7 @@ class TextEncodingGuardTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             path = root / "sample.py"
-            path.write_text('value = "坏�字"\n', encoding="utf-8")
+            path.write_text('value = "\\u574f\\ufffd\\u5b57"\n'.encode("utf-8").decode("unicode_escape"), encoding="utf-8")
 
             findings = scan_file(path, root)
 
@@ -22,7 +22,7 @@ class TextEncodingGuardTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             path = root / "sample.py"
-            path.write_text('headers = ["鐢宠绫诲瀷"]\n', encoding="utf-8")
+            path.write_text('headers = ["\\u9422\\u5ba0\\ue1ec\\u7eeb\\u8bf2\\u7037"]\n'.encode("utf-8").decode("unicode_escape"), encoding="utf-8")
 
             findings = scan_file(path, root)
 
