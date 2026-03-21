@@ -298,3 +298,26 @@ db:
 - 临时需求、一次性方案、专项口径，不写在 `AGENTS.md`，写入 `方案计划文档`
 - `AGENTS.md` 更新时，应优先补“规则”和“边界”，不要堆砌临时结论
 - 代码、SQL、采集流程、发布方式发生变更时，提交前必须同步更新对应方案计划文档
+
+## 9. 开发环境统一口径（300/301）
+
+### 9.1 Python 版本统一原则
+- Windows 本地开发与 CI 的默认 Python 口径统一为 `3.12.x`
+- `.venv-win` 统一视为仓库运行时虚拟环境，默认由 `automation/scripts/install_windows_env.ps1` 创建与维护
+- 非兼容性验证场景下，不应使用系统 `3.10` 解释器执行本仓库正式脚本
+
+### 9.2 `.venv-win` 重建前置动作
+- 进行 Python 版本升级或 venv 重建前，先执行 `automation/scripts/stop_all.ps1` 释放运行中进程
+- 若重建时报“访问被拒绝”或 `.pyd` 文件删除失败，先清理命令行中引用 `.venv-win\Scripts\python.exe` 的残留进程，再重试
+- 重建完成后必须验证：
+  - `.venv-win/pyvenv.cfg` 的 `version`
+  - `.venv-win\Scripts\python.exe --version`
+
+### 9.3 VS Code 解释器约定
+- 本仓库在 VS Code 中应选择解释器：`.venv-win\Scripts\python.exe`
+- 禁止在仓库任务中混用系统 Python 解释器（如 `C:\Program Files\Python310\python.exe`）
+- 若解释器与预期不一致，优先通过 `Python: Select Interpreter` 显式切回 `.venv-win`
+
+### 9.4 CI 版本一致性
+- 涉及 Python 的 workflow 应与本地统一口径保持一致（默认 `3.12.x`）
+- 如需新增多版本矩阵，必须在方案文档中明确“兼容性验证目的”，不得无说明引入版本分叉

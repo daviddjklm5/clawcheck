@@ -41,6 +41,11 @@ WSL 可以继续作为开发辅助环境，但不再是正式运行前提。
 - PostgreSQL Windows 安装版，或可访问的独立 PostgreSQL 实例
 - PowerShell
 
+统一口径说明：
+
+- 本项目 Windows 本地开发与 CI 默认统一使用 Python `3.12.x`
+- 系统中可并存 `3.10`，但仓库运行命令应统一走 `.venv-win`
+
 ### 3.2 一键安装 Python 运行环境
 
 在仓库根目录执行：
@@ -60,6 +65,30 @@ powershell.exe -ExecutionPolicy Bypass -File .\automation\scripts\install_window
 
 ```powershell
 powershell.exe -ExecutionPolicy Bypass -File .\automation\scripts\install_windows_env.ps1 -PythonVersion 3.12
+```
+
+### 3.3 `.venv-win` 重建前置动作（重要）
+
+当需要从旧版本（如 `3.10`）重建到 `3.12` 时，先执行：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\automation\scripts\stop_all.ps1
+```
+
+如仍提示 `.pyd` 文件占用（访问被拒绝），继续清理残留进程：
+
+```powershell
+Get-CimInstance Win32_Process `
+  | Where-Object { $_.CommandLine -match '\.venv-win\\Scripts\\python.exe' } `
+  | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+```
+
+然后重建并验证：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\automation\scripts\install_windows_env.ps1 -PythonVersion 3.12 -IncludeDev
+Get-Content .\.venv-win\pyvenv.cfg
+.\.venv-win\Scripts\python.exe --version
 ```
 
 ## 4. 配置说明
@@ -233,15 +262,24 @@ powershell.exe -ExecutionPolicy Bypass -File .\automation\scripts\start_api.ps1
 
 ### 6.3 本地前端开发
 
-如果仅做前端开发，仍可使用 Vite：
+默认入口（推荐）：
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\automation\scripts\start_webui_dev.ps1
+```
+
+说明：
+
+- `start_webui_dev.ps1` 会按 `-NodeDir -> CLAWCHECK_NODE_DIR -> PATH` 定位 Node.js
+- 当前默认已配置 `/api -> http://127.0.0.1:8000` 代理，通常无需手工设置 `VITE_API_BASE_URL`
+
+仅当你明确需要手工调试 npm 命令时，再使用以下方式（要求终端 `npm` 可用）：
 
 ```powershell
 cd .\webui
-npm install
+npm ci
 npm run dev
 ```
-
-当前默认已配置 `/api -> http://127.0.0.1:8000` 代理，因此前端开发态一般无需再手工设置 `VITE_API_BASE_URL`。
 
 ## 7. PostgreSQL 切换与验收
 
@@ -426,6 +464,8 @@ powershell.exe -ExecutionPolicy Bypass -File .\automation\scripts\register_api_s
 - 当 venv 版本与 `-PythonVersion` 不一致时：默认自动重建
 - 如需保留现有 venv：显式传入 `-SkipRecreateOnVersionMismatch`
 - 如需强制重建：显式传入 `-ForceRecreateVenv`
+- 重建前应先执行 `stop_all.ps1`，避免运行中 Python 进程占用 `.venv-win` 导致删除失败
+- 若报错“访问被拒绝”（常见于 `greenlet` 等 `.pyd` 文件），先清理残留 `.venv-win` Python 进程再重试
 
 示例：
 
@@ -470,6 +510,11 @@ powershell.exe -ExecutionPolicy Bypass -File .\automation\scripts\stop_all.ps1
 powershell.exe -ExecutionPolicy Bypass -File .\automation\scripts\start_webui_dev.ps1
 ```
 
+说明：
+
+- `start_all.ps1 / restart_all.ps1` 可直接无参执行
+- 如已配置 `CLAWCHECK_NODE_DIR`，脚本会自动使用该 Node 来源，无需手动传 `-NodeDir`
+
 统一运行状态目录：
 
 - `automation/runtime/dev/`
@@ -508,3 +553,17 @@ powershell.exe -ExecutionPolicy Bypass -File .\automation\scripts\check_quality.
 - `python -m compileall automation`
 - `python -m pytest -q`
 - `npm run build`
+
+### 13.6 VS Code 解释器
+
+请在 VS Code 中固定选择：
+
+- `.venv-win\Scripts\python.exe`（位于当前仓库根目录）
+
+操作：
+
+1. `Ctrl + Shift + P`
+2. `Python: Select Interpreter`
+3. 选择 `.venv-win\Scripts\python.exe`
+
+若重建过 `.venv-win`，建议执行一次 `Developer: Reload Window`，避免扩展继续缓存旧解释器。
