@@ -51,6 +51,28 @@ function getSessionTitle(session: ChatSession): string {
   return session.title || `Session ${session.sessionId.slice(0, 8)}`;
 }
 
+function getRunStatusLabel(status: string): string {
+  if (status === "routing") {
+    return "意图路由中";
+  }
+  if (status === "running_tool") {
+    return "调用正式工具中";
+  }
+  if (status === "clarifying") {
+    return "追问补齐中";
+  }
+  if (status === "templated") {
+    return "模板直答中";
+  }
+  if (status === "composing") {
+    return "组织答案中";
+  }
+  if (status === "cancel_requested") {
+    return "取消中";
+  }
+  return status || "-";
+}
+
 export function ChatWorkspacePage() {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string>("");
@@ -62,6 +84,7 @@ export function ChatWorkspacePage() {
   const [inputText, setInputText] = useState("");
   const [configSummary, setConfigSummary] = useState<ChatConfigSummary | null>(null);
   const [health, setHealth] = useState<ChatHealth | null>(null);
+  const [activitySummary, setActivitySummary] = useState("");
   const lastSeqRef = useRef<number>(0);
   const eventSourceRef = useRef<EventSource | null>(null);
 
@@ -125,6 +148,7 @@ export function ChatWorkspacePage() {
     if (!selectedSessionId) {
       setMessages([]);
       setRunStatus("");
+      setActivitySummary("");
       return;
     }
     let active = true;
@@ -136,6 +160,7 @@ export function ChatWorkspacePage() {
         }
         setMessages(detail.messages);
         setRunStatus(detail.running ? "running" : detail.session.status);
+        setActivitySummary("");
         lastSeqRef.current = 0;
       } catch (loadError) {
         if (active) {
@@ -195,11 +220,21 @@ export function ChatWorkspacePage() {
           return;
         }
         if (eventType === "status") {
-          setRunStatus(String(payload.data.status ?? ""));
+          const nextStatus = String(payload.data.status ?? "");
+          setRunStatus(nextStatus);
+          setActivitySummary(getRunStatusLabel(nextStatus));
+          return;
+        }
+        if (eventType === "tool" || eventType === "event") {
+          const summary = String(payload.data.summary ?? "");
+          if (summary) {
+            setActivitySummary(summary);
+          }
           return;
         }
         if (eventType === "done") {
           setRunStatus(String(payload.data.status ?? ""));
+          setActivitySummary("本轮回答已完成");
           return;
         }
         if (eventType === "error") {
@@ -235,6 +270,7 @@ export function ChatWorkspacePage() {
       setSelectedSessionId(created.sessionId);
       setInputText("");
       setError(null);
+      setActivitySummary("");
     } catch (createError) {
       setError(createError instanceof Error ? createError.message : "创建会话失败");
     }
@@ -263,6 +299,7 @@ export function ChatWorkspacePage() {
       });
       setRunStatus(response.run.status);
       setInputText("");
+      setActivitySummary(getRunStatusLabel(response.run.status));
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "发送消息失败");
     } finally {
@@ -277,6 +314,7 @@ export function ChatWorkspacePage() {
     try {
       await chatApi.cancelRun(selectedSessionId);
       setRunStatus("cancel_requested");
+      setActivitySummary(getRunStatusLabel("cancel_requested"));
     } catch (cancelError) {
       setError(cancelError instanceof Error ? cancelError.message : "取消执行失败");
     }
@@ -309,8 +347,12 @@ export function ChatWorkspacePage() {
           <Typography variant="body2">
             Codex CLI: {health?.codexCliAvailable ? "Available" : "Unavailable"}
           </Typography>
-          <Typography variant="body2">Run status: {runStatus || "-"}</Typography>
+          <Typography variant="body2">Router: {configSummary?.routerEnabled ? "Enabled" : "Disabled"}</Typography>
+          <Typography variant="body2">Run status: {getRunStatusLabel(runStatus)}</Typography>
         </Stack>
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+          Activity: {activitySummary || "-"}
+        </Typography>
       </Paper>
 
       <Box

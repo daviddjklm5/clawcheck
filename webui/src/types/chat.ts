@@ -45,6 +45,7 @@ export interface ChatConfigSummary {
   codexCliExecutable: string;
   codexCliResolvedPath: string;
   workspaceDir: string;
+  routerEnabled: boolean;
 }
 
 export interface ChatHealth {
@@ -56,6 +57,7 @@ export interface ChatHealth {
   apiKeyConfigured: boolean;
   provider: string;
   model: string;
+  routerEnabled: boolean;
 }
 
 export interface ChatStreamEvent {
@@ -64,4 +66,3 @@ export interface ChatStreamEvent {
   at: string;
   data: Record<string, unknown>;
 }
-

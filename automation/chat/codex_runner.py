@@ -27,6 +27,25 @@ class CodexExecutionResult:
     usage: dict[str, int]
 
 
+@dataclass
+class RouterExecutionResult:
+    status: str
+    decision: dict[str, Any] | None
+    exit_code: int
+    raw_output: str
+    error_message: str
+
+
+@dataclass
+class _ExecCollectionResult:
+    status: str
+    final_text: str
+    exit_code: int
+    raw_output: str
+    usage: dict[str, int]
+    error_message: str
+
+
 def resolve_codex_cli_path(config: ChatProviderConfig) -> str | None:
     executable = config.codex_cli_executable.strip()
     if not executable:
@@ -72,14 +91,7 @@ def _supports_exec_option(codex_cli_path: str, option: str) -> bool:
     return option in help_text
 
 
-def run_codex_exec(
-    *,
-    config: ChatProviderConfig,
-    prompt: str,
-    workspace_dir: Path,
-    cancel_event: threading.Event,
-    callback: EventCallback,
-) -> CodexExecutionResult:
+def _ensure_runtime_prerequisites(config: ChatProviderConfig) -> str:
     codex_cli_path = resolve_codex_cli_path(config)
     if codex_cli_path is None:
         raise RuntimeError(
@@ -89,7 +101,16 @@ def run_codex_exec(
         raise RuntimeError(
             f"Missing model API key. Set environment variable {config.api_key_env}."
         )
+    return codex_cli_path
 
+
+def _build_exec_command(
+    *,
+    codex_cli_path: str,
+    config: ChatProviderConfig,
+    workspace_dir: Path,
+    output_schema_path: Path | None = None,
+) -> list[str]:
     command = [
         codex_cli_path,
         "exec",
@@ -104,14 +125,30 @@ def run_codex_exec(
     ]
     if _supports_exec_option(codex_cli_path, "--ask-for-approval"):
         command.extend(["--ask-for-approval", "never"])
+    if output_schema_path is not None:
+        if not _supports_exec_option(codex_cli_path, "--output-schema"):
+            raise RuntimeError("Current Codex CLI does not support --output-schema.")
+        command.extend(["--output-schema", str(output_schema_path)])
     if config.base_url:
         command.extend(["-c", f'openai_base_url="{config.base_url}"'])
     command.append("-")
+    return command
 
+
+def _build_exec_env(config: ChatProviderConfig) -> dict[str, str]:
     env = dict(os.environ)
     env["OPENAI_API_KEY"] = config.api_key
     env["CLAWCHECK_AI_PROVIDER"] = config.provider
+    return env
 
+
+def _start_exec_process(
+    *,
+    command: list[str],
+    prompt: str,
+    workspace_dir: Path,
+    env: dict[str, str],
+) -> subprocess.Popen[str]:
     process = subprocess.Popen(
         command,
         cwd=str(workspace_dir),
@@ -127,7 +164,16 @@ def run_codex_exec(
     if process.stdin is not None:
         process.stdin.write(prompt)
         process.stdin.close()
+    return process
 
+
+def _collect_exec_output(
+    *,
+    process: subprocess.Popen[str],
+    cancel_event: threading.Event,
+    timeout_seconds: int,
+    callback: EventCallback | None = None,
+) -> _ExecCollectionResult:
     lines_queue: queue.Queue[str | None] = queue.Queue()
 
     def _read_stdout_lines() -> None:
@@ -148,11 +194,13 @@ def run_codex_exec(
     final_text = ""
     output_lines: list[str] = []
     usage: dict[str, int] = {}
+    error_message = ""
     stream_done = False
     return_code: int | None = None
     status = "running"
 
-    callback({"type": "status", "status": "running"})
+    if callback is not None:
+        callback({"type": "status", "status": "running"})
 
     while True:
         if cancel_event.is_set() and process.poll() is None:
@@ -160,7 +208,7 @@ def run_codex_exec(
             status = "canceled"
 
         elapsed = time.monotonic() - started_at
-        if elapsed > config.timeout_seconds and process.poll() is None:
+        if elapsed > timeout_seconds and process.poll() is None:
             process.terminate()
             status = "timeout"
 
@@ -183,7 +231,8 @@ def run_codex_exec(
         output_lines.append(line)
         event_payload = _safe_json_parse(line)
         if event_payload is None:
-            callback({"type": "output", "line": line})
+            if callback is not None:
+                callback({"type": "output", "line": line})
             continue
 
         event_type = str(event_payload.get("type") or "")
@@ -195,13 +244,15 @@ def run_codex_exec(
                     text = str(item.get("text") or "")
                     if text:
                         final_text += text
-                        callback({"type": "token", "delta": text})
+                        if callback is not None:
+                            callback({"type": "token", "delta": text})
                     continue
                 if item_type == "error":
-                    message = str(item.get("message") or "").strip()
-                    callback({"type": "error", "message": message or "Codex returned an error item."})
+                    error_message = str(item.get("message") or "").strip() or "Codex returned an error item."
+                    if callback is not None:
+                        callback({"type": "error", "message": error_message})
                     continue
-                if item_type:
+                if item_type and callback is not None:
                     callback(
                         {
                             "type": "tool",
@@ -218,7 +269,7 @@ def run_codex_exec(
                     if isinstance(value, int):
                         usage[key] = value
             continue
-        else:
+        elif callback is not None:
             callback(
                 {
                     "type": "event",
@@ -237,18 +288,162 @@ def run_codex_exec(
         status = "succeeded" if return_code == 0 else "failed"
 
     if status == "timeout":
-        callback({"type": "error", "message": f"Execution timed out after {config.timeout_seconds}s"})
+        error_message = error_message or f"Execution timed out after {timeout_seconds}s"
+        if callback is not None:
+            callback({"type": "error", "message": error_message})
     elif status == "canceled":
-        callback({"type": "status", "status": "canceled"})
+        if callback is not None:
+            callback({"type": "status", "status": "canceled"})
     elif status == "failed":
-        callback({"type": "error", "message": f"Codex exited with code {return_code}"})
+        error_message = error_message or f"Codex exited with code {return_code}"
+        if callback is not None:
+            callback({"type": "error", "message": error_message})
 
-    output_tail = "\n".join(output_lines)[-8000:]
-    callback({"type": "done", "status": status, "exitCode": return_code})
-    return CodexExecutionResult(
+    raw_output = "\n".join(output_lines)[-12000:]
+    if callback is not None:
+        callback({"type": "done", "status": status, "exitCode": return_code})
+    return _ExecCollectionResult(
         status=status,
         final_text=final_text,
         exit_code=return_code,
-        output_tail=output_tail,
+        raw_output=raw_output,
         usage=usage,
+        error_message=error_message,
+    )
+
+
+def run_codex_exec(
+    *,
+    config: ChatProviderConfig,
+    prompt: str,
+    workspace_dir: Path,
+    cancel_event: threading.Event,
+    callback: EventCallback,
+) -> CodexExecutionResult:
+    codex_cli_path = _ensure_runtime_prerequisites(config)
+    command = _build_exec_command(
+        codex_cli_path=codex_cli_path,
+        config=config,
+        workspace_dir=workspace_dir,
+    )
+    process = _start_exec_process(
+        command=command,
+        prompt=prompt,
+        workspace_dir=workspace_dir,
+        env=_build_exec_env(config),
+    )
+    result = _collect_exec_output(
+        process=process,
+        cancel_event=cancel_event,
+        timeout_seconds=config.timeout_seconds,
+        callback=callback,
+    )
+    return CodexExecutionResult(
+        status=result.status,
+        final_text=result.final_text,
+        exit_code=result.exit_code,
+        output_tail=result.raw_output,
+        usage=result.usage,
+    )
+
+
+def run_router_exec(
+    *,
+    config: ChatProviderConfig,
+    prompt: str,
+    workspace_dir: Path,
+    output_schema: dict[str, Any],
+    cancel_event: threading.Event,
+    runtime_dir: Path,
+) -> RouterExecutionResult:
+    try:
+        codex_cli_path = _ensure_runtime_prerequisites(config)
+    except Exception as exc:  # noqa: BLE001
+        return RouterExecutionResult(
+            status="failed",
+            decision=None,
+            exit_code=1,
+            raw_output="",
+            error_message=str(exc),
+        )
+
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    schema_path = runtime_dir / "router-decision.schema.json"
+    schema_path.write_text(
+        json.dumps(output_schema, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    try:
+        command = _build_exec_command(
+            codex_cli_path=codex_cli_path,
+            config=config,
+            workspace_dir=workspace_dir,
+            output_schema_path=schema_path,
+        )
+        process = _start_exec_process(
+            command=command,
+            prompt=prompt,
+            workspace_dir=workspace_dir,
+            env=_build_exec_env(config),
+        )
+        result = _collect_exec_output(
+            process=process,
+            cancel_event=cancel_event,
+            timeout_seconds=config.timeout_seconds,
+            callback=None,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return RouterExecutionResult(
+            status="failed",
+            decision=None,
+            exit_code=1,
+            raw_output="",
+            error_message=str(exc),
+        )
+
+    if result.status != "succeeded":
+        return RouterExecutionResult(
+            status=result.status,
+            decision=None,
+            exit_code=result.exit_code,
+            raw_output=result.raw_output,
+            error_message=result.error_message,
+        )
+
+    raw_text = result.final_text.strip()
+    if not raw_text:
+        return RouterExecutionResult(
+            status="failed",
+            decision=None,
+            exit_code=result.exit_code,
+            raw_output=result.raw_output,
+            error_message="Router returned empty output.",
+        )
+
+    try:
+        decision = json.loads(raw_text)
+    except json.JSONDecodeError as exc:
+        return RouterExecutionResult(
+            status="failed",
+            decision=None,
+            exit_code=result.exit_code,
+            raw_output=result.raw_output or raw_text,
+            error_message=f"Router output is not valid JSON: {exc}",
+        )
+    if not isinstance(decision, dict):
+        return RouterExecutionResult(
+            status="failed",
+            decision=None,
+            exit_code=result.exit_code,
+            raw_output=result.raw_output or raw_text,
+            error_message="Router output JSON must be an object.",
+        )
+
+    return RouterExecutionResult(
+        status="succeeded",
+        decision=decision,
+        exit_code=result.exit_code,
+        raw_output=result.raw_output or raw_text,
+        error_message="",
     )
