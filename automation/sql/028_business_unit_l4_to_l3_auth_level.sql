@@ -1,5 +1,5 @@
 -- 口径调整：当组织流程层级分类为“业务单元本部”且物理层级 = 4 时，
--- 由二级授权调整为三级授权（万睿科技例外规则保持不变，仍为三级授权）。
+-- 由 2级授权调整为 3级授权（万睿科技例外规则保持不变，仍为 3级授权）。
 
 BEGIN;
 
@@ -40,64 +40,64 @@ BEGIN
         '50907621',
         '50916021'
     ) THEN
-        RETURN '一级授权';
+        RETURN '1级授权';
     END IF;
 
     IF COALESCE(normalized_org_full_name, '') LIKE '%BG人力资源行政服务中心%' THEN
-        RETURN '一级授权';
+        RETURN '1级授权';
     END IF;
 
     IF normalized_org_code IN (
         '50939479',
         '50921744'
     ) THEN
-        RETURN '二级授权';
+        RETURN '2级授权';
     END IF;
 
     IF COALESCE(normalized_org_unit_name, '') LIKE '（作废）%'
        AND physical_level_num = 2 THEN
-        RETURN '二级授权';
+        RETURN '2级授权';
     END IF;
 
     IF normalized_process_level_category = '业务单元本部'
        AND normalized_org_unit_name = '万睿科技'
        AND physical_level_num <= 4 THEN
-        RETURN '三级授权';
+        RETURN '3级授权';
     END IF;
 
     IF normalized_process_level_category = '业务单元本部'
        AND physical_level_num <= 3 THEN
-        RETURN '二级授权';
+        RETURN '2级授权';
     END IF;
 
     IF normalized_process_level_category = '蝶发人行部' THEN
-        RETURN '二级授权';
+        RETURN '2级授权';
     END IF;
 
     IF normalized_process_level_category = '业务单元本部'
        AND physical_level_num >= 4 THEN
-        RETURN '三级授权';
+        RETURN '3级授权';
     END IF;
 
     IF physical_level_num = 2 THEN
-        RETURN '二级授权';
+        RETURN '2级授权';
     END IF;
 
     IF physical_level_num = 3 THEN
-        RETURN '三级授权';
+        RETURN '3级授权';
     END IF;
 
     IF normalized_process_level_category = '属地组织'
        AND physical_level_num >= 4 THEN
-        RETURN '四级授权';
+        RETURN '4级授权';
     END IF;
 
     IF normalized_process_level_category IS NULL
        AND physical_level_num >= 6 THEN
-        RETURN '四级授权';
+        RETURN '4级授权';
     END IF;
 
-    RETURN NULL;
+    RETURN '未分类';
 END;
 $$;
 

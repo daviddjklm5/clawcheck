@@ -1,4 +1,4 @@
-version: "2026-03-19"
+version: "2026-03-21"
 package: "apply_form_risk_trust_constants"
 description: "申请表审批风险与信任度评估常量"
 enabled: true
@@ -82,12 +82,17 @@ constants:
     "蝶发人行部": 1.0
 
   organization_auth_level_scores:
+    "1级授权": 0.5
     "一级授权": 0.5
+    "2级授权": 2.0
     "二级授权": 2.0
+    "3级授权": 2.5
     "三级授权": 2.5
+    "未分类": 2.0
     "<NULL>": 2.0
 
   target_org_auth_level_skip_assessment_levels:
+    - "4级授权"
     - "四级授权"
 
   target_org_l2_representative_office_org_units:
@@ -114,6 +119,9 @@ constants:
     - "渝贵战区代表处"
 
   target_org_representative_office_auth_level_map_levels:
+    - "1级授权"
+    - "3级授权"
+    - "未分类"
     - "一级授权"
     - "三级授权"
     - "<NULL>"

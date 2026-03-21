@@ -17,6 +17,15 @@ DIMENSION_LABELS = {
     "target_organization": "申请的组织",
 }
 
+ORG_AUTH_LEVEL_ALIASES = {
+    "一级授权": "1级授权",
+    "二级授权": "2级授权",
+    "三级授权": "3级授权",
+    "四级授权": "4级授权",
+    "未定义": "未分类",
+    "<NULL>": "未分类",
+}
+
 
 @dataclass
 class RiskTrustPackage:
@@ -304,7 +313,7 @@ class RiskTrustEvaluator:
             "apply_type": self._normalized_text(role_row.get("apply_type")),
             "permission_level": self._normalized_text(role_row.get("permission_level")),
             "role_skip_org_scope_check": bool(role_row.get("skip_org_scope_check")),
-            "target_org_auth_level": self._normalized_text(target_row.get("org_auth_level")),
+            "target_org_auth_level": self._normalized_org_auth_level(target_row.get("org_auth_level")),
             "target_org_unit_name": target_org_unit_name,
             "target_org_code": self._normalized_text(target_row.get("org_code")),
             "applicant_org_unit_not_equal_target_org_unit": (
@@ -554,6 +563,11 @@ class RiskTrustEvaluator:
         if isinstance(value, str) and not value.strip():
             return None
         return value
+
+    @classmethod
+    def _normalized_org_auth_level(cls, value: Any) -> str:
+        normalized = cls._normalized_text(value)
+        return ORG_AUTH_LEVEL_ALIASES.get(normalized, normalized)
 
     @staticmethod
     def _normalized_text(value: Any) -> str:

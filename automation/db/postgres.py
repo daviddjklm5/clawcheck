@@ -2532,7 +2532,11 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
         summary_rows: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
         pending_count = sum(1 for row in summary_rows if (row.get("todo_process_status") or "待处理") == "待处理")
-        processed_count = sum(1 for row in summary_rows if (row.get("todo_process_status") or "待处理") == "已处理")
+        processed_count = sum(
+            1
+            for row in summary_rows
+            if (row.get("todo_process_status") or "待处理") in {"已处理", "已驳回"}
+        )
         reject_count = sum(1 for row in summary_rows if row["summary_conclusion"] == "拒绝")
         manual_review_count = sum(1 for row in summary_rows if row["summary_conclusion"] == "人工干预")
         assessed_rows = [row for row in summary_rows if self._strip_text(row.get("assessment_batch_no")) is not None]
@@ -2561,7 +2565,7 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
             {
                 "label": "已处理单据",
                 "value": str(processed_count),
-                "hint": "最近一次待办同步结果已标记为“已处理”的单据数。",
+                "hint": "最近一次待办同步结果已标记为“已处理/已驳回”的单据数。",
                 "tone": "success" if processed_count else "default",
             },
             {
@@ -2816,8 +2820,9 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
             notes.append(
                 f"当前整单存在 {len(score_basis_rows)} 条 `得分<2.5` 的评分依据，已同步展示在“风险总览”页签。"
             )
-        if (summary_row.get("todo_process_status") or "待处理") == "已处理":
-            notes.append("该单据最近一次待办同步结果为“已处理”，当前账号 EHR 待办中未命中。")
+        todo_process_status = summary_row.get("todo_process_status") or "待处理"
+        if todo_process_status in {"已处理", "已驳回"}:
+            notes.append(f"该单据最近一次待办同步结果为“{todo_process_status}”，当前账号 EHR 待办中未命中。")
         if summary_row["suggested_action"] == "reject":
             notes.append("当前建议动作为拒绝，需结合原始单据与审批链复核后再处理。")
         elif summary_row["suggested_action"] == "manual_review":
@@ -4638,6 +4643,10 @@ class PostgresOrganizationListStore(_PostgresStoreBase):
         Path(__file__).resolve().parents[1] / "sql" / "004_city_warzone.sql",
         Path(__file__).resolve().parents[1] / "sql" / "006_organization_attribute_query.sql",
     ]
+    schema_upgrade_sql_files = [
+        Path(__file__).resolve().parents[1] / "sql" / "026_fix_organization_attribute_query_refresh_dependency.sql",
+        Path(__file__).resolve().parents[1] / "sql" / "029_org_auth_level_numeric_labels.sql",
+    ]
     base_columns = [
         "org_code",
         "row_no",
@@ -4678,6 +4687,7 @@ class PostgresOrganizationListStore(_PostgresStoreBase):
         with self.connect() as connection:
             with connection.cursor() as cursor:
                 if self._column_exists(cursor, "组织列表", "行政组织编码"):
+                    self._apply_schema_upgrades(cursor)
                     return
                 if self._column_exists(cursor, "组织列表", "org_code"):
                     raise RuntimeError('Detected legacy English schema for "组织列表". Run automation/sql/012_rename_columns_to_cn_fixed_schema.sql first.')
@@ -4686,6 +4696,11 @@ class PostgresOrganizationListStore(_PostgresStoreBase):
                     cursor.execute(migration_sql_file.read_text(encoding="utf-8"))
                 for derived_schema_sql_file in self.derived_schema_sql_files:
                     cursor.execute(derived_schema_sql_file.read_text(encoding="utf-8"))
+                self._apply_schema_upgrades(cursor)
+
+    def _apply_schema_upgrades(self, cursor) -> None:
+        for migration_sql_file in self.schema_upgrade_sql_files:
+            cursor.execute(migration_sql_file.read_text(encoding="utf-8"))
 
     def write_rows(
         self,
