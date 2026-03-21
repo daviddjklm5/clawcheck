@@ -33,6 +33,7 @@ class _FakeChatService:
             "messages": [],
             "running": False,
         }
+        self.stream_after_seq_calls: list[int] = []
 
     def create_session(self, *, title: str = "", workspace_dir: str = "") -> dict[str, Any]:
         return {**self._session, "title": title or self._session["title"]}
@@ -77,7 +78,7 @@ class _FakeChatService:
         return {"sessionId": "s1", "runId": "r1", "status": "cancel_requested"}
 
     def stream_events(self, session_id: str, *, after_seq: int = 0):
-        _ = after_seq
+        self.stream_after_seq_calls.append(after_seq)
         if session_id != "s1":
             return
         yield {"seq": 1, "type": "status", "at": "now", "data": {"status": "running"}}
@@ -135,6 +136,17 @@ class ChatRouterTest(unittest.TestCase):
         self.assertEqual(stream_response.status_code, 200)
         self.assertIn("event: status", stream_response.text)
         self.assertIn("event: done", stream_response.text)
+        self.assertEqual(self.service.stream_after_seq_calls[-1], 0)
+
+    def test_stream_uses_last_event_id_header_for_resume_offset(self) -> None:
+        with _patched_chat_service(self.service):
+            stream_response = self.client.get(
+                "/api/chat/sessions/s1/stream?afterSeq=0",
+                headers={"Last-Event-ID": "7"},
+            )
+
+        self.assertEqual(stream_response.status_code, 200)
+        self.assertEqual(self.service.stream_after_seq_calls[-1], 7)
 
     def test_config_and_health(self) -> None:
         with _patched_chat_service(self.service):
@@ -149,4 +161,3 @@ class ChatRouterTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

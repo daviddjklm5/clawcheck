@@ -161,7 +161,10 @@ export function ChatWorkspacePage() {
     const onEvent = (event: MessageEvent<string>) => {
       try {
         const payload = JSON.parse(event.data) as ChatStreamEvent;
-        lastSeqRef.current = Math.max(lastSeqRef.current, payload.seq);
+        if (payload.seq <= lastSeqRef.current) {
+          return;
+        }
+        lastSeqRef.current = payload.seq;
         const eventType = payload.type;
         if (eventType === "message_created") {
           const message = payload.data.message as ChatMessage | undefined;
@@ -437,4 +440,3 @@ export function ChatWorkspacePage() {
     </Stack>
   );
 }
-

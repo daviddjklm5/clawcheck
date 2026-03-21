@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Header, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -83,14 +83,22 @@ def cancel_run(session_id: str) -> dict[str, object]:
 def stream_session_events(
     session_id: str,
     afterSeq: int = Query(default=0, ge=0),
+    lastEventId: str | None = Header(default=None, alias="Last-Event-ID"),
 ) -> StreamingResponse:
     service = get_chat_service()
     detail = service.get_session_detail(session_id)
     if detail is None:
         raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
 
+    resume_after_seq = afterSeq
+    if lastEventId:
+        try:
+            resume_after_seq = max(resume_after_seq, int(lastEventId))
+        except ValueError:
+            pass
+
     def _event_stream():
-        for event in service.stream_events(session_id, after_seq=afterSeq):
+        for event in service.stream_events(session_id, after_seq=resume_after_seq):
             yield _to_sse_frame(event)
 
     return StreamingResponse(_event_stream(), media_type="text/event-stream")
@@ -106,4 +114,3 @@ def get_chat_config_summary() -> dict[str, object]:
 def get_chat_health() -> dict[str, object]:
     service = get_chat_service()
     return service.get_health()
-
