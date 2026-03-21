@@ -139,7 +139,21 @@ if (-not $SkipTaskDaemon) {
 }
 
 if (-not $SkipWebui) {
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "automation\scripts\start_webui_dev.ps1") -NodeDir $NodeDir -ApiBaseUrl $ApiBaseUrl -Port $WebuiPort
+    $WebuiArgs = @(
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        (Join-Path $RepoRoot "automation\scripts\start_webui_dev.ps1"),
+        "-ApiBaseUrl",
+        $ApiBaseUrl,
+        "-Port",
+        [string]$WebuiPort
+    )
+    if ($NodeDir) {
+        $WebuiArgs += @("-NodeDir", $NodeDir)
+    }
+    & powershell.exe @WebuiArgs
     if ($LASTEXITCODE -ne 0) {
         throw "Failed to start webui_dev."
     }
