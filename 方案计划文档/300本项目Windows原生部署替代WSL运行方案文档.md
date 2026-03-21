@@ -363,10 +363,14 @@ Web UI 正式运行不再使用：
 正式发布应调整为：
 
 ```powershell
-cd webui
-npm ci
-npm run build
+powershell.exe -ExecutionPolicy Bypass -File .\automation\scripts\preflight_webui_node.ps1
+powershell.exe -ExecutionPolicy Bypass -File .\automation\scripts\build_webui.ps1 -Install
 ```
+
+说明：
+
+- `build_webui.ps1` 统一承接 `npm ci` + `npm run build`
+- preflight 用于在构建前显式校验 `node/npm` 可发现性，避免命令来源漂移导致误判
 
 后续需要新增：
 
@@ -568,6 +572,19 @@ npm run build
 
 - 明确区分开发态和正式态
 - 正式态只验证构建产物与 API 联调
+
+### 10.5 Node 命令来源漂移风险
+
+风险：
+
+- 一台机器同时存在多套 Node 路径时，不同 shell 可能命中不同 `node/npm`
+- 仅凭一次 `npm` 失败易误判为“npm 未安装”
+
+应对：
+
+- 机器侧收敛为单主用 Node 来源（默认推荐 `C:\Program Files\nodejs\`）
+- 前端构建与启动前固定执行 `preflight_webui_node.ps1`
+- `npm -v` 异常时按 `npm.cmd -v` / `cmd /c npm -v` / `C:\Program Files\nodejs\npm.cmd -v` 顺序复核
 
 ## 11. 回滚策略
 

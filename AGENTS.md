@@ -7,6 +7,8 @@
 - `Python`
 - `Playwright`
 - `PostgreSQL`
+- `Node.js / npm`
+- `React + Vite`（`webui`）
 
 主要目录约定：
 - `automation/config`
@@ -17,6 +19,8 @@
   - PostgreSQL 读写入口与字段映射
 - `automation/flows`
   - 页面采集流程
+- `webui`
+  - 前端页面与工作台交互
 - `方案计划文档`
   - 需求、方案、字段口径、发布步骤等文档
 
@@ -321,3 +325,18 @@ db:
 ### 9.4 CI 版本一致性
 - 涉及 Python 的 workflow 应与本地统一口径保持一致（默认 `3.12.x`）
 - 如需新增多版本矩阵，必须在方案文档中明确“兼容性验证目的”，不得无说明引入版本分叉
+
+### 9.5 Node 来源与 PATH 统一原则
+- 本机 Node 建议仅保留一个主用来源，默认推荐 `C:\Program Files\nodejs\`
+- 若使用 `CLAWCHECK_NODE_DIR`，不应同时在 PATH 前序保留另一套 Node 路径，避免 `node/npm` 来源漂移
+- 修改 Node 安装、PATH 或环境变量后，必须重启终端与当前 Codex 会话再执行构建/启动
+
+### 9.6 WebUI 前置检查口径
+- 前端构建与开发启动前，统一先执行 `automation/scripts/preflight_webui_node.ps1`
+- preflight 固定检查链路：`where node`、`where npm`、`node -v`、`npm -v`
+- preflight 如提示多 Node 源（multiple node/npm locations），应先完成单来源收敛，再进入常规开发流
+
+### 9.7 npm 可用性判定边界
+- 不允许仅凭一次 `npm` 执行失败就下“缺少 npm”结论
+- 判定顺序至少包含：PowerShell `npm -v`、`npm.cmd -v`、`cmd /c npm -v`
+- `npm -v` 失败时，优先回退 `C:\Program Files\nodejs\npm.cmd` 再判定

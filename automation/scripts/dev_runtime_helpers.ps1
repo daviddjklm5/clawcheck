@@ -176,6 +176,61 @@ function Push-NodeEnvironment {
     return $State
 }
 
+function Invoke-WebuiNodePreflight {
+    param(
+        [Parameter(Mandatory = $true)]
+        [psobject]$NodeResolution
+    )
+
+    Write-Host "[preflight] where node"
+    $NodeCandidates = @(& where.exe node)
+    if ($LASTEXITCODE -ne 0) {
+        throw "Node preflight failed: where node"
+    }
+    $NodeCandidates | ForEach-Object { Write-Host $_ }
+    if ($NodeCandidates.Count -gt 1) {
+        Write-Warning "Multiple node executables detected. Keep a single primary Node source in PATH to avoid shell mismatch."
+    }
+
+    Write-Host "[preflight] where npm"
+    $NpmCandidates = @(& where.exe npm)
+    if ($LASTEXITCODE -ne 0) {
+        throw "Node preflight failed: where npm"
+    }
+    $NpmCandidates | ForEach-Object { Write-Host $_ }
+    $NpmCandidateDirs = @($NpmCandidates | ForEach-Object { Split-Path -Parent $_ } | Sort-Object -Unique)
+    if ($NpmCandidateDirs.Count -gt 1) {
+        Write-Warning "Multiple npm locations detected. Keep a single primary Node source in PATH to avoid command drift."
+    }
+
+    Write-Host "[preflight] node -v"
+    if (Test-Path $NodeResolution.NodeExe) {
+        & $NodeResolution.NodeExe -v
+    }
+    else {
+        & node -v
+    }
+    if ($LASTEXITCODE -ne 0) {
+        throw "Node preflight failed: node -v"
+    }
+
+    Write-Host "[preflight] npm -v"
+    & $NodeResolution.NpmCommand -v
+    if ($LASTEXITCODE -ne 0) {
+        if (Test-Path "C:\Program Files\nodejs\npm.cmd") {
+            Write-Host "[preflight] npm -v fallback C:\\Program Files\\nodejs\\npm.cmd"
+            & "C:\Program Files\nodejs\npm.cmd" -v
+        }
+        else {
+            Write-Host "[preflight] npm -v fallback cmd /c npm -v"
+            & cmd.exe /d /c npm -v
+        }
+    }
+    if ($LASTEXITCODE -ne 0) {
+        throw "Node preflight failed: npm -v"
+    }
+}
+
 function Pop-NodeEnvironment {
     param(
         [Parameter(Mandatory = $true)]

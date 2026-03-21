@@ -32,6 +32,8 @@ $NodeEnvState = Push-NodeEnvironment -NodeResolution $NodeResolution
 
 Push-Location $WebuiDir
 try {
+    Invoke-WebuiNodePreflight -NodeResolution $NodeResolution
+
     if ($Install -or -not (Test-Path (Join-Path $WebuiDir "node_modules"))) {
         & $NodeResolution.NpmCommand ci
         if ($LASTEXITCODE -ne 0) {
