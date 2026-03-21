@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from automation.db.postgres import PostgresPermissionCatalogStore
 from automation.utils.config_loader import DatabaseSettings

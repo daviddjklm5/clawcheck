@@ -1118,7 +1118,7 @@ def main() -> int:
 
                     downloaded_file = roster_result.get("downloaded_file")
                     if downloaded_file:
-                        roster_import_result = import_roster_file(
+                        import_roster_file(
                             file_path=Path(str(downloaded_file)),
                             fallback_query_date=roster_result.get("query_summary", {}).get("query_date"),
                         )
@@ -1171,7 +1171,7 @@ def main() -> int:
 
                     downloaded_file = orglist_result.get("downloaded_file")
                     if downloaded_file:
-                        orglist_import_result = import_orglist_file(
+                        import_orglist_file(
                             file_path=Path(str(downloaded_file)),
                             source_root_org=str(orglist_result.get("root_org_name") or "万物云"),
                             include_all_children=bool(orglist_result.get("include_all_children", True)),

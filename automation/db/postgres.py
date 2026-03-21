@@ -469,7 +469,7 @@ class _PostgresStoreBase:
             key=lambda row: (
                 row["document_no"] or "",
                 0 if cls._physical_level_to_int(row["physical_level"]) is not None else 1,
-                cls._physical_level_to_int(row["physical_level"]) or 0,
+                -(cls._physical_level_to_int(row["physical_level"]) or 0),
                 0 if cls._strip_text(row["org_code"]) is not None else 1,
                 cls._strip_text(row["org_code"]) or "",
                 cls._strip_text(row["organization_name"]) or "",
@@ -2531,12 +2531,11 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
         self,
         summary_rows: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
-        pending_count = len(summary_rows)
-        pending_assessment_count = sum(1 for row in summary_rows if not bool(row.get("has_assessment")))
-        assessed_count = sum(1 for row in summary_rows if bool(row.get("has_assessment")))
+        pending_count = sum(1 for row in summary_rows if (row.get("todo_process_status") or "待处理") == "待处理")
+        processed_count = sum(1 for row in summary_rows if (row.get("todo_process_status") or "待处理") == "已处理")
         reject_count = sum(1 for row in summary_rows if row["summary_conclusion"] == "拒绝")
         manual_review_count = sum(1 for row in summary_rows if row["summary_conclusion"] == "人工干预")
-        assessed_rows = [row for row in summary_rows if bool(row.get("has_assessment"))]
+        assessed_rows = [row for row in summary_rows if self._strip_text(row.get("assessment_batch_no")) is not None]
         latest_row = (
             max(
                 assessed_rows,
@@ -2560,16 +2559,10 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                 "tone": "warning" if pending_count else "info",
             },
             {
-                "label": "待评估单据",
-                "value": str(pending_assessment_count),
-                "hint": "已采集但尚未产出任何评估结果，当前仍可进入处理工作台查看详情。",
-                "tone": "warning" if pending_assessment_count else "success",
-            },
-            {
-                "label": "已评估单据",
-                "value": str(assessed_count),
-                "hint": "当前已经产出最新评估结果的待处理单据数。",
-                "tone": "success" if assessed_count else "default",
+                "label": "已处理单据",
+                "value": str(processed_count),
+                "hint": "最近一次待办同步结果已标记为“已处理”的单据数。",
+                "tone": "success" if processed_count else "default",
             },
             {
                 "label": "拒绝",
@@ -2635,20 +2628,54 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
         self.ensure_table()
         with self.connect() as connection:
             with connection.cursor() as cursor:
-                summary_rows = self._fetch_process_workbench_rows(cursor)
+                summary_rows = self._fetch_latest_process_summary_rows(cursor)
                 if not summary_rows:
                     return self._empty_process_workbench()
+                applicant_profiles_by_employee_no = self._fetch_person_attributes_map(
+                    cursor,
+                    [row.get("employee_no") for row in summary_rows],
+                )
+                applicant_org_attributes_by_org_code = self._fetch_org_attributes_map(
+                    cursor,
+                    [
+                        self._strip_text(profile.get("department_id")) or ""
+                        for profile in applicant_profiles_by_employee_no.values()
+                    ],
+                )
+
+        enriched_summary_rows = []
+        for row in summary_rows:
+            applicant_profile = applicant_profiles_by_employee_no.get(row.get("employee_no") or "", {})
+            applicant_org_attributes = applicant_org_attributes_by_org_code.get(
+                self._strip_text(applicant_profile.get("department_id")) or "",
+                {},
+            )
+            enriched_summary_rows.append(
+                {
+                    **row,
+                    "applicant_name": row.get("applicant_name") or applicant_profile.get("employee_name"),
+                    "applicant_position_name": row.get("applicant_position_name") or applicant_profile.get("position_name"),
+                    "level1_function_name": row.get("level1_function_name") or applicant_profile.get("level1_function_name"),
+                    "applicant_org_path_name": row.get("applicant_org_path_name") or applicant_profile.get("org_path_name"),
+                    "applicant_org_unit_name": row.get("applicant_org_unit_name")
+                    or applicant_org_attributes.get("org_unit_name"),
+                    "applicant_war_zone": row.get("applicant_war_zone") or applicant_org_attributes.get("war_zone"),
+                    "applicant_process_level_category_display": row.get("applicant_process_level_category_display")
+                    or row.get("applicant_process_level_category")
+                    or applicant_org_attributes.get("process_level_category"),
+                }
+            )
 
         return {
-            "stats": self._build_process_workbench_stats(summary_rows),
-            "documents": self._build_process_document_rows(summary_rows),
+            "stats": self._build_process_workbench_stats(enriched_summary_rows),
+            "documents": self._build_process_document_rows(enriched_summary_rows),
         }
 
     def fetch_process_workbench_document_nos(self) -> list[str]:
         self.ensure_table()
         with self.connect() as connection:
             with connection.cursor() as cursor:
-                summary_rows = self._fetch_process_workbench_rows(cursor)
+                summary_rows = self._fetch_latest_process_summary_rows(cursor)
         return [
             row["document_no"]
             for row in summary_rows
@@ -2696,7 +2723,7 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
             with connection.cursor() as cursor:
                 batch_no = self._strip_text(assessment_batch_no)
                 if batch_no is None:
-                    summary_rows = self._fetch_process_workbench_rows(
+                    summary_rows = self._fetch_latest_process_summary_rows(
                         cursor,
                         document_no=normalized_document_no,
                     )
@@ -2730,6 +2757,16 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
                 )
                 org_scope_rows = self._build_org_scope_summary_rows(
                     self._fetch_process_org_scope_display_rows(cursor, [normalized_document_no])
+                )
+                org_scope_rows = sorted(
+                    org_scope_rows,
+                    key=lambda row: (
+                        0 if self._physical_level_to_int(row.get("physical_level")) is not None else 1,
+                        self._physical_level_to_int(row.get("physical_level")) or 0,
+                        0 if self._strip_text(row.get("org_code")) is not None else 1,
+                        self._strip_text(row.get("org_code")) or "",
+                        self._strip_text(row.get("organization_name")) or "",
+                    ),
                 )
                 if batch_no is None:
                     low_score_rows = []
