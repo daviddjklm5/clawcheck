@@ -354,6 +354,12 @@ powershell.exe -ExecutionPolicy Bypass -File .\automation\scripts\register_api_s
 .\.venv-win\Scripts\python.exe -m pytest -q
 ```
 
+编码检查：
+
+```powershell
+.\.venv-win\Scripts\python.exe .\automation\scripts\check_text_encoding.py
+```
+
 仅运行本轮新增的基础测试：
 
 ```powershell
