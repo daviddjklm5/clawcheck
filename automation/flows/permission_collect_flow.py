@@ -315,6 +315,8 @@ class PermissionCollectFlow:
                     headers[idx]: normalized_row[idx] if idx < len(normalized_row) else ""
                     for idx in range(len(headers))
                 }
+                if self._is_empty_detail_row(mapped):
+                    continue
                 line_no = (mapped.get("#") or "").strip()
                 row_key = line_no or "|".join(normalized_row)
                 if row_key:
@@ -1429,6 +1431,20 @@ class PermissionCollectFlow:
             line_no = 10**9
         fallback = "|".join(normalized_row)
         return (line_no, fallback)
+
+    @staticmethod
+    def _is_empty_detail_row(mapped: dict[str, str]) -> bool:
+        # Virtualized grids can render a trailing placeholder row that only keeps
+        # the org-detail link text but has no real permission detail content.
+        business_fields = (
+            (mapped.get("#") or "").strip(),
+            (mapped.get("申请类型") or "").strip(),
+            (mapped.get("角色名称") or "").strip(),
+            (mapped.get("角色编码") or "").strip(),
+            (mapped.get("角色描述") or "").strip(),
+            (mapped.get("参保单位") or "").strip(),
+        )
+        return not any(business_fields)
 
     @staticmethod
     def _extract_detail_count(detail_text: str) -> int | None:

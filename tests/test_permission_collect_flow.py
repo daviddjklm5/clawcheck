@@ -251,6 +251,33 @@ class PermissionCollectFlowTest(unittest.TestCase):
 
         self.assertEqual([row[0] for row in rows], ["1", "2", "3"])
 
+    def test_extract_all_detail_grid_rows_skips_blank_virtual_tail_row(self) -> None:
+        detail_grid = {
+            "headers": ["#", "鐢宠绫诲瀷", "瑙掕壊鍚嶇О", "瑙掕壊缂栫爜", "瑙掕壊鎻忚堪", "鍙備繚鍗曚綅", "琛屾斂缁勭粐璇︽儏"],
+            "rows": [],
+            "selector": "#entryentity",
+        }
+        snapshots = [
+            {
+                "rows": [
+                    ["1", "鏂板瑙掕壊", "EP鏌ョ湅", "EP002", "", "", "鏌ョ湅璇︽儏(1)"],
+                    ["", "", "", "", "", "", "鏌ョ湅璇︽儏(1)"],
+                ],
+                "scrollTop": 0,
+                "scrollHeight": 800,
+                "clientHeight": 300,
+            },
+            None,
+        ]
+
+        with (
+            patch.object(self.flow, "_get_grid_virtual_snapshot", side_effect=snapshots),
+            patch.object(self.flow, "_set_grid_vertical_position"),
+        ):
+            rows = self.flow._extract_all_detail_grid_rows(detail_grid)
+
+        self.assertEqual(rows, [["1", "鏂板瑙掕壊", "EP鏌ョ湅", "EP002", "", "", "鏌ョ湅璇︽儏(1)"]])
+
     def test_parse_approval_record_cards_preserves_multi_round_records(self) -> None:
         records = [
             {
