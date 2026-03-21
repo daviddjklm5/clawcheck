@@ -13,12 +13,16 @@ automation/logs/*
 automation/backups/*
 automation/screenshots/*
 automation/state/*
-automation/downloads/*
+automation/downloads/
+automation/runtime/*
 automation/config/credentials.local.yaml
 automation/config/credentials.prod.local.yaml
 automation/config/windows_task_daemon.local.json
 webui/node_modules/
 webui/dist/
+webui/dev.log
+webui/dev.err.log
+webui/dev.pid
 *.tsbuildinfo
 
 # Keep folder structure
@@ -27,3 +31,4 @@ automation/backups/.gitkeep
 automation/screenshots/.gitkeep
 automation/state/.gitkeep
 automation/downloads/.gitkeep
+!automation/runtime/.gitkeep
