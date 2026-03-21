@@ -28,6 +28,7 @@ constants:
     - "B1类-涉薪"
     - "B2类-涉档案绩效"
     - "C类-常规"
+    - "D类-普通"
 
   s1_allowed_process_categories:
     - "BG人行中心与学社"

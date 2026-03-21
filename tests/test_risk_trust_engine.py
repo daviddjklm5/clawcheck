@@ -364,6 +364,134 @@ class RiskTrustEvaluatorTest(unittest.TestCase):
         self.assertEqual(target_org_detail["score"], 2.0)
         self.assertEqual(summary_rows[0]["final_score"], 2.0)
 
+    def test_d_permission_is_skipped_for_hr_staff(self) -> None:
+        bundle = {
+            "basic_info": {"document_no": "RA-10-D", "employee_no": "001"},
+            "applicant_person_attributes": {"hr_type": "H1"},
+            "applicant_org_attributes": {"process_level_category": "属地组织", "org_unit_name": "组织A"},
+            "approval_records": [
+                {
+                    "node_name": "权限申请提交",
+                    "approver_employee_no": "001",
+                    "approval_action": "提交",
+                    "approval_time": "2026-03-19 10:00:00",
+                    "approver_org_attributes": {"process_level_category": "属地组织"},
+                },
+                {
+                    "node_name": "战区权限对接人",
+                    "approver_employee_no": "008",
+                    "approval_action": "同意",
+                    "approval_time": "2026-03-19 11:00:00",
+                    "approver_org_attributes": {"process_level_category": "战区人行部门"},
+                },
+            ],
+            "permission_details": [
+                {
+                    "document_no": "RA-10-D",
+                    "role_code": "D200",
+                    "role_name": "普通权限",
+                    "catalog_matched": True,
+                    "permission_level": "D类-普通",
+                    "skip_org_scope_check": True,
+                    "targets": [{"org_code": None, "org_auth_level": None, "org_unit_name": None}],
+                }
+            ],
+        }
+
+        summary_rows, detail_rows = self.evaluator.evaluate_documents([bundle], assessment_batch_no="audit_batch_10_d")
+
+        permission_detail = next(row for row in detail_rows if row["dimension_name"] == "申请的权限")
+        self.assertEqual(permission_detail["rule_id"], "PERMISSION_B_AND_BELOW_SKIPPED")
+        self.assertEqual(permission_detail["score"], 2.5)
+        self.assertEqual(summary_rows[0]["final_score"], 2.5)
+
+    def test_non_hr_or_unknown_applying_d_permission_hits_special_rule(self) -> None:
+        bundle = {
+            "basic_info": {"document_no": "RA-10-D-NON-HR", "employee_no": "001"},
+            "applicant_person_attributes": {"hr_type": "HY"},
+            "applicant_org_attributes": {"process_level_category": "人事远程交付中心", "org_unit_name": "组织A"},
+            "approval_records": [
+                {
+                    "node_name": "权限申请提交",
+                    "approver_employee_no": "001",
+                    "approval_action": "提交",
+                    "approval_time": "2026-03-19 10:00:00",
+                    "approver_org_attributes": {"process_level_category": "人事远程交付中心"},
+                },
+                {
+                    "node_name": "部门负责人",
+                    "approver_employee_no": "008",
+                    "approval_action": "同意",
+                    "approval_time": "2026-03-19 11:00:00",
+                    "approver_org_attributes": {"process_level_category": "万物云本部"},
+                },
+            ],
+            "permission_details": [
+                {
+                    "document_no": "RA-10-D-NON-HR",
+                    "role_code": "D201",
+                    "role_name": "普通权限",
+                    "catalog_matched": True,
+                    "permission_level": "D类-普通",
+                    "skip_org_scope_check": True,
+                    "targets": [{"org_code": None, "org_auth_level": None, "org_unit_name": None}],
+                }
+            ],
+        }
+
+        summary_rows, detail_rows = self.evaluator.evaluate_documents(
+            [bundle], assessment_batch_no="audit_batch_10_d_non_hr"
+        )
+
+        permission_detail = next(row for row in detail_rows if row["dimension_name"] == "申请的权限")
+        self.assertEqual(permission_detail["rule_id"], "PERMISSION_D_NON_HR_OR_UNKNOWN")
+        self.assertEqual(permission_detail["score"], 2.0)
+        self.assertEqual(summary_rows[0]["final_score"], 1.5)
+
+    def test_missing_hr_type_score_is_1_0(self) -> None:
+        bundle = {
+            "basic_info": {"document_no": "RA-MISSING-HR-TYPE", "employee_no": "001"},
+            "applicant_person_attributes": {},
+            "applicant_org_attributes": {"process_level_category": "人事远程交付中心", "org_unit_name": "组织A"},
+            "approval_records": [
+                {
+                    "node_name": "权限申请提交",
+                    "approver_employee_no": "001",
+                    "approval_action": "提交",
+                    "approval_time": "2026-03-19 10:00:00",
+                    "approver_org_attributes": {"process_level_category": "人事远程交付中心"},
+                },
+                {
+                    "node_name": "部门负责人",
+                    "approver_employee_no": "008",
+                    "approval_action": "同意",
+                    "approval_time": "2026-03-19 11:00:00",
+                    "approver_org_attributes": {"process_level_category": "万物云本部"},
+                },
+            ],
+            "permission_details": [
+                {
+                    "document_no": "RA-MISSING-HR-TYPE",
+                    "role_code": "C901",
+                    "role_name": "常规权限",
+                    "catalog_matched": True,
+                    "permission_level": "C类-常规",
+                    "skip_org_scope_check": True,
+                    "targets": [{"org_code": None, "org_auth_level": None, "org_unit_name": None}],
+                }
+            ],
+        }
+
+        summary_rows, detail_rows = self.evaluator.evaluate_documents(
+            [bundle], assessment_batch_no="audit_batch_missing_hr_type"
+        )
+
+        applicant_detail = next(row for row in detail_rows if row["dimension_name"] == "申请人的角色判断")
+        self.assertEqual(applicant_detail["rule_id"], "APPLICANT_HR_TYPE_MISSING")
+        self.assertEqual(applicant_detail["score"], 1.0)
+        self.assertEqual(summary_rows[0]["final_score"], 1.0)
+        self.assertEqual(summary_rows[0]["summary_conclusion"], "人工干预")
+
     def test_cross_org_rule_has_priority_over_l4_skip_when_cross_unit(self) -> None:
         bundle = {
             "basic_info": {"document_no": "RA-11", "employee_no": "001"},
