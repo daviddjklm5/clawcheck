@@ -45,7 +45,7 @@ class ProcessWorkbenchLatestSnapshotTest(unittest.TestCase):
     def _fake_connect(self):
         yield self.connection
 
-    def test_fetch_process_workbench_uses_latest_rows_per_document(self) -> None:
+    def test_fetch_process_workbench_uses_workbench_rows_per_document(self) -> None:
         latest_rows = [
             {
                 "document_no": "RA-TEST-001",
@@ -63,6 +63,9 @@ class ProcessWorkbenchLatestSnapshotTest(unittest.TestCase):
                 "assessed_at": datetime(2026, 3, 16, 12, 19, 15),
                 "assessment_batch_no": "audit_20260316_121915",
                 "assessment_version": "2026-03-15",
+                "has_assessment": True,
+                "workbench_status": "成功",
+                "workbench_status_hint": "已生成最新评估结果，可直接进入审批。",
             },
             {
                 "document_no": "RA-TEST-002",
@@ -80,6 +83,9 @@ class ProcessWorkbenchLatestSnapshotTest(unittest.TestCase):
                 "assessed_at": datetime(2026, 3, 15, 11, 24, 28),
                 "assessment_batch_no": "audit_20260315_112428",
                 "assessment_version": "2026-03-15",
+                "has_assessment": True,
+                "workbench_status": "成功",
+                "workbench_status_hint": "已生成最新评估结果，可直接进入审批。",
             },
         ]
         person_attributes = {
@@ -114,7 +120,7 @@ class ProcessWorkbenchLatestSnapshotTest(unittest.TestCase):
         with (
             patch.object(self.store, "ensure_table"),
             patch.object(self.store, "connect", self._fake_connect),
-            patch.object(self.store, "_fetch_latest_process_summary_rows", return_value=latest_rows) as mocked_fetch_latest,
+            patch.object(self.store, "_fetch_process_workbench_rows", return_value=latest_rows) as mocked_fetch_workbench,
             patch.object(self.store, "_fetch_person_attributes_map", return_value=person_attributes),
             patch.object(self.store, "_fetch_org_attributes_map", return_value=org_attributes),
             patch.object(
@@ -125,7 +131,7 @@ class ProcessWorkbenchLatestSnapshotTest(unittest.TestCase):
         ):
             result = self.store.fetch_process_workbench()
 
-        mocked_fetch_latest.assert_called_once_with(self.cursor)
+        mocked_fetch_workbench.assert_called_once_with(self.cursor)
         self.assertEqual(result["stats"][0]["value"], "1")
         self.assertEqual(result["stats"][1]["value"], "1")
         self.assertEqual(result["stats"][2]["value"], "1")
@@ -139,10 +145,65 @@ class ProcessWorkbenchLatestSnapshotTest(unittest.TestCase):
         self.assertEqual(result["documents"][0]["processLevelCategory"], "业务单元本部")
         self.assertEqual(result["documents"][0]["positionName"], "人力资源经理")
         self.assertEqual(result["documents"][0]["level1FunctionName"], "人力资源")
+        self.assertTrue(result["documents"][0]["hasAssessment"])
+        self.assertEqual(result["documents"][0]["workbenchStatus"], "成功")
         self.assertEqual(
             result["documents"][0]["orgPathName"],
             "万物云_万物梁行_华东区域公司_人力资源与行政服务中心",
         )
+
+    def test_build_process_document_rows_derives_assessment_fields_when_query_fields_missing(self) -> None:
+        rows = self.store._build_process_document_rows(
+            [
+                {
+                    "document_no": "RA-TEST-003",
+                    "applicant_name": "王五",
+                    "employee_no": "0003",
+                    "permission_target": "王五",
+                    "department_name": "财务部",
+                    "document_status": "已提交",
+                    "todo_process_status": "待处理",
+                    "todo_status_updated_at": None,
+                    "applicant_org_unit_name": "万物梁行",
+                    "applicant_war_zone": "华中战区",
+                    "applicant_process_level_category_display": "属地组织",
+                    "applicant_position_name": "财务经理",
+                    "level1_function_name": "财务",
+                    "applicant_org_path_name": "万物云_万物梁行_财务部",
+                    "final_score": 1.0,
+                    "summary_conclusion": "人工干预",
+                    "suggested_action": "manual_review",
+                    "low_score_detail_count": 1,
+                    "assessed_at": datetime(2026, 3, 20, 10, 30, 0),
+                    "assessment_batch_no": "audit_20260320_103000",
+                }
+            ]
+        )
+
+        self.assertEqual(len(rows), 1)
+        self.assertTrue(rows[0]["hasAssessment"])
+        self.assertEqual(rows[0]["workbenchStatus"], "成功")
+        self.assertEqual(rows[0]["summaryConclusionLabel"], "加强审核")
+        self.assertEqual(rows[0]["suggestedActionLabel"], "建议人工复核")
+
+    def test_fetch_process_workbench_document_nos_uses_workbench_rows(self) -> None:
+        with (
+            patch.object(self.store, "ensure_table"),
+            patch.object(self.store, "connect", self._fake_connect),
+            patch.object(
+                self.store,
+                "_fetch_process_workbench_rows",
+                return_value=[
+                    {"document_no": "RA-TEST-001"},
+                    {"document_no": "RA-TEST-002"},
+                    {"document_no": None},
+                ],
+            ) as mocked_fetch_workbench,
+        ):
+            result = self.store.fetch_process_workbench_document_nos()
+
+        mocked_fetch_workbench.assert_called_once_with(self.cursor)
+        self.assertEqual(result, ["RA-TEST-001", "RA-TEST-002"])
 
     def test_fetch_process_document_detail_defaults_to_latest_result_for_document(self) -> None:
         summary_row = {

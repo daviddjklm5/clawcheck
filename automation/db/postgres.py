@@ -2588,47 +2588,56 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
         self,
         summary_rows: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
-        return [
-            {
-                "id": row["document_no"],
-                "documentNo": row["document_no"],
-                "applicantName": row["applicant_name"] or "-",
-                "applicantNo": row["employee_no"] or "-",
-                "permissionTarget": row["permission_target"] or "-",
-                "department": row["department_name"] or "-",
-                "documentStatus": row["document_status"] or "-",
-                "todoProcessStatus": row.get("todo_process_status") or "待处理",
-                "todoStatusUpdatedAt": self._format_datetime_value(row.get("todo_status_updated_at")),
-                "orgUnitName": row.get("applicant_org_unit_name") or "-",
-                "warZone": row.get("applicant_war_zone") or "-",
-                "processLevelCategory": row.get("applicant_process_level_category_display") or "-",
-                "positionName": row.get("applicant_position_name") or "-",
-                "level1FunctionName": row.get("level1_function_name") or "-",
-                "orgPathName": row.get("applicant_org_path_name") or "-",
-                "workbenchStatus": row.get("workbench_status") or "待评估",
-                "workbenchStatusHint": row.get("workbench_status_hint") or "",
-                "hasAssessment": bool(row.get("has_assessment")),
-                "finalScore": row["final_score"],
-                "summaryConclusion": row["summary_conclusion"] or "",
-                "summaryConclusionLabel": (
-                    display_summary_conclusion(row["summary_conclusion"]) if row.get("has_assessment") else "-"
-                ),
-                "suggestedAction": row["suggested_action"] or "",
-                "suggestedActionLabel": (
-                    self._suggested_action_label(row["suggested_action"]) if row.get("has_assessment") else "-"
-                ),
-                "lowScoreDetailCount": int(row["low_score_detail_count"] or 0),
-                "assessedAt": self._format_datetime_value(row["assessed_at"]),
-                "latestBatchNo": row["assessment_batch_no"] or "-",
-            }
-            for row in summary_rows
-        ]
+        document_rows: list[dict[str, Any]] = []
+        for row in summary_rows:
+            has_assessment = bool(row.get("has_assessment"))
+            if not has_assessment and self._strip_text(row.get("assessment_batch_no")) is not None:
+                has_assessment = True
+            workbench_status = row.get("workbench_status") or self._workbench_status(has_assessment)
+            workbench_status_hint = row.get("workbench_status_hint") or self._workbench_status_hint(has_assessment)
+            summary_conclusion = row.get("summary_conclusion") or ""
+            suggested_action = row.get("suggested_action") or ""
+            document_rows.append(
+                {
+                    "id": row["document_no"],
+                    "documentNo": row["document_no"],
+                    "applicantName": row["applicant_name"] or "-",
+                    "applicantNo": row["employee_no"] or "-",
+                    "permissionTarget": row["permission_target"] or "-",
+                    "department": row["department_name"] or "-",
+                    "documentStatus": row["document_status"] or "-",
+                    "todoProcessStatus": row.get("todo_process_status") or "待处理",
+                    "todoStatusUpdatedAt": self._format_datetime_value(row.get("todo_status_updated_at")),
+                    "orgUnitName": row.get("applicant_org_unit_name") or "-",
+                    "warZone": row.get("applicant_war_zone") or "-",
+                    "processLevelCategory": row.get("applicant_process_level_category_display") or "-",
+                    "positionName": row.get("applicant_position_name") or "-",
+                    "level1FunctionName": row.get("level1_function_name") or "-",
+                    "orgPathName": row.get("applicant_org_path_name") or "-",
+                    "workbenchStatus": workbench_status,
+                    "workbenchStatusHint": workbench_status_hint,
+                    "hasAssessment": has_assessment,
+                    "finalScore": row["final_score"],
+                    "summaryConclusion": summary_conclusion,
+                    "summaryConclusionLabel": (
+                        display_summary_conclusion(summary_conclusion) if has_assessment else "-"
+                    ),
+                    "suggestedAction": suggested_action,
+                    "suggestedActionLabel": (
+                        self._suggested_action_label(suggested_action) if has_assessment else "-"
+                    ),
+                    "lowScoreDetailCount": int(row["low_score_detail_count"] or 0),
+                    "assessedAt": self._format_datetime_value(row["assessed_at"]),
+                    "latestBatchNo": row["assessment_batch_no"] or "-",
+                }
+            )
+        return document_rows
 
     def fetch_process_workbench(self) -> dict[str, Any]:
         self.ensure_table()
         with self.connect() as connection:
             with connection.cursor() as cursor:
-                summary_rows = self._fetch_latest_process_summary_rows(cursor)
+                summary_rows = self._fetch_process_workbench_rows(cursor)
                 if not summary_rows:
                     return self._empty_process_workbench()
                 applicant_profiles_by_employee_no = self._fetch_person_attributes_map(
@@ -2675,7 +2684,7 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
         self.ensure_table()
         with self.connect() as connection:
             with connection.cursor() as cursor:
-                summary_rows = self._fetch_latest_process_summary_rows(cursor)
+                summary_rows = self._fetch_process_workbench_rows(cursor)
         return [
             row["document_no"]
             for row in summary_rows
@@ -3686,6 +3695,7 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
         self,
         cursor,
         document_no: str | None = None,
+        todo_process_status: str | None = None,
     ) -> list[dict[str, Any]]:
         sql = f"""
             WITH latest_assessment AS (
@@ -3750,9 +3760,15 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
             LEFT JOIN "组织属性查询" AS applicant_org
                 ON applicant_org.{self._quote_identifier(ORG_ATTRIBUTE_COLUMNS["org_code"])} =
                    person.{self._quote_identifier(PERSON_ATTRIBUTES_COLUMNS["department_id"])}
-            WHERE basic.{self._quote_identifier(BASIC_INFO_COLUMNS["todo_process_status"])} = %s
+            WHERE 1 = 1
         """
-        params: list[Any] = ["待处理"]
+        params: list[Any] = []
+        normalized_todo_process_status = self._strip_text(todo_process_status)
+        if normalized_todo_process_status is not None:
+            sql += (
+                f" AND basic.{self._quote_identifier(BASIC_INFO_COLUMNS['todo_process_status'])} = %s"
+            )
+            params.append(normalized_todo_process_status)
         if document_no is not None:
             sql += (
                 f" AND basic.{self._quote_identifier(BASIC_INFO_COLUMNS['document_no'])} = %s"
