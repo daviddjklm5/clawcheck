@@ -1,0 +1,6 @@
+﻿组织授权级别命中规则,数量
+process_level_category:业务单元本部_and_physical_level:lte_3,106
+org_unit_name:startswith_（作废）_and_physical_level:eq_2,54
+physical_level:eq_2,23
+process_level_category:蝶发人行部,4
+org_code:l2_specified,2

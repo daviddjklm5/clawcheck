@@ -332,7 +332,7 @@ BEGIN
     END IF;
 
     IF normalized_process_level_category = '业务单元本部'
-       AND physical_level_num <= 4 THEN
+       AND physical_level_num <= 3 THEN
         RETURN '二级授权';
     END IF;
 
@@ -341,7 +341,7 @@ BEGIN
     END IF;
 
     IF normalized_process_level_category = '业务单元本部'
-       AND physical_level_num >= 5 THEN
+       AND physical_level_num >= 4 THEN
         RETURN '三级授权';
     END IF;
 
@@ -431,8 +431,8 @@ BEGIN
     END IF;
 
     IF normalized_process_level_category = '业务单元本部'
-       AND physical_level_num <= 4 THEN
-        RETURN 'process_level_category:业务单元本部_and_physical_level:lte_4';
+       AND physical_level_num <= 3 THEN
+        RETURN 'process_level_category:业务单元本部_and_physical_level:lte_3';
     END IF;
 
     IF normalized_process_level_category = '蝶发人行部' THEN
@@ -440,8 +440,8 @@ BEGIN
     END IF;
 
     IF normalized_process_level_category = '业务单元本部'
-       AND physical_level_num >= 5 THEN
-        RETURN 'process_level_category:业务单元本部_and_physical_level:gte_5';
+       AND physical_level_num >= 4 THEN
+        RETURN 'process_level_category:业务单元本部_and_physical_level:gte_4';
     END IF;
 
     IF physical_level_num = 2 THEN
