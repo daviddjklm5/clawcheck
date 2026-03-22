@@ -55,6 +55,7 @@ class RouterDecision(BaseModel):
     missingInputs: list[str] = Field(default_factory=list)
     clarificationQuestion: str = ""
     reason: str = ""
+    requiresPendingDocumentList: bool = False
     approvalRequest: ApprovalRequest | None = None
 
     @property

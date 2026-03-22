@@ -91,6 +91,13 @@ class ChatProviderConfigTest(unittest.TestCase):
         self.assertTrue(config.workspace_dir.is_absolute())
         self.assertEqual(config.router_model, "gpt-router-override")
         self.assertEqual(config.router_reasoning_effort, "medium")
+        self.assertEqual(config.exec_mode, "oneshot_exec")
+        self.assertEqual(config.global_max_concurrent_runs, 4)
+        self.assertEqual(config.run_queue_size, 200)
+        self.assertEqual(config.session_idle_ttl_seconds, 900)
+        self.assertEqual(config.app_server_base_url, "")
+        self.assertEqual(config.app_server_timeout_seconds, 60)
+        self.assertEqual(config.exec_auto_fallback, True)
 
     def test_load_chat_provider_config_uses_yaml_api_key_when_env_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -109,6 +116,31 @@ class ChatProviderConfigTest(unittest.TestCase):
         self.assertEqual(config.api_key, "yaml-test-key")
         self.assertEqual(config.router_model, "gpt-test")
         self.assertEqual(config.router_reasoning_effort, "low")
+
+    def test_load_chat_provider_config_reads_exec_mode_flags(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            settings_path = Path(tmp_dir) / "settings.yaml"
+            self._build_settings_file(settings_path)
+            settings = load_settings(settings_path)
+            env = {
+                "CLAWCHECK_CHAT_EXEC_MODE": "app_server",
+                "CLAWCHECK_CHAT_GLOBAL_MAX_CONCURRENT_RUNS": "6",
+                "CLAWCHECK_CHAT_RUN_QUEUE_SIZE": "88",
+                "CLAWCHECK_CHAT_SESSION_IDLE_TTL_SECONDS": "1200",
+                "CLAWCHECK_CHAT_APP_SERVER_BASE_URL": "http://127.0.0.1:9000",
+                "CLAWCHECK_CHAT_APP_SERVER_TIMEOUT_SECONDS": "45",
+                "CLAWCHECK_CHAT_EXEC_AUTO_FALLBACK": "false",
+            }
+            with patch.dict(os.environ, env, clear=False):
+                config = load_chat_provider_config(settings)
+
+        self.assertEqual(config.exec_mode, "app_server")
+        self.assertEqual(config.global_max_concurrent_runs, 6)
+        self.assertEqual(config.run_queue_size, 88)
+        self.assertEqual(config.session_idle_ttl_seconds, 1200)
+        self.assertEqual(config.app_server_base_url, "http://127.0.0.1:9000")
+        self.assertEqual(config.app_server_timeout_seconds, 45)
+        self.assertEqual(config.exec_auto_fallback, False)
 
 
 if __name__ == "__main__":

@@ -23,6 +23,27 @@ def test_router_tool_call_accepts_legacy_arguments_payload() -> None:
 
     assert decision.toolCalls[0].arguments == {"documentNo": "RA-1"}
     assert decision.toolCalls[0].argumentsJson == '{"documentNo": "RA-1"}'
+    assert decision.requiresPendingDocumentList is False
+
+
+def test_router_decision_supports_pending_document_list_directive() -> None:
+    decision = RouterDecision.model_validate(
+        {
+            "route": "tool_first",
+            "selectedSkills": ["clawcheck-project"],
+            "selectedReferences": ["process-workbench"],
+            "toolCalls": [{"name": "get_process_workbench", "argumentsJson": "{}"}],
+            "answerMode": "templated",
+            "confidence": 0.98,
+            "missingInputs": [],
+            "clarificationQuestion": "",
+            "reason": "list pending document numbers",
+            "requiresPendingDocumentList": True,
+            "approvalRequest": None,
+        }
+    )
+
+    assert decision.requiresPendingDocumentList is True
 
 
 def test_router_schema_is_strictly_compatible_with_response_format() -> None:

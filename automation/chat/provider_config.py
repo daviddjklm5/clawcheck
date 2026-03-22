@@ -21,6 +21,13 @@ class ChatProviderConfig:
     workspace_dir: Path
     router_model: str = ""
     router_reasoning_effort: str = "low"
+    exec_mode: str = "oneshot_exec"
+    global_max_concurrent_runs: int = 4
+    run_queue_size: int = 200
+    session_idle_ttl_seconds: int = 900
+    app_server_base_url: str = ""
+    app_server_timeout_seconds: int = 120
+    exec_auto_fallback: bool = True
 
 
 def _resolve_workspace_dir(raw_path: str | None) -> Path:
@@ -31,6 +38,29 @@ def _resolve_workspace_dir(raw_path: str | None) -> Path:
     if not path.is_absolute():
         path = REPO_ROOT / path
     return path.resolve()
+
+
+def _env_int(name: str, *, default: int, minimum: int = 1) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return max(default, minimum)
+    try:
+        parsed = int(raw.strip())
+    except ValueError:
+        return max(default, minimum)
+    return max(parsed, minimum)
+
+
+def _env_flag(name: str, *, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    normalized = raw.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return default
 
 
 def load_chat_provider_config(settings: Settings) -> ChatProviderConfig:
@@ -61,6 +91,31 @@ def load_chat_provider_config(settings: Settings) -> ChatProviderConfig:
     )
     if router_reasoning_effort not in {"minimal", "low", "medium", "high"}:
         router_reasoning_effort = "low"
+    exec_mode = os.getenv("CLAWCHECK_CHAT_EXEC_MODE", "oneshot_exec").strip().lower() or "oneshot_exec"
+    if exec_mode not in {"oneshot_exec", "persistent_subprocess", "app_server"}:
+        exec_mode = "oneshot_exec"
+    global_max_concurrent_runs = _env_int(
+        "CLAWCHECK_CHAT_GLOBAL_MAX_CONCURRENT_RUNS",
+        default=4,
+        minimum=1,
+    )
+    run_queue_size = _env_int(
+        "CLAWCHECK_CHAT_RUN_QUEUE_SIZE",
+        default=200,
+        minimum=1,
+    )
+    session_idle_ttl_seconds = _env_int(
+        "CLAWCHECK_CHAT_SESSION_IDLE_TTL_SECONDS",
+        default=900,
+        minimum=60,
+    )
+    app_server_base_url = os.getenv("CLAWCHECK_CHAT_APP_SERVER_BASE_URL", "").strip()
+    app_server_timeout_seconds = _env_int(
+        "CLAWCHECK_CHAT_APP_SERVER_TIMEOUT_SECONDS",
+        default=max(timeout_seconds, 10),
+        minimum=10,
+    )
+    exec_auto_fallback = _env_flag("CLAWCHECK_CHAT_EXEC_AUTO_FALLBACK", default=True)
 
     return ChatProviderConfig(
         provider=provider,
@@ -74,4 +129,11 @@ def load_chat_provider_config(settings: Settings) -> ChatProviderConfig:
         workspace_dir=workspace_dir,
         router_model=router_model,
         router_reasoning_effort=router_reasoning_effort,
+        exec_mode=exec_mode,
+        global_max_concurrent_runs=global_max_concurrent_runs,
+        run_queue_size=run_queue_size,
+        session_idle_ttl_seconds=session_idle_ttl_seconds,
+        app_server_base_url=app_server_base_url,
+        app_server_timeout_seconds=app_server_timeout_seconds,
+        exec_auto_fallback=exec_auto_fallback,
     )

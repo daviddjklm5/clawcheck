@@ -334,6 +334,103 @@ def test_execute_turn_uses_process_workbench_templated_reply_for_pending_count_q
     assert fake_store.messages["a1"]["tokenCount"] is not None
 
 
+def test_execute_turn_returns_all_pending_document_numbers_for_list_query_even_when_pending_not_in_first_ten(
+    tmp_path: Path,
+) -> None:
+    fake_store = _FakeChatStore()
+    fake_store.create_session(
+        session_id="s1",
+        title="Test",
+        workspace_dir=str(Path.cwd()),
+        model_provider="openai_compatible",
+        model_name="gpt-test",
+    )
+    user_message = fake_store.create_message(
+        message_id="u1",
+        session_id="s1",
+        role="user",
+        content="列出全部待处理单据的全部编号，不要只给数量",
+        token_count=1,
+    )
+    assistant_message = fake_store.create_message(
+        message_id="a1",
+        session_id="s1",
+        role="assistant",
+        content="",
+        token_count=0,
+    )
+    documents: list[dict[str, Any]] = []
+    for index in range(10):
+        documents.append(
+            {
+                "documentNo": f"RA-20260301-00010{index}",
+                "todoProcessStatus": "已处理",
+            }
+        )
+    documents.append({"documentNo": "RA-20260320-00020275", "todoProcessStatus": "待处理"})
+    documents.append({"documentNo": "RA-20260319-00020251", "todoProcessStatus": "待处理"})
+    tool_registry = ToolRegistry(
+        {
+            "get_process_workbench": ToolDefinition(
+                name="get_process_workbench",
+                description="test",
+                arguments_model=_EmptyArgs,
+                resolver=lambda _: {"stats": [{"label": "待处理单据", "value": "2"}], "documents": documents},
+                source_of_truth="GET /api/documents/process-workbench",
+            )
+        }
+    )
+    service = ChatService(
+        _build_settings(),
+        store=fake_store,  # type: ignore[arg-type]
+        provider_config=_build_provider_config(),
+        skill_loader=_build_skill_loader(tmp_path),
+        tool_registry=tool_registry,
+    )
+    _attach_active_run(
+        service,
+        session_id="s1",
+        user_message_id=user_message["messageId"],
+        assistant_message_id=assistant_message["messageId"],
+    )
+
+    with (
+        patch(
+            "automation.chat.service.run_router_exec",
+            return_value=RouterExecutionResult(
+                status="succeeded",
+                decision={
+                    "route": "tool_first",
+                    "selectedSkills": ["clawcheck-project"],
+                    "selectedReferences": ["process-workbench", "answer-policy"],
+                    "toolCalls": [{"name": "get_process_workbench", "arguments": {}}],
+                    "answerMode": "templated",
+                    "confidence": 0.96,
+                    "missingInputs": [],
+                    "clarificationQuestion": "",
+                    "reason": "pending list query",
+                    "requiresPendingDocumentList": True,
+                },
+                exit_code=0,
+                raw_output="{}",
+                error_message="",
+            ),
+        ),
+        patch("automation.chat.service.run_codex_exec", side_effect=AssertionError("templated reply should not call main model")),
+    ):
+        service._execute_turn(
+            run_id="run-1",
+            session_id="s1",
+            user_message_id=user_message["messageId"],
+            assistant_message_id=assistant_message["messageId"],
+        )
+
+    content = fake_store.messages["a1"]["content"]
+    assert "RA-20260320-00020275" in content
+    assert "RA-20260319-00020251" in content
+    assert "RA-20260301-000100" not in content
+
+
 def test_execute_turn_returns_clarification_without_tool_execution_when_document_number_missing(tmp_path: Path) -> None:
     fake_store = _FakeChatStore()
     fake_store.create_session(
@@ -561,6 +658,86 @@ def test_execute_turn_falls_back_to_general_chat_when_router_fails(tmp_path: Pat
         )
 
     assert fake_store.messages["a1"]["content"] == "这是 clawcheck 项目的通用介绍。"
+
+
+def test_execute_turn_falls_back_to_general_chat_when_pending_list_directive_is_invalid(tmp_path: Path) -> None:
+    fake_store = _FakeChatStore()
+    fake_store.create_session(
+        session_id="s1",
+        title="Test",
+        workspace_dir=str(Path.cwd()),
+        model_provider="openai_compatible",
+        model_name="gpt-test",
+    )
+    user_message = fake_store.create_message(
+        message_id="u1",
+        session_id="s1",
+        role="user",
+        content="列出全部待处理单据编号",
+        token_count=1,
+    )
+    assistant_message = fake_store.create_message(
+        message_id="a1",
+        session_id="s1",
+        role="assistant",
+        content="",
+        token_count=0,
+    )
+    service = ChatService(
+        _build_settings(),
+        store=fake_store,  # type: ignore[arg-type]
+        provider_config=_build_provider_config(),
+        skill_loader=_build_skill_loader(tmp_path),
+        tool_registry=ToolRegistry({}),
+    )
+    _attach_active_run(
+        service,
+        session_id="s1",
+        user_message_id=user_message["messageId"],
+        assistant_message_id=assistant_message["messageId"],
+    )
+
+    with (
+        patch(
+            "automation.chat.service.run_router_exec",
+            return_value=RouterExecutionResult(
+                status="succeeded",
+                decision={
+                    "route": "direct_answer",
+                    "selectedSkills": ["clawcheck-project"],
+                    "selectedReferences": ["process-workbench", "answer-policy"],
+                    "toolCalls": [],
+                    "answerMode": "model_generated",
+                    "confidence": 0.93,
+                    "missingInputs": [],
+                    "clarificationQuestion": "",
+                    "reason": "invalid pending list directive",
+                    "requiresPendingDocumentList": True,
+                },
+                exit_code=0,
+                raw_output="{}",
+                error_message="",
+            ),
+        ),
+        patch(
+            "automation.chat.service.run_codex_exec",
+            return_value=CodexExecutionResult(
+                status="succeeded",
+                final_text="通用回退已生效。",
+                exit_code=0,
+                output_tail="ok",
+                usage={"output_tokens": 6},
+            ),
+        ),
+    ):
+        service._execute_turn(
+            run_id="run-1",
+            session_id="s1",
+            user_message_id=user_message["messageId"],
+            assistant_message_id=assistant_message["messageId"],
+        )
+
+    assert fake_store.messages["a1"]["content"] == "通用回退已生效。"
 
 
 def test_execute_turn_creates_approval_plan_for_approve_request(tmp_path: Path) -> None:
@@ -1317,3 +1494,52 @@ def test_execute_turn_confirm_command_executes_real_submit_when_allowed(tmp_path
     saved_plan = service._approval_plan_store.get_plan("s1", plan.planId)
     assert saved_plan is not None
     assert saved_plan.status == "submitted"
+
+
+def test_run_model_prompt_app_server_auto_fallback_to_oneshot(tmp_path: Path) -> None:
+    fake_store = _FakeChatStore()
+    provider_config = ChatProviderConfig(
+        provider="openai_compatible",
+        base_url="https://api.example.com/v1",
+        model="gpt-test",
+        timeout_seconds=60,
+        max_output_tokens=1024,
+        api_key_env="CLAWCHECK_AI_API_KEY",
+        api_key="test-key",
+        codex_cli_executable="codex",
+        workspace_dir=Path.cwd(),
+        exec_mode="app_server",
+        app_server_base_url="http://127.0.0.1:9999",
+        app_server_timeout_seconds=30,
+        exec_auto_fallback=True,
+    )
+    service = ChatService(
+        _build_settings(),
+        store=fake_store,  # type: ignore[arg-type]
+        provider_config=provider_config,
+        skill_loader=_build_skill_loader(tmp_path),
+        tool_registry=ToolRegistry({}),
+    )
+
+    with patch.object(service._execution_adapter, "run_answer", side_effect=RuntimeError("app-server down")), patch(
+        "automation.chat.service.run_codex_exec",
+        return_value=CodexExecutionResult(
+            status="succeeded",
+            final_text="fallback answer",
+            exit_code=0,
+            output_tail="fallback ok",
+            usage={"output_tokens": 3},
+        ),
+    ):
+        outcome = service._run_model_prompt(
+            session_id="s1",
+            run_id="run-1",
+            assistant_message_id="a1",
+            prompt="test prompt",
+            workspace_dir=Path.cwd(),
+            cancel_event=threading.Event(),
+        )
+
+    assert outcome.status == "succeeded"
+    assert outcome.assistant_text == "fallback answer"
+    assert any(log["eventType"] == "backend_auto_fallback" for log in fake_store.logs)

@@ -32,9 +32,12 @@ from automation.chat.codex_runner import (
     run_codex_exec,
     run_router_exec,
 )
+from automation.chat.execution_adapter import ModelExecutionAdapter, build_execution_adapter
+from automation.chat.execution_scheduler import ExecutionScheduler
 from automation.chat.provider_config import ChatProviderConfig, load_chat_provider_config
 from automation.chat.router_models import RouterDecision, router_decision_json_schema
 from automation.chat.router_prompt import build_router_prompt
+from automation.chat.run_state_store import RunStateStore
 from automation.chat.skill_loader import LoadedSkillContext, SkillLoader
 from automation.chat.tool_registry import (
     ToolExecutionResult,
@@ -120,6 +123,7 @@ class _SessionRunState:
     cancel_event: threading.Event
     thread: threading.Thread
     status: str
+    backend_mode: str = "oneshot_exec"
 
 
 @dataclass
@@ -166,12 +170,22 @@ class ChatService:
         self._event_condition = threading.Condition()
         self._events_by_session: dict[str, list[dict[str, Any]]] = defaultdict(list)
         self._next_event_seq_by_session: dict[str, int] = defaultdict(lambda: 1)
+        self._execution_adapter: ModelExecutionAdapter = build_execution_adapter(
+            self._provider_config.exec_mode
+        )
+        self._execution_scheduler = ExecutionScheduler(
+            max_concurrent_runs=self._provider_config.global_max_concurrent_runs,
+            queue_size=self._provider_config.run_queue_size,
+        )
+        self._run_state_store = RunStateStore(self._store)
+        self._recover_interrupted_runs_on_boot()
 
     def refresh_settings(self, settings: Settings) -> None:
         self._settings = settings
         self._provider_config = load_chat_provider_config(settings)
         self._store = PostgresChatStore(settings.db)
         self._store.ensure_table()
+        self._run_state_store = RunStateStore(self._store)
         self._router_enabled = _env_flag("CLAWCHECK_CHAT_ROUTER_ENABLED", default=True)
         self._approval_enabled = _env_flag("CLAWCHECK_CHAT_APPROVAL_ENABLED", default=False)
         self._approval_dry_run_only = _env_flag("CLAWCHECK_CHAT_APPROVAL_DRY_RUN_ONLY", default=True)
@@ -180,6 +194,29 @@ class ChatService:
             default=600,
             minimum=60,
         )
+        self._execution_adapter = build_execution_adapter(self._provider_config.exec_mode)
+        with self._run_lock:
+            has_active_runs = bool(self._runs_by_session)
+        if not has_active_runs:
+            self._execution_scheduler = ExecutionScheduler(
+                max_concurrent_runs=self._provider_config.global_max_concurrent_runs,
+                queue_size=self._provider_config.run_queue_size,
+            )
+
+    def _recover_interrupted_runs_on_boot(self) -> None:
+        interrupted_runs = self._run_state_store.mark_inflight_as_interrupted()
+        for record in interrupted_runs:
+            if not record.session_id or not record.run_id:
+                continue
+            self._publish_event(
+                record.session_id,
+                "event",
+                {
+                    "runId": record.run_id,
+                    "eventType": "run_interrupted",
+                    "summary": "上次运行在服务重启前中断，请按需重试。",
+                },
+            )
 
     def _publish_event(self, session_id: str, event_type: str, data: dict[str, Any]) -> dict[str, Any]:
         with self._event_condition:
@@ -293,6 +330,28 @@ class ChatService:
             run_workspace = self._provider_config.workspace_dir
         return run_workspace.resolve()
 
+    def _active_backend_mode(self) -> str:
+        mode = (self._provider_config.exec_mode or "").strip().lower()
+        if mode in {"oneshot_exec", "persistent_subprocess", "app_server"}:
+            return mode
+        return "oneshot_exec"
+
+    def _run_backend_mode(self, *, session_id: str) -> str:
+        with self._run_lock:
+            run_state = self._runs_by_session.get(session_id)
+            if run_state is not None:
+                normalized = (run_state.backend_mode or "").strip().lower()
+                if normalized in {"oneshot_exec", "persistent_subprocess", "app_server"}:
+                    return normalized
+        return self._active_backend_mode()
+
+    def _set_active_run_backend_mode(self, *, session_id: str, backend_mode: str) -> None:
+        with self._run_lock:
+            run_state = self._runs_by_session.get(session_id)
+            if run_state is None:
+                return
+            run_state.backend_mode = backend_mode
+
     def create_session(self, *, title: str = "", workspace_dir: str = "") -> dict[str, Any]:
         session_id = _new_id()
         resolved_workspace_dir = workspace_dir.strip() or str(self._provider_config.workspace_dir)
@@ -373,6 +432,7 @@ class ChatService:
 
         cancel_event = threading.Event()
         run_id = _new_id()
+        backend_mode = self._run_backend_mode(session_id=session_id)
         worker = threading.Thread(
             target=self._execute_turn,
             kwargs={
@@ -391,9 +451,16 @@ class ChatService:
             cancel_event=cancel_event,
             thread=worker,
             status="queued",
+            backend_mode=backend_mode,
         )
         with self._run_lock:
             self._runs_by_session[session_id] = run_state
+        self._run_state_store.upsert(
+            run_id=run_id,
+            session_id=session_id,
+            status="queued",
+            backend_mode=backend_mode,
+        )
 
         self._publish_status(
             session_id=session_id,
@@ -494,9 +561,12 @@ class ChatService:
         result = tool_result.result
         if tool_result.name == "get_process_workbench" and isinstance(result, dict):
             documents = result.get("documents") if isinstance(result.get("documents"), list) else []
+            pending_document_nos = self._extract_pending_document_nos(result)
             return {
                 "stats": result.get("stats", []),
                 "documentCount": len(documents),
+                "pendingDocumentCount": len(pending_document_nos),
+                "pendingDocumentNos": pending_document_nos,
                 "documents": documents[:10],
             }
         if tool_result.name == "get_process_document_detail" and isinstance(result, dict):
@@ -613,6 +683,7 @@ class ChatService:
         assistant_chunks: list[str] = []
         final_result: CodexExecutionResult | None = None
         run_error: str | None = None
+        backend_mode = self._run_backend_mode(session_id=session_id)
         callback = self._build_runner_callback(
             session_id=session_id,
             run_id=run_id,
@@ -621,15 +692,48 @@ class ChatService:
         )
 
         try:
-            final_result = run_codex_exec(
-                config=self._provider_config,
-                prompt=prompt,
-                workspace_dir=workspace_dir,
-                cancel_event=cancel_event,
-                callback=callback,
-            )
+            if backend_mode == "oneshot_exec":
+                final_result = run_codex_exec(
+                    config=self._provider_config,
+                    prompt=prompt,
+                    workspace_dir=workspace_dir,
+                    cancel_event=cancel_event,
+                    callback=callback,
+                )
+            else:
+                final_result = self._execution_adapter.run_answer(
+                    config=self._provider_config,
+                    prompt=prompt,
+                    workspace_dir=workspace_dir,
+                    cancel_event=cancel_event,
+                    callback=callback,
+                )
         except Exception as exc:  # noqa: BLE001
             run_error = str(exc)
+            if (
+                self._provider_config.exec_auto_fallback
+                and backend_mode != "oneshot_exec"
+                and not cancel_event.is_set()
+            ):
+                self._publish_summary_event(
+                    session_id=session_id,
+                    run_id=run_id,
+                    event_type="backend_auto_fallback",
+                    summary=f"执行后端 {backend_mode} 失败，自动降级到 oneshot_exec。原因：{run_error}",
+                    message_id=assistant_message_id,
+                )
+                self._set_active_run_backend_mode(session_id=session_id, backend_mode="oneshot_exec")
+                try:
+                    final_result = run_codex_exec(
+                        config=self._provider_config,
+                        prompt=prompt,
+                        workspace_dir=workspace_dir,
+                        cancel_event=cancel_event,
+                        callback=callback,
+                    )
+                    run_error = None
+                except Exception as fallback_exc:  # noqa: BLE001
+                    run_error = f"{run_error}; fallback failed: {fallback_exc}"
 
         if final_result is None:
             assistant_text = "".join(assistant_chunks).strip() or run_error or "Conversation run failed."
@@ -708,6 +812,48 @@ class ChatService:
                 value = row.get("value")
                 return str(value) if value is not None else None
         return None
+
+    def _extract_pending_document_nos(self, payload: dict[str, Any]) -> list[str]:
+        documents = payload.get("documents")
+        if not isinstance(documents, list):
+            return []
+        pending_document_nos: list[str] = []
+        for row in documents:
+            if not isinstance(row, dict):
+                continue
+            todo_status = str(row.get("todoProcessStatus") or "").strip()
+            if todo_status != "待处理":
+                continue
+            document_no = str(row.get("documentNo") or "").strip()
+            if document_no:
+                pending_document_nos.append(document_no)
+        return pending_document_nos
+
+    def _build_pending_document_list_reply(self, tool_result: ToolExecutionResult) -> str:
+        if not isinstance(tool_result.result, dict):
+            return self.build_templated_reply(tool_results=[tool_result])
+
+        pending_document_nos = self._extract_pending_document_nos(tool_result.result)
+        queried_at = _now_text()
+        stats_pending = self._find_stat_value(tool_result.result, "待处理单据")
+        lines = ["根据处理工作台实时口径，当前“待处理”单据编号如下："]
+        if pending_document_nos:
+            lines.append("")
+            lines.extend(f"{index}. {document_no}" for index, document_no in enumerate(pending_document_nos, start=1))
+        else:
+            lines.append("（当前 documents 列表中未命中 todoProcessStatus=待处理 的单据）")
+
+        if stats_pending is not None and stats_pending != str(len(pending_document_nos)):
+            lines.append("")
+            lines.append(
+                "口径提示："
+                f"stats 显示待处理 {stats_pending} 条，"
+                f"documents 过滤得到 {len(pending_document_nos)} 条；当前按 documents 过滤结果返回编号清单。"
+            )
+
+        lines.append(f"来源：{tool_result.source_of_truth}")
+        lines.append(f"查询时间：{queried_at}")
+        return "\n".join(lines)
 
     def _parse_approval_command(self, text: str) -> ApprovalCommand | None:
         match = _APPROVAL_COMMAND_PATTERN.match(text.strip())
@@ -964,6 +1110,16 @@ class ChatService:
             and decision.confidence < self.TOOL_FIRST_CONFIDENCE_THRESHOLD
         ):
             return False, "Router confidence below tool_first threshold."
+        if decision.requiresPendingDocumentList:
+            if decision.route != "tool_first":
+                return False, "requiresPendingDocumentList requires tool_first route."
+            if decision.requires_clarification:
+                return False, "requiresPendingDocumentList cannot be combined with missingInputs."
+            if not decision.toolCalls:
+                return False, "requiresPendingDocumentList requires get_process_workbench tool call."
+            primary_tool_name = decision.toolCalls[0].name
+            if primary_tool_name != "get_process_workbench":
+                return False, "requiresPendingDocumentList requires get_process_workbench as primary tool."
 
         index = self._skill_loader.get_index()
         allowed_references: set[str] = set()
@@ -1418,14 +1574,55 @@ class ChatService:
             available_tools=self._tool_registry.list_router_metadata(),
             confidence_threshold=self.TOOL_FIRST_CONFIDENCE_THRESHOLD,
         )
-        router_result = run_router_exec(
-            config=self._provider_config,
-            prompt=router_prompt,
-            workspace_dir=workspace_dir,
-            output_schema=router_decision_json_schema(),
-            cancel_event=cancel_event,
-            runtime_dir=self._runtime_dir,
-        )
+        backend_mode = self._active_backend_mode()
+        try:
+            if backend_mode == "oneshot_exec":
+                router_result = run_router_exec(
+                    config=self._provider_config,
+                    prompt=router_prompt,
+                    workspace_dir=workspace_dir,
+                    output_schema=router_decision_json_schema(),
+                    cancel_event=cancel_event,
+                    runtime_dir=self._runtime_dir,
+                )
+            else:
+                router_result = self._execution_adapter.run_router(
+                    config=self._provider_config,
+                    prompt=router_prompt,
+                    workspace_dir=workspace_dir,
+                    output_schema=router_decision_json_schema(),
+                    cancel_event=cancel_event,
+                    runtime_dir=self._runtime_dir,
+                )
+        except Exception as exc:  # noqa: BLE001
+            if self._provider_config.exec_auto_fallback and backend_mode != "oneshot_exec":
+                self._publish_summary_event(
+                    session_id=session_id,
+                    run_id=run_id,
+                    event_type="backend_auto_fallback",
+                    summary=f"路由后端 {backend_mode} 失败，自动降级到 oneshot_exec。原因：{exc}",
+                    message_id=assistant_message_id,
+                )
+                self._set_active_run_backend_mode(session_id=session_id, backend_mode="oneshot_exec")
+                router_result = run_router_exec(
+                    config=self._provider_config,
+                    prompt=router_prompt,
+                    workspace_dir=workspace_dir,
+                    output_schema=router_decision_json_schema(),
+                    cancel_event=cancel_event,
+                    runtime_dir=self._runtime_dir,
+                )
+            else:
+                router_result = None
+        if router_result is None:
+            self._publish_summary_event(
+                session_id=session_id,
+                run_id=run_id,
+                event_type="router_fallback",
+                summary="路由阶段异常，已回退到通用对话链路。",
+                message_id=assistant_message_id,
+            )
+            return None
         if router_result.status != "succeeded" or router_result.decision is None:
             self._publish_summary_event(
                 session_id=session_id,
@@ -1578,6 +1775,33 @@ class ChatService:
             )
 
         if decision.answerMode == "templated":
+            if tool_results:
+                primary_result = tool_results[0]
+                if (
+                    decision.requiresPendingDocumentList
+                    and primary_result.name == "get_process_workbench"
+                    and isinstance(primary_result.result, dict)
+                ):
+                    self._publish_status(
+                        session_id=session_id,
+                        run_id=run_id,
+                        status="templated",
+                        message_id=assistant_message_id,
+                    )
+                    self._publish_summary_event(
+                        session_id=session_id,
+                        run_id=run_id,
+                        event_type="templated_answer",
+                        summary="已根据路由意图输出待处理单据编号清单。",
+                        message_id=assistant_message_id,
+                    )
+                    return self._publish_static_reply(
+                        session_id=session_id,
+                        run_id=run_id,
+                        assistant_message_id=assistant_message_id,
+                        status="templated",
+                        assistant_text=self._build_pending_document_list_reply(primary_result),
+                    )
             self._publish_status(
                 session_id=session_id,
                 run_id=run_id,
@@ -1723,97 +1947,204 @@ class ChatService:
             run_state = self._runs_by_session.get(session_id)
             if run_state is None:
                 return
-            run_state.status = "running"
             cancel_event = run_state.cancel_event
+            backend_mode = run_state.backend_mode or self._active_backend_mode()
 
-        self._publish_status(
-            session_id=session_id,
+        acquire_result = self._execution_scheduler.acquire(
             run_id=run_id,
-            status="running",
-            message_id=assistant_message_id,
+            cancel_event=cancel_event,
         )
+        try:
+            if not acquire_result.acquired:
+                if acquire_result.reason == "queue_full":
+                    self._publish_summary_event(
+                        session_id=session_id,
+                        run_id=run_id,
+                        event_type="run_rejected",
+                        summary="系统并发已满且队列已达上限，请稍后重试。",
+                        message_id=assistant_message_id,
+                    )
+                    self._publish_status(
+                        session_id=session_id,
+                        run_id=run_id,
+                        status="failed",
+                        message_id=assistant_message_id,
+                    )
+                    outcome = _TurnOutcome(
+                        status="failed",
+                        assistant_text="当前请求较多，队列已满，请稍后重试。",
+                        output_tail="queue_full",
+                        token_count=_approx_token_count("当前请求较多，队列已满，请稍后重试。"),
+                        exit_code=1,
+                    )
+                elif acquire_result.reason == "canceled":
+                    self._publish_status(
+                        session_id=session_id,
+                        run_id=run_id,
+                        status="canceled",
+                        message_id=assistant_message_id,
+                    )
+                    outcome = _TurnOutcome(
+                        status="canceled",
+                        assistant_text="会话运行已取消。",
+                        output_tail="canceled_while_queued",
+                        token_count=_approx_token_count("会话运行已取消。"),
+                        exit_code=130,
+                    )
+                else:
+                    self._publish_status(
+                        session_id=session_id,
+                        run_id=run_id,
+                        status="failed",
+                        message_id=assistant_message_id,
+                    )
+                    outcome = _TurnOutcome(
+                        status="failed",
+                        assistant_text="会话调度失败，请稍后重试。",
+                        output_tail=acquire_result.reason or "scheduler_failed",
+                        token_count=_approx_token_count("会话调度失败，请稍后重试。"),
+                        exit_code=1,
+                    )
+            else:
+                if acquire_result.queued:
+                    self._publish_summary_event(
+                        session_id=session_id,
+                        run_id=run_id,
+                        event_type="queue_acquired",
+                        summary="已从排队状态进入执行。",
+                        message_id=assistant_message_id,
+                    )
 
-        user_message = self._store.get_message(user_message_id) or {}
-        latest_user_message = str(user_message.get("content") or "").strip()
-        session = self._store.get_session(session_id)
-        run_workspace = self._resolve_run_workspace(session)
+                with self._run_lock:
+                    current = self._runs_by_session.get(session_id)
+                    if current is not None:
+                        current.status = "running"
+                        backend_mode = current.backend_mode or backend_mode
+                self._run_state_store.upsert(
+                    run_id=run_id,
+                    session_id=session_id,
+                    status="running",
+                    backend_mode=backend_mode,
+                )
+                self._publish_status(
+                    session_id=session_id,
+                    run_id=run_id,
+                    status="running",
+                    message_id=assistant_message_id,
+                )
 
-        approval_outcome = self.try_handle_approval_confirmation_command(
-            session_id=session_id,
-            run_id=run_id,
-            assistant_message_id=assistant_message_id,
-            latest_user_message=latest_user_message,
-        )
+                user_message = self._store.get_message(user_message_id) or {}
+                latest_user_message = str(user_message.get("content") or "").strip()
+                session = self._store.get_session(session_id)
+                run_workspace = self._resolve_run_workspace(session)
 
-        if approval_outcome is not None:
-            outcome = approval_outcome
-        elif self._router_enabled:
-            outcome = self._execute_structured_turn(
-                run_id=run_id,
-                session_id=session_id,
-                assistant_message_id=assistant_message_id,
-                latest_user_message=latest_user_message,
-                workspace_dir=run_workspace,
-                cancel_event=cancel_event,
-            )
-        else:
-            self._publish_summary_event(
-                session_id=session_id,
-                run_id=run_id,
-                event_type="router_disabled",
-                summary="Router 阶段已关闭，直接使用通用对话链路。",
+                try:
+                    approval_outcome = self.try_handle_approval_confirmation_command(
+                        session_id=session_id,
+                        run_id=run_id,
+                        assistant_message_id=assistant_message_id,
+                        latest_user_message=latest_user_message,
+                    )
+
+                    if approval_outcome is not None:
+                        outcome = approval_outcome
+                    elif self._router_enabled:
+                        outcome = self._execute_structured_turn(
+                            run_id=run_id,
+                            session_id=session_id,
+                            assistant_message_id=assistant_message_id,
+                            latest_user_message=latest_user_message,
+                            workspace_dir=run_workspace,
+                            cancel_event=cancel_event,
+                        )
+                    else:
+                        self._publish_summary_event(
+                            session_id=session_id,
+                            run_id=run_id,
+                            event_type="router_disabled",
+                            summary="Router 阶段已关闭，直接使用通用对话链路。",
+                            message_id=assistant_message_id,
+                        )
+                        outcome = None
+
+                    if outcome is None:
+                        prompt = self._build_general_prompt(session_id=session_id)
+                        outcome = self._run_model_prompt(
+                            session_id=session_id,
+                            run_id=run_id,
+                            assistant_message_id=assistant_message_id,
+                            prompt=prompt,
+                            workspace_dir=run_workspace,
+                            cancel_event=cancel_event,
+                        )
+                except Exception as exc:  # noqa: BLE001
+                    outcome = _TurnOutcome(
+                        status="failed",
+                        assistant_text=f"会话执行失败：{exc}",
+                        output_tail=str(exc)[:4000],
+                        token_count=_approx_token_count(f"会话执行失败：{exc}"),
+                        exit_code=1,
+                    )
+
+            self._store.update_message_content(
                 message_id=assistant_message_id,
+                content=outcome.assistant_text,
+                token_count=outcome.token_count,
             )
-            outcome = None
-
-        if outcome is None:
-            prompt = self._build_general_prompt(session_id=session_id)
-            outcome = self._run_model_prompt(
+            normalized_session_status = "idle"
+            if outcome.status == "canceled":
+                normalized_session_status = "canceled"
+            elif outcome.status in {"failed", "timeout", "tool_failed"}:
+                normalized_session_status = "failed"
+            self._store.update_session_status(session_id=session_id, status=normalized_session_status)
+            self._store.touch_session(session_id=session_id)
+            self._append_execution_log(
                 session_id=session_id,
-                run_id=run_id,
-                assistant_message_id=assistant_message_id,
-                prompt=prompt,
-                workspace_dir=run_workspace,
-                cancel_event=cancel_event,
+                message_id=assistant_message_id,
+                event_type="result",
+                event_summary=outcome.output_tail or outcome.assistant_text[:4000],
+                exit_code=outcome.exit_code,
+            )
+            self._publish_event(
+                session_id,
+                "done",
+                {
+                    "runId": run_id,
+                    "sessionId": session_id,
+                    "userMessageId": user_message_id,
+                    "assistantMessageId": assistant_message_id,
+                    "status": outcome.status,
+                    "message": outcome.assistant_text,
+                    "tokenCount": outcome.token_count,
+                },
             )
 
-        self._store.update_message_content(
-            message_id=assistant_message_id,
-            content=outcome.assistant_text,
-            token_count=outcome.token_count,
-        )
-        normalized_session_status = "idle"
-        if outcome.status == "canceled":
-            normalized_session_status = "canceled"
-        elif outcome.status in {"failed", "timeout", "tool_failed"}:
-            normalized_session_status = "failed"
-        self._store.update_session_status(session_id=session_id, status=normalized_session_status)
-        self._store.touch_session(session_id=session_id)
-        self._append_execution_log(
-            session_id=session_id,
-            message_id=assistant_message_id,
-            event_type="result",
-            event_summary=outcome.output_tail or outcome.assistant_text[:4000],
-            exit_code=outcome.exit_code,
-        )
-        self._publish_event(
-            session_id,
-            "done",
-            {
-                "runId": run_id,
-                "sessionId": session_id,
-                "userMessageId": user_message_id,
-                "assistantMessageId": assistant_message_id,
-                "status": outcome.status,
-                "message": outcome.assistant_text,
-                "tokenCount": outcome.token_count,
-            },
-        )
+            with self._run_lock:
+                current = self._runs_by_session.get(session_id)
+                if current is not None:
+                    backend_mode = current.backend_mode or backend_mode
 
-        with self._run_lock:
-            current_run = self._runs_by_session.get(session_id)
-            if current_run is not None and current_run.run_id == run_id:
-                del self._runs_by_session[session_id]
+            terminal_run_status = "succeeded"
+            if outcome.status in {"failed", "timeout", "tool_failed"}:
+                terminal_run_status = outcome.status
+            elif outcome.status in {"canceled", "cancel_requested"}:
+                terminal_run_status = "canceled"
+            self._run_state_store.upsert(
+                run_id=run_id,
+                session_id=session_id,
+                status=terminal_run_status,
+                backend_mode=backend_mode,
+                error_code=terminal_run_status if terminal_run_status in {"failed", "timeout", "tool_failed"} else "",
+                error_message=(outcome.output_tail or outcome.assistant_text)[:2000]
+                if terminal_run_status in {"failed", "timeout", "tool_failed"}
+                else "",
+            )
+        finally:
+            self._execution_scheduler.release(run_id=run_id)
+            with self._run_lock:
+                current_run = self._runs_by_session.get(session_id)
+                if current_run is not None and current_run.run_id == run_id:
+                    del self._runs_by_session[session_id]
 
     def cancel_session_run(self, session_id: str) -> dict[str, Any]:
         with self._run_lock:
@@ -1823,6 +2154,13 @@ class ChatService:
             run_state.status = "cancel_requested"
             run_state.cancel_event.set()
             run_id = run_state.run_id
+            backend_mode = run_state.backend_mode or self._active_backend_mode()
+        self._run_state_store.upsert(
+            run_id=run_id,
+            session_id=session_id,
+            status="cancel_requested",
+            backend_mode=backend_mode,
+        )
         self._publish_status(
             session_id=session_id,
             run_id=run_id,
@@ -1853,6 +2191,7 @@ class ChatService:
 
     def get_config_summary(self) -> dict[str, Any]:
         codex_path = resolve_codex_cli_path(self._provider_config)
+        scheduler_snapshot = self._execution_scheduler.snapshot()
         return {
             "provider": self._provider_config.provider,
             "baseUrl": self._provider_config.base_url,
@@ -1866,6 +2205,14 @@ class ChatService:
             "codexCliExecutable": self._provider_config.codex_cli_executable,
             "codexCliResolvedPath": codex_path or "",
             "workspaceDir": str(self._provider_config.workspace_dir),
+            "execMode": self._provider_config.exec_mode,
+            "execAutoFallback": self._provider_config.exec_auto_fallback,
+            "globalMaxConcurrentRuns": self._provider_config.global_max_concurrent_runs,
+            "runQueueSize": self._provider_config.run_queue_size,
+            "sessionIdleTtlSeconds": self._provider_config.session_idle_ttl_seconds,
+            "appServerBaseUrl": self._provider_config.app_server_base_url,
+            "appServerTimeoutSeconds": self._provider_config.app_server_timeout_seconds,
+            "scheduler": scheduler_snapshot,
             "routerEnabled": self._router_enabled,
             "approvalEnabled": self._approval_enabled,
             "approvalDryRunOnly": self._approval_dry_run_only,
@@ -1873,10 +2220,12 @@ class ChatService:
         }
 
     def get_health(self) -> dict[str, Any]:
+        execution_health = self._execution_adapter.health(config=self._provider_config)
+        backend_mode = self._active_backend_mode()
         codex_path = resolve_codex_cli_path(self._provider_config)
         codex_version = ""
         codex_ok = False
-        if codex_path:
+        if codex_path and backend_mode in {"oneshot_exec", "persistent_subprocess"}:
             try:
                 output = subprocess.run(
                     [codex_path, "--version"],
@@ -1890,9 +2239,15 @@ class ChatService:
             except Exception:  # noqa: BLE001
                 codex_ok = False
         key_ok = bool(self._provider_config.api_key)
-        status = "ok" if (codex_ok and key_ok) else "degraded"
+        if backend_mode == "app_server":
+            status = "ok" if execution_health.get("ready") else "degraded"
+        else:
+            status = "ok" if (codex_ok and key_ok) else "degraded"
         return {
             "status": status,
+            "execMode": backend_mode,
+            "executionBackend": execution_health.get("backend") or backend_mode,
+            "executionBackendReady": bool(execution_health.get("ready")),
             "codexCliAvailable": codex_ok,
             "codexCliPath": codex_path or "",
             "codexCliVersion": codex_version,
@@ -1906,6 +2261,12 @@ class ChatService:
             "approvalEnabled": self._approval_enabled,
             "approvalDryRunOnly": self._approval_dry_run_only,
             "approvalPlanTtlSeconds": self._approval_plan_ttl_seconds,
+            "scheduler": self._execution_scheduler.snapshot(),
+            "appServerBaseUrl": self._provider_config.app_server_base_url,
+            "appServerTimeoutSeconds": self._provider_config.app_server_timeout_seconds,
+            "appServerHealthUrl": execution_health.get("appServerHealthUrl") or "",
+            "appServerStatusCode": execution_health.get("appServerStatusCode") or 0,
+            "appServerMessage": execution_health.get("appServerMessage") or "",
         }
 
 

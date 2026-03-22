@@ -4889,9 +4889,11 @@ class PostgresOrganizationListStore(_PostgresStoreBase):
 CHAT_SESSION_TABLE_NAME = "\u5bf9\u8bdd\u4f1a\u8bdd"
 CHAT_MESSAGE_TABLE_NAME = "\u5bf9\u8bdd\u6d88\u606f"
 CHAT_EXECUTION_LOG_TABLE_NAME = "\u5bf9\u8bdd\u6267\u884c\u65e5\u5fd7"
+CHAT_RUN_STATE_TABLE_NAME = "\u5bf9\u8bdd\u8fd0\u884c\u72b6\u6001"
 CHAT_SESSION_TABLE = f'"{CHAT_SESSION_TABLE_NAME}"'
 CHAT_MESSAGE_TABLE = f'"{CHAT_MESSAGE_TABLE_NAME}"'
 CHAT_EXECUTION_LOG_TABLE = f'"{CHAT_EXECUTION_LOG_TABLE_NAME}"'
+CHAT_RUN_STATE_TABLE = f'"{CHAT_RUN_STATE_TABLE_NAME}"'
 
 CHAT_SESSION_COLUMNS = {
     "session_id": "\u4f1a\u8bddID",
@@ -4923,11 +4925,26 @@ CHAT_EXECUTION_LOG_COLUMNS = {
     "created_at": "\u521b\u5efa\u65f6\u95f4",
 }
 
+CHAT_RUN_STATE_COLUMNS = {
+    "run_id": "\u8fd0\u884cID",
+    "session_id": "\u4f1a\u8bddID",
+    "status": "\u72b6\u6001",
+    "backend_mode": "\u6267\u884c\u6a21\u5f0f",
+    "worker_id": "workerID",
+    "error_code": "\u9519\u8bef\u7801",
+    "error_message": "\u9519\u8bef\u4fe1\u606f",
+    "started_at": "\u5f00\u59cb\u65f6\u95f4",
+    "updated_at": "\u66f4\u65b0\u65f6\u95f4",
+    "finished_at": "\u7ed3\u675f\u65f6\u95f4",
+    "created_at": "\u521b\u5efa\u65f6\u95f4",
+}
+
 
 class PostgresChatStore(_PostgresStoreBase):
     _ensure_table_lock = threading.Lock()
     _ensured_schema_keys: set[tuple[str, int, str, str]] = set()
     schema_sql = Path(__file__).resolve().parents[1] / "sql" / "030_chat_conversation.sql"
+    run_state_schema_sql = Path(__file__).resolve().parents[1] / "sql" / "031_chat_run_state.sql"
 
     @classmethod
     def _schema_key(cls, settings: DatabaseSettings) -> tuple[str, int, str, str]:
@@ -4939,6 +4956,9 @@ class PostgresChatStore(_PostgresStoreBase):
             return
 
         ddl = self.schema_sql.read_text(encoding="utf-8")
+        run_state_ddl = ""
+        if self.run_state_schema_sql.exists():
+            run_state_ddl = self.run_state_schema_sql.read_text(encoding="utf-8")
         with self._ensure_table_lock:
             if schema_key in self._ensured_schema_keys:
                 return
@@ -4946,6 +4966,8 @@ class PostgresChatStore(_PostgresStoreBase):
                 with connection.cursor() as cursor:
                     if not self._table_exists(cursor, CHAT_SESSION_TABLE_NAME):
                         cursor.execute(ddl)
+                    if run_state_ddl and not self._table_exists(cursor, CHAT_RUN_STATE_TABLE_NAME):
+                        cursor.execute(run_state_ddl)
             self._ensured_schema_keys.add(schema_key)
 
     @classmethod
@@ -5248,3 +5270,138 @@ class PostgresChatStore(_PostgresStoreBase):
                         exit_code,
                     ),
                 )
+
+    def upsert_run_state(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+        status: str,
+        backend_mode: str,
+        worker_id: str = "",
+        error_code: str = "",
+        error_message: str = "",
+    ) -> None:
+        self.ensure_table()
+        insert_columns = [
+            CHAT_RUN_STATE_COLUMNS["run_id"],
+            CHAT_RUN_STATE_COLUMNS["session_id"],
+            CHAT_RUN_STATE_COLUMNS["status"],
+            CHAT_RUN_STATE_COLUMNS["backend_mode"],
+            CHAT_RUN_STATE_COLUMNS["worker_id"],
+            CHAT_RUN_STATE_COLUMNS["error_code"],
+            CHAT_RUN_STATE_COLUMNS["error_message"],
+            CHAT_RUN_STATE_COLUMNS["started_at"],
+            CHAT_RUN_STATE_COLUMNS["updated_at"],
+            CHAT_RUN_STATE_COLUMNS["finished_at"],
+            CHAT_RUN_STATE_COLUMNS["created_at"],
+        ]
+        normalized_status = status.strip() or "queued"
+        normalized_backend_mode = backend_mode.strip() or "oneshot_exec"
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    f"""
+                    INSERT INTO {CHAT_RUN_STATE_TABLE} (
+                        {self._quoted_columns(insert_columns)}
+                    ) VALUES (
+                        %s, %s, %s, %s, %s, %s, %s,
+                        CASE WHEN %s = 'running' THEN NOW() ELSE NULL END,
+                        NOW(),
+                        CASE WHEN %s IN ('succeeded','failed','timeout','canceled','interrupted','tool_failed') THEN NOW() ELSE NULL END,
+                        NOW()
+                    )
+                    ON CONFLICT ({self._quote_identifier(CHAT_RUN_STATE_COLUMNS["run_id"])})
+                    DO UPDATE SET
+                        {self._quote_identifier(CHAT_RUN_STATE_COLUMNS["session_id"])} = EXCLUDED.{self._quote_identifier(CHAT_RUN_STATE_COLUMNS["session_id"])},
+                        {self._quote_identifier(CHAT_RUN_STATE_COLUMNS["status"])} = EXCLUDED.{self._quote_identifier(CHAT_RUN_STATE_COLUMNS["status"])},
+                        {self._quote_identifier(CHAT_RUN_STATE_COLUMNS["backend_mode"])} = EXCLUDED.{self._quote_identifier(CHAT_RUN_STATE_COLUMNS["backend_mode"])},
+                        {self._quote_identifier(CHAT_RUN_STATE_COLUMNS["worker_id"])} = EXCLUDED.{self._quote_identifier(CHAT_RUN_STATE_COLUMNS["worker_id"])},
+                        {self._quote_identifier(CHAT_RUN_STATE_COLUMNS["error_code"])} = EXCLUDED.{self._quote_identifier(CHAT_RUN_STATE_COLUMNS["error_code"])},
+                        {self._quote_identifier(CHAT_RUN_STATE_COLUMNS["error_message"])} = EXCLUDED.{self._quote_identifier(CHAT_RUN_STATE_COLUMNS["error_message"])},
+                        {self._quote_identifier(CHAT_RUN_STATE_COLUMNS["started_at"])} = COALESCE(
+                            {CHAT_RUN_STATE_TABLE}.{self._quote_identifier(CHAT_RUN_STATE_COLUMNS["started_at"])},
+                            CASE WHEN EXCLUDED.{self._quote_identifier(CHAT_RUN_STATE_COLUMNS["status"])} = 'running' THEN NOW() ELSE NULL END
+                        ),
+                        {self._quote_identifier(CHAT_RUN_STATE_COLUMNS["updated_at"])} = NOW(),
+                        {self._quote_identifier(CHAT_RUN_STATE_COLUMNS["finished_at"])} = CASE
+                            WHEN EXCLUDED.{self._quote_identifier(CHAT_RUN_STATE_COLUMNS["status"])} IN ('succeeded','failed','timeout','canceled','interrupted','tool_failed')
+                            THEN NOW()
+                            ELSE {CHAT_RUN_STATE_TABLE}.{self._quote_identifier(CHAT_RUN_STATE_COLUMNS["finished_at"])}
+                        END
+                    """,
+                    (
+                        run_id,
+                        session_id,
+                        normalized_status,
+                        normalized_backend_mode,
+                        worker_id.strip(),
+                        error_code.strip(),
+                        error_message[:2000],
+                        normalized_status,
+                        normalized_status,
+                    ),
+                )
+
+    def mark_non_terminal_run_states_interrupted(
+        self,
+        *,
+        statuses: list[str],
+        error_code: str,
+        error_message: str,
+    ) -> list[dict[str, Any]]:
+        self.ensure_table()
+        normalized_statuses = [status.strip() for status in statuses if status and status.strip()]
+        if not normalized_statuses:
+            return []
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    f"""
+                    UPDATE {CHAT_RUN_STATE_TABLE}
+                    SET
+                        {self._quote_identifier(CHAT_RUN_STATE_COLUMNS["status"])} = 'interrupted',
+                        {self._quote_identifier(CHAT_RUN_STATE_COLUMNS["error_code"])} = %s,
+                        {self._quote_identifier(CHAT_RUN_STATE_COLUMNS["error_message"])} = %s,
+                        {self._quote_identifier(CHAT_RUN_STATE_COLUMNS["updated_at"])} = NOW(),
+                        {self._quote_identifier(CHAT_RUN_STATE_COLUMNS["finished_at"])} = COALESCE(
+                            {self._quote_identifier(CHAT_RUN_STATE_COLUMNS["finished_at"])},
+                            NOW()
+                        )
+                    WHERE {self._quote_identifier(CHAT_RUN_STATE_COLUMNS["status"])} = ANY(%s)
+                    RETURNING
+                        {self._quote_identifier(CHAT_RUN_STATE_COLUMNS["run_id"])},
+                        {self._quote_identifier(CHAT_RUN_STATE_COLUMNS["session_id"])},
+                        {self._quote_identifier(CHAT_RUN_STATE_COLUMNS["status"])},
+                        {self._quote_identifier(CHAT_RUN_STATE_COLUMNS["backend_mode"])},
+                        {self._quote_identifier(CHAT_RUN_STATE_COLUMNS["worker_id"])},
+                        {self._quote_identifier(CHAT_RUN_STATE_COLUMNS["started_at"])},
+                        {self._quote_identifier(CHAT_RUN_STATE_COLUMNS["updated_at"])},
+                        {self._quote_identifier(CHAT_RUN_STATE_COLUMNS["finished_at"])},
+                        {self._quote_identifier(CHAT_RUN_STATE_COLUMNS["error_code"])},
+                        {self._quote_identifier(CHAT_RUN_STATE_COLUMNS["error_message"])}
+                    """,
+                    (
+                        error_code.strip() or "interrupted",
+                        error_message[:2000],
+                        normalized_statuses,
+                    ),
+                )
+                rows = cursor.fetchall()
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            result.append(
+                {
+                    "runId": str(row[0] or ""),
+                    "sessionId": str(row[1] or ""),
+                    "status": str(row[2] or ""),
+                    "backendMode": str(row[3] or ""),
+                    "workerId": str(row[4] or ""),
+                    "startedAt": self._format_temporal_value(row[5]),
+                    "updatedAt": self._format_temporal_value(row[6]),
+                    "finishedAt": self._format_temporal_value(row[7]),
+                    "errorCode": str(row[8] or ""),
+                    "errorMessage": str(row[9] or ""),
+                }
+            )
+        return result
