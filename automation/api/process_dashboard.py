@@ -22,6 +22,7 @@ from automation.flows.document_approval_flow import DocumentApprovalFlow
 from automation.pages.home_page import HomePage
 from automation.pages.login_page import LoginPage
 from automation.utils.config_loader import load_local_auth, load_selectors
+from automation.utils.login_resilience import ensure_login_with_retry
 
 _BATCH_NO_PATTERN = re.compile(r'"assessment_batch_no"\s*:\s*"([^"]+)"')
 _VERSION_PATTERN = re.compile(r'"assessment_version"\s*:\s*"([^"]+)"')
@@ -385,11 +386,17 @@ def approve_process_document(
                 if not settings.auth.username.strip() or not settings.auth.password.strip():
                     raise RuntimeError("当前登录态失效，且未配置可用账号密码，无法执行审批。")
                 add_event("login_required")
-                login_page.login(
+                page = ensure_login_with_retry(
+                    login_page=login_page,
                     username=settings.auth.username.strip(),
                     password=settings.auth.password.strip(),
                     require_manual_captcha=False,
+                    retries=settings.runtime.retries,
+                    wait_sec=settings.runtime.retry_wait_sec,
+                    bound_pages=[login_page, home_page, approval_flow, home_probe_page],
+                    event_callback=add_event,
                 )
+                context = page.context
                 context.storage_state(path=str(state_file))
                 add_event("login_refreshed", stateFile=_to_repo_relative(state_file))
             else:

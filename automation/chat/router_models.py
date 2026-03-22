@@ -5,6 +5,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from automation.chat.approval_models import ApprovalRequest
+
 
 class RouterToolCall(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -44,7 +46,7 @@ class RouterToolCall(BaseModel):
 class RouterDecision(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    route: Literal["tool_first", "direct_answer", "general_chat"]
+    route: Literal["tool_first", "direct_answer", "general_chat", "approval_prepare"]
     selectedSkills: list[str] = Field(default_factory=list)
     selectedReferences: list[str] = Field(default_factory=list)
     toolCalls: list[RouterToolCall] = Field(default_factory=list)
@@ -53,6 +55,7 @@ class RouterDecision(BaseModel):
     missingInputs: list[str] = Field(default_factory=list)
     clarificationQuestion: str = ""
     reason: str = ""
+    approvalRequest: ApprovalRequest | None = None
 
     @property
     def requires_clarification(self) -> bool:

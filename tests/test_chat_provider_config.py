@@ -75,6 +75,8 @@ class ChatProviderConfigTest(unittest.TestCase):
                 "CLAWCHECK_AI_API_KEY": "test-key",
                 "CLAWCHECK_CODEX_CLI": "codex",
                 "CLAWCHECK_CHAT_WORKDIR": ".",
+                "CLAWCHECK_CHAT_ROUTER_MODEL": "gpt-router-override",
+                "CLAWCHECK_CHAT_ROUTER_REASONING_EFFORT": "medium",
             }
             with patch.dict(os.environ, env, clear=False):
                 config = load_chat_provider_config(settings)
@@ -87,6 +89,8 @@ class ChatProviderConfigTest(unittest.TestCase):
         self.assertEqual(config.api_key_env, "CLAWCHECK_AI_API_KEY")
         self.assertEqual(config.codex_cli_executable, "codex")
         self.assertTrue(config.workspace_dir.is_absolute())
+        self.assertEqual(config.router_model, "gpt-router-override")
+        self.assertEqual(config.router_reasoning_effort, "medium")
 
     def test_load_chat_provider_config_uses_yaml_api_key_when_env_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -103,6 +107,8 @@ class ChatProviderConfigTest(unittest.TestCase):
 
         self.assertEqual(config.api_key_env, "MY_KEY_ENV")
         self.assertEqual(config.api_key, "yaml-test-key")
+        self.assertEqual(config.router_model, "gpt-test")
+        self.assertEqual(config.router_reasoning_effort, "low")
 
 
 if __name__ == "__main__":

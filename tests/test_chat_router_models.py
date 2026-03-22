@@ -54,3 +54,30 @@ def test_router_tool_call_rejects_non_object_arguments_json() -> None:
                 "reason": "test",
             }
         )
+
+
+def test_router_decision_accepts_approval_prepare_payload() -> None:
+    decision = RouterDecision.model_validate(
+        {
+            "route": "approval_prepare",
+            "selectedSkills": ["clawcheck-project"],
+            "selectedReferences": ["process-approval"],
+            "toolCalls": [],
+            "answerMode": "templated",
+            "confidence": 0.93,
+            "missingInputs": [],
+            "clarificationQuestion": "",
+            "reason": "approval intent",
+            "approvalRequest": {
+                "documentNo": "RA-20260310-00019845",
+                "action": "approve",
+                "approvalOpinion": "同意，按当前职责范围处理。",
+                "dryRun": False,
+            },
+        }
+    )
+
+    assert decision.route == "approval_prepare"
+    assert decision.approvalRequest is not None
+    assert decision.approvalRequest.documentNo == "RA-20260310-00019845"
+    assert decision.approvalRequest.action == "approve"

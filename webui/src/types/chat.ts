@@ -46,6 +46,9 @@ export interface ChatConfigSummary {
   codexCliResolvedPath: string;
   workspaceDir: string;
   routerEnabled: boolean;
+  approvalEnabled: boolean;
+  approvalDryRunOnly: boolean;
+  approvalPlanTtlSeconds: number;
 }
 
 export interface ChatHealth {
@@ -58,6 +61,9 @@ export interface ChatHealth {
   provider: string;
   model: string;
   routerEnabled: boolean;
+  approvalEnabled: boolean;
+  approvalDryRunOnly: boolean;
+  approvalPlanTtlSeconds: number;
 }
 
 export interface ChatStreamEvent {

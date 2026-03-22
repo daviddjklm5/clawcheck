@@ -64,6 +64,10 @@ class DocumentApprovalFlow:
     def _normalize_text(value: Any) -> str:
         return " ".join(str(value or "").split()).strip()
 
+    def set_page(self, page: Page) -> None:
+        self.page = page
+        self.collector.page = page
+
     def _wait_for_first_visible(
         self,
         selectors: tuple[str, ...],

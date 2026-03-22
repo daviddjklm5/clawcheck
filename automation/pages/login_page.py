@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from urllib.parse import urlsplit, urlunsplit
+
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 from automation.pages.base_page import BasePage
@@ -7,7 +9,7 @@ from automation.pages.base_page import BasePage
 
 class LoginPage(BasePage):
     _BROWSER_ERROR_PAGE_PREFIXES = ("chrome-error://", "edge-error://")
-    _OPEN_RETRY_COUNT = 2
+    _OPEN_RETRY_COUNT = 4
     _OPEN_RETRY_WAIT_MS = 1000
 
     def __init__(self, home_url: str, *args, **kwargs) -> None:
@@ -21,27 +23,61 @@ class LoginPage(BasePage):
             return False
         return current_url.startswith(self._BROWSER_ERROR_PAGE_PREFIXES)
 
+    @staticmethod
+    def _build_navigation_targets(home_url: str) -> list[str]:
+        targets = [home_url]
+        try:
+            parsed = urlsplit(home_url)
+        except Exception:  # noqa: BLE001
+            return targets
+
+        hostname = (parsed.hostname or "").lower()
+        fallback_netloc = ""
+        if hostname == "hr.onewo.com":
+            fallback_netloc = "thr.onewo.com:8443"
+        elif hostname == "thr.onewo.com":
+            fallback_netloc = "hr.onewo.com"
+
+        if not fallback_netloc:
+            return targets
+
+        fallback_url = urlunsplit(
+            (
+                parsed.scheme or "https",
+                fallback_netloc,
+                parsed.path,
+                parsed.query,
+                parsed.fragment,
+            )
+        )
+        if fallback_url not in targets:
+            targets.append(fallback_url)
+        return targets
+
     def open(self) -> None:
         last_exc: Exception | None = None
+        navigation_targets = self._build_navigation_targets(self.home_url)
 
         for attempt in range(1, self._OPEN_RETRY_COUNT + 1):
+            target_url = navigation_targets[(attempt - 1) % len(navigation_targets)]
             try:
-                self.page.goto(self.home_url, wait_until="domcontentloaded")
+                self.page.goto(target_url, wait_until="domcontentloaded")
             except Exception as exc:  # noqa: BLE001
                 last_exc = exc
                 self.logger.warning(
                     "Login navigation attempt %s/%s failed for %s: %s",
                     attempt,
                     self._OPEN_RETRY_COUNT,
-                    self.home_url,
+                    target_url,
                     exc,
                 )
             else:
                 if not self._is_browser_error_page():
                     if attempt > 1:
                         self.logger.info(
-                            "Login navigation recovered on attempt %s. Current URL: %s",
+                            "Login navigation recovered on attempt %s via %s. Current URL: %s",
                             attempt,
+                            target_url,
                             self.page.url,
                         )
                     return
@@ -52,7 +88,7 @@ class LoginPage(BasePage):
                     "Target URL: %s; current URL: %s",
                     attempt,
                     self._OPEN_RETRY_COUNT,
-                    self.home_url,
+                    target_url,
                     self.page.url,
                 )
 
@@ -66,7 +102,8 @@ class LoginPage(BasePage):
             current_url = ""
         message = (
             "Unable to open login entry page after navigation retries. "
-            f"Target URL: {self.home_url}; current URL: {current_url or 'unknown'}"
+            f"Target URL: {self.home_url}; attempted URLs: {navigation_targets}; "
+            f"current URL: {current_url or 'unknown'}"
         )
         raise RuntimeError(message) from last_exc
 

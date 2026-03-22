@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import threading
 import time
@@ -14,7 +15,17 @@ from uuid import uuid4
 
 from pydantic import ValidationError
 
+from automation.api.process_dashboard import approve_process_document, get_process_document_detail
 from automation.api.config_summary import _load_runtime_settings
+from automation.chat.approval_models import (
+    ACTIVE_APPROVAL_PLAN_STATUSES,
+    ApprovalCommand,
+    ApprovalPlan,
+    ApprovalPlanSnapshot,
+    ApprovalRequest,
+    TERMINAL_APPROVAL_PLAN_STATUSES,
+)
+from automation.chat.approval_plan_store import ApprovalPlanStore
 from automation.chat.codex_runner import (
     CodexExecutionResult,
     resolve_codex_cli_path,
@@ -58,6 +69,48 @@ def _env_flag(name: str, *, default: bool) -> bool:
     return default
 
 
+def _env_int(name: str, *, default: int, minimum: int = 1) -> int:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return max(default, minimum)
+    try:
+        parsed = int(raw_value.strip())
+    except ValueError:
+        return max(default, minimum)
+    return max(parsed, minimum)
+
+
+_APPROVAL_COMMAND_PATTERN = re.compile(
+    r"^\s*(确认审批计划|验证审批计划|取消审批计划)\s+([A-Za-z0-9._:-]+)\s*$"
+)
+
+
+_APPROVAL_PLAN_ID_PATTERN = re.compile(r"(approval-plan-[A-Za-z0-9._:-]+)", re.IGNORECASE)
+_APPROVAL_CONFIRM_KEYWORDS = (
+    "确认审批计划",
+    "确认命令",
+    "确认",
+    "提交",
+    "confirm",
+    "submit",
+)
+_APPROVAL_VERIFY_KEYWORDS = (
+    "验证审批计划",
+    "验证命令",
+    "验证",
+    "dry-run",
+    "dry run",
+    "dryrun",
+    "verify",
+)
+_APPROVAL_CANCEL_KEYWORDS = (
+    "取消审批计划",
+    "取消命令",
+    "取消",
+    "cancel",
+)
+
+
 @dataclass
 class _SessionRunState:
     run_id: str
@@ -98,6 +151,14 @@ class ChatService:
         self._tool_registry = tool_registry or build_default_tool_registry()
         self._router_enabled = _env_flag("CLAWCHECK_CHAT_ROUTER_ENABLED", default=True)
         self._runtime_dir = Path(__file__).resolve().parents[1] / "runtime" / "chat"
+        self._approval_enabled = _env_flag("CLAWCHECK_CHAT_APPROVAL_ENABLED", default=False)
+        self._approval_dry_run_only = _env_flag("CLAWCHECK_CHAT_APPROVAL_DRY_RUN_ONLY", default=True)
+        self._approval_plan_ttl_seconds = _env_int(
+            "CLAWCHECK_CHAT_APPROVAL_PLAN_TTL_SECONDS",
+            default=600,
+            minimum=60,
+        )
+        self._approval_plan_store = ApprovalPlanStore(self._runtime_dir / "approval-plans")
 
         self._run_lock = threading.Lock()
         self._runs_by_session: dict[str, _SessionRunState] = {}
@@ -112,6 +173,13 @@ class ChatService:
         self._store = PostgresChatStore(settings.db)
         self._store.ensure_table()
         self._router_enabled = _env_flag("CLAWCHECK_CHAT_ROUTER_ENABLED", default=True)
+        self._approval_enabled = _env_flag("CLAWCHECK_CHAT_APPROVAL_ENABLED", default=False)
+        self._approval_dry_run_only = _env_flag("CLAWCHECK_CHAT_APPROVAL_DRY_RUN_ONLY", default=True)
+        self._approval_plan_ttl_seconds = _env_int(
+            "CLAWCHECK_CHAT_APPROVAL_PLAN_TTL_SECONDS",
+            default=600,
+            minimum=60,
+        )
 
     def _publish_event(self, session_id: str, event_type: str, data: dict[str, Any]) -> dict[str, Any]:
         with self._event_condition:
@@ -641,6 +709,193 @@ class ChatService:
                 return str(value) if value is not None else None
         return None
 
+    def _parse_approval_command(self, text: str) -> ApprovalCommand | None:
+        match = _APPROVAL_COMMAND_PATTERN.match(text.strip())
+        if match is None:
+            return None
+        command_map = {
+            "确认审批计划": "confirm",
+            "验证审批计划": "verify",
+            "取消审批计划": "cancel",
+        }
+        command_type = command_map.get(match.group(1))
+        if command_type is None:
+            return None
+        return ApprovalCommand(commandType=command_type, planId=match.group(2))
+
+    def _extract_feedback_summary_lines(self, payload: dict[str, Any]) -> list[str]:
+        feedback_overview = payload.get("feedbackOverview")
+        if not isinstance(feedback_overview, dict):
+            return []
+        groups = feedback_overview.get("feedbackGroups")
+        if not isinstance(groups, list):
+            return []
+
+        seen: set[str] = set()
+        lines: list[str] = []
+        for group in groups:
+            if not isinstance(group, dict):
+                continue
+            candidates = group.get("summaryLines")
+            if isinstance(candidates, list) and candidates:
+                raw_items = candidates
+            else:
+                summary = str(group.get("summary") or "").strip()
+                raw_items = [summary] if summary else []
+            for raw_item in raw_items:
+                normalized = " ".join(str(raw_item or "").split()).strip()
+                if not normalized or normalized in seen:
+                    continue
+                seen.add(normalized)
+                lines.append(normalized)
+        return lines
+
+    def _build_reject_suggestion(self, payload: dict[str, Any]) -> str:
+        return "\n".join(self._extract_feedback_summary_lines(payload)).strip()
+
+    def _build_risk_summary(self, payload: dict[str, Any]) -> str:
+        summary_lines = self._extract_feedback_summary_lines(payload)
+        if summary_lines:
+            summary = "；".join(summary_lines)
+            return summary if len(summary) <= 200 else f"{summary[:197]}..."
+        feedback_overview = payload.get("feedbackOverview")
+        if isinstance(feedback_overview, dict):
+            conclusion = str(feedback_overview.get("summaryConclusionLabel") or "").strip()
+            if conclusion:
+                return conclusion
+        return "-"
+
+    def _build_approval_request(self, decision: RouterDecision) -> ApprovalRequest:
+        if decision.approvalRequest is not None:
+            return decision.approvalRequest
+        return ApprovalRequest()
+
+    def _build_approval_missing_input_reply(self, request: ApprovalRequest) -> str:
+        if not request.documentNo.strip():
+            return "请提供单据编号，我再帮你生成审批计划。"
+        if request.action is None:
+            return "请明确这是要批准还是驳回，我再帮你生成审批计划。"
+        if request.action == "approve":
+            return "请提供审批意见，我再帮你生成批准计划。"
+        return "未能生成可用的驳回建议稿，请直接补充最终驳回意见后再发起审批。"
+
+    @staticmethod
+    def _build_approval_disabled_reply(*, for_command: bool) -> str:
+        action_text = "无法执行审批计划命令" if for_command else "请先在处理单据页执行"
+        return (
+            f"当前环境未开启对话审批能力，{action_text}。"
+            "请设置环境变量 CLAWCHECK_CHAT_APPROVAL_ENABLED=true 后重启 API。"
+            "如需限制为仅连通性验证，请同时设置 CLAWCHECK_CHAT_APPROVAL_DRY_RUN_ONLY=true；"
+            "如需真实提交，请设置为 false。"
+        )
+
+    def _build_approval_plan_commands(self, plan_id: str) -> tuple[str, str, str]:
+        return (
+            f"确认审批计划 {plan_id}",
+            f"验证审批计划 {plan_id}",
+            f"取消审批计划 {plan_id}",
+        )
+
+    def _build_approval_plan_reply(self, plan: ApprovalPlan) -> str:
+        action_label = "批准" if plan.action == "approve" else "驳回"
+        suggestion_notice = ""
+        if plan.approvalOpinionSource == "suggested_from_109":
+            suggestion_notice = (
+                "当前审批意见为系统建议稿，不能直接真实提交。"
+                "请补充最终审批意见后，再重新发起审批请求。"
+            )
+        dry_run_hint = "建议先执行 dry-run 验证。" if not plan.requestedDryRun else "本轮请求已标记为优先做 dry-run 验证。"
+        lines = [
+            f"已生成待确认审批计划 {plan.planId}。",
+            f"单据编号：{plan.documentNo}",
+            f"当前待办处理状态：{plan.snapshot.todoProcessStatus or '-'}",
+            f"当前单据状态：{plan.snapshot.documentStatus or '-'}",
+            f"目标动作：{action_label}",
+            f"审批意见：{plan.approvalOpinion or '-'}",
+            f"风险摘要：{plan.snapshot.riskSummary or '-'}",
+            dry_run_hint,
+        ]
+        if suggestion_notice:
+            lines.append(suggestion_notice)
+        lines.extend(
+            [
+                f"确认命令：{plan.confirmCommand}",
+                f"验证命令：{plan.dryRunCommand}",
+                f"取消命令：{plan.cancelCommand}",
+            ]
+        )
+        return "\n".join(lines)
+
+    def _build_approval_execution_reply(self, plan: ApprovalPlan, result: dict[str, Any]) -> str:
+        dry_run = bool(result.get("dryRun"))
+        action = str(result.get("action") or plan.action)
+        action_label = "批准" if action == "approve" else "驳回"
+        lines = [
+            f"审批计划 {plan.planId} 已执行完成。",
+            f"单据编号：{plan.documentNo}",
+            f"执行动作：{action_label}",
+            f"dry-run：{'是' if dry_run else '否'}",
+            f"执行状态：{result.get('status') or '-'}",
+            f"结果说明：{result.get('message') or '-'}",
+        ]
+        log_file = str(result.get("logFile") or "").strip()
+        screenshot_file = str(result.get("screenshotFile") or "").strip()
+        if log_file:
+            lines.append(f"日志文件：{log_file}")
+        if screenshot_file:
+            lines.append(f"截图文件：{screenshot_file}")
+        return "\n".join(lines)
+
+    def _create_approval_plan(
+        self,
+        *,
+        session_id: str,
+        request: ApprovalRequest,
+        approval_opinion: str,
+        approval_opinion_source: str,
+        document_detail: dict[str, Any],
+    ) -> ApprovalPlan:
+        created_at = datetime.now()
+        expires_at = created_at + timedelta(seconds=self._approval_plan_ttl_seconds)
+        plan_id = f"approval-plan-{created_at.strftime('%Y%m%d%H%M%S')}-{uuid4().hex[:8]}"
+        confirm_command, dry_run_command, cancel_command = self._build_approval_plan_commands(plan_id)
+        return ApprovalPlan(
+            planId=plan_id,
+            sessionId=session_id,
+            documentNo=request.documentNo.strip(),
+            action=request.action or "approve",
+            approvalOpinion=approval_opinion,
+            approvalOpinionSource=approval_opinion_source,  # type: ignore[arg-type]
+            requestedDryRun=bool(request.dryRun),
+            status="pending_confirmation",
+            snapshot=ApprovalPlanSnapshot(
+                todoProcessStatus=self._find_overview_value(document_detail, "待办处理状态") or "待处理",
+                documentStatus=self._find_overview_value(document_detail, "单据状态") or "-",
+                riskSummary=self._build_risk_summary(document_detail),
+                assessmentBatchNo=self._find_overview_value(document_detail, "评估批次号") or "",
+            ),
+            confirmCommand=confirm_command,
+            dryRunCommand=dry_run_command,
+            cancelCommand=cancel_command,
+            createdAt=created_at.strftime("%Y-%m-%d %H:%M:%S"),
+            updatedAt=created_at.strftime("%Y-%m-%d %H:%M:%S"),
+            expiresAt=expires_at.strftime("%Y-%m-%d %H:%M:%S"),
+        )
+
+    def _update_plan_status(
+        self,
+        *,
+        session_id: str,
+        plan_id: str,
+        status: str,
+    ) -> ApprovalPlan | None:
+        def _apply(plan: ApprovalPlan) -> ApprovalPlan:
+            plan.status = status  # type: ignore[assignment]
+            plan.updatedAt = _now_text()
+            return plan
+
+        return self._approval_plan_store.update_plan(session_id, plan_id, _apply)
+
     def build_clarification_reply(self, decision: RouterDecision) -> str:
         question = decision.clarificationQuestion.strip()
         if question:
@@ -648,6 +903,8 @@ class ChatService:
         missing_inputs = decision.missingInputs
         if missing_inputs == ["documentNo"]:
             return "请提供单据编号，我再帮你查询当前状态。"
+        if missing_inputs == ["approvalOpinion"]:
+            return "请提供审批意见，我再继续。"
         if missing_inputs:
             joined = "、".join(missing_inputs)
             return f"请先补充以下关键信息：{joined}。"
@@ -695,6 +952,12 @@ class ChatService:
             return False, "tool_first route requires at least one tool call."
         if decision.route != "tool_first" and decision.toolCalls:
             return False, "Only tool_first route may include tool calls."
+        if decision.route == "approval_prepare" and decision.approvalRequest is None:
+            return False, "approval_prepare route requires approvalRequest."
+        if decision.route != "approval_prepare" and decision.approvalRequest is not None:
+            request = decision.approvalRequest
+            if request.documentNo.strip() or request.action is not None or request.approvalOpinion.strip() or request.dryRun:
+                return False, "approvalRequest is only allowed for approval_prepare route."
         if (
             decision.route == "tool_first"
             and not decision.requires_clarification
@@ -716,10 +979,412 @@ class ChatService:
             if reference_name not in allowed_references:
                 return False, f"Router selected invalid reference: {reference_name}"
 
+        if decision.route == "approval_prepare" and "process-approval" not in decision.selectedReferences:
+            return False, "approval_prepare route must include process-approval reference."
+
         for tool_call in decision.toolCalls:
             if self._tool_registry.get_tool(tool_call.name) is None:
                 return False, f"Router selected unregistered tool: {tool_call.name}"
         return True, ""
+
+    def prepare_approval_plan(
+        self,
+        *,
+        session_id: str,
+        run_id: str,
+        assistant_message_id: str,
+        decision: RouterDecision,
+    ) -> _TurnOutcome:
+        if not self._approval_enabled:
+            return self._publish_static_reply(
+                session_id=session_id,
+                run_id=run_id,
+                assistant_message_id=assistant_message_id,
+                status="clarifying",
+                assistant_text=self._build_approval_disabled_reply(for_command=False),
+            )
+
+        request = self._build_approval_request(decision)
+        if not request.documentNo.strip() or request.action is None:
+            return self._publish_static_reply(
+                session_id=session_id,
+                run_id=run_id,
+                assistant_message_id=assistant_message_id,
+                status="clarifying",
+                assistant_text=self._build_approval_missing_input_reply(request),
+            )
+
+        self._publish_status(
+            session_id=session_id,
+            run_id=run_id,
+            status="approval_preparing",
+            message_id=assistant_message_id,
+        )
+        self._publish_summary_event(
+            session_id=session_id,
+            run_id=run_id,
+            event_type="approval_plan_prepare_started",
+            summary=f"正在为单据 {request.documentNo.strip()} 生成待确认审批计划。",
+            message_id=assistant_message_id,
+        )
+
+        document_detail = get_process_document_detail(request.documentNo.strip())
+        if document_detail is None:
+            return self._publish_static_reply(
+                session_id=session_id,
+                run_id=run_id,
+                assistant_message_id=assistant_message_id,
+                status="clarifying",
+                assistant_text=f"未找到单据 {request.documentNo.strip()} 的正式工作台详情，无法生成审批计划。",
+            )
+
+        todo_process_status = (self._find_overview_value(document_detail, "待办处理状态") or "待处理").strip()
+        if todo_process_status in {"已处理", "已驳回"}:
+            return self._publish_static_reply(
+                session_id=session_id,
+                run_id=run_id,
+                assistant_message_id=assistant_message_id,
+                status="clarifying",
+                assistant_text=(
+                    f"单据 {request.documentNo.strip()} 当前待办处理状态为“{todo_process_status}”，"
+                    "不再允许通过对话工作台继续审批。"
+                ),
+            )
+
+        approval_opinion = request.approvalOpinion.strip()
+        approval_opinion_source = "user_input"
+        if request.action == "approve" and not approval_opinion:
+            return self._publish_static_reply(
+                session_id=session_id,
+                run_id=run_id,
+                assistant_message_id=assistant_message_id,
+                status="clarifying",
+                assistant_text="请提供审批意见，我再帮你生成批准计划。",
+            )
+        if request.action == "reject" and not approval_opinion:
+            approval_opinion = self._build_reject_suggestion(document_detail)
+            if not approval_opinion:
+                return self._publish_static_reply(
+                    session_id=session_id,
+                    run_id=run_id,
+                    assistant_message_id=assistant_message_id,
+                    status="clarifying",
+                    assistant_text="当前未能从风险总览生成可用的驳回建议稿，请直接补充最终驳回意见后再发起审批。",
+                )
+            approval_opinion_source = "suggested_from_109"
+
+        plan = self._create_approval_plan(
+            session_id=session_id,
+            request=request,
+            approval_opinion=approval_opinion,
+            approval_opinion_source=approval_opinion_source,
+            document_detail=document_detail,
+        )
+        self._approval_plan_store.save_plan(plan)
+        self._publish_summary_event(
+            session_id=session_id,
+            run_id=run_id,
+            event_type="approval_plan_created",
+            summary=f"已生成审批计划 {plan.planId}，等待用户确认。",
+            message_id=assistant_message_id,
+        )
+        return self._publish_static_reply(
+            session_id=session_id,
+            run_id=run_id,
+            assistant_message_id=assistant_message_id,
+            status="approval_confirmation_required",
+            assistant_text=self._build_approval_plan_reply(plan),
+        )
+
+    def execute_pending_approval_plan(
+        self,
+        *,
+        session_id: str,
+        run_id: str,
+        assistant_message_id: str,
+        plan: ApprovalPlan,
+        dry_run: bool,
+    ) -> _TurnOutcome:
+        status = "approval_dry_running" if dry_run else "approval_submitting"
+        event_type = "approval_plan_dry_run_started" if dry_run else "approval_plan_submit_started"
+        summary = (
+            f"审批计划 {plan.planId} 开始执行 dry-run。"
+            if dry_run
+            else f"审批计划 {plan.planId} 开始执行真实提交。"
+        )
+        self._publish_status(
+            session_id=session_id,
+            run_id=run_id,
+            status=status,
+            message_id=assistant_message_id,
+        )
+        self._publish_summary_event(
+            session_id=session_id,
+            run_id=run_id,
+            event_type=event_type,
+            summary=summary,
+            message_id=assistant_message_id,
+        )
+
+        latest_detail = get_process_document_detail(plan.documentNo)
+        if latest_detail is None:
+            self._update_plan_status(session_id=session_id, plan_id=plan.planId, status="failed")
+            return self._publish_static_reply(
+                session_id=session_id,
+                run_id=run_id,
+                assistant_message_id=assistant_message_id,
+                status="failed",
+                assistant_text=f"未找到单据 {plan.documentNo} 的最新正式详情，审批计划已中止。",
+            )
+
+        latest_todo_status = (self._find_overview_value(latest_detail, "待办处理状态") or "待处理").strip()
+        if latest_todo_status in {"已处理", "已驳回"}:
+            self._update_plan_status(session_id=session_id, plan_id=plan.planId, status="failed")
+            return self._publish_static_reply(
+                session_id=session_id,
+                run_id=run_id,
+                assistant_message_id=assistant_message_id,
+                status="failed",
+                assistant_text=(
+                    f"单据 {plan.documentNo} 当前待办处理状态为“{latest_todo_status}”，"
+                    "审批计划已失效，请勿继续执行。"
+                ),
+            )
+
+        try:
+            result = approve_process_document(
+                document_no=plan.documentNo,
+                action=plan.action,
+                approval_opinion=plan.approvalOpinion,
+                dry_run=dry_run,
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._update_plan_status(session_id=session_id, plan_id=plan.planId, status="failed")
+            self._publish_summary_event(
+                session_id=session_id,
+                run_id=run_id,
+                event_type="approval_plan_finished",
+                summary=f"审批计划 {plan.planId} 执行失败：{exc}",
+                message_id=assistant_message_id,
+            )
+            return self._publish_static_reply(
+                session_id=session_id,
+                run_id=run_id,
+                assistant_message_id=assistant_message_id,
+                status="failed",
+                assistant_text=f"审批计划 {plan.planId} 执行失败：{exc}",
+            )
+
+        final_status = "dry_run_succeeded" if dry_run else "submitted"
+        self._update_plan_status(session_id=session_id, plan_id=plan.planId, status=final_status)
+        self._publish_summary_event(
+            session_id=session_id,
+            run_id=run_id,
+            event_type="approval_plan_finished",
+            summary=f"审批计划 {plan.planId} 执行完成，status={result.get('status') or '-'}。",
+            message_id=assistant_message_id,
+        )
+        return self._publish_static_reply(
+            session_id=session_id,
+            run_id=run_id,
+            assistant_message_id=assistant_message_id,
+            status=str(result.get("status") or "succeeded"),
+            assistant_text=self._build_approval_execution_reply(plan, result),
+        )
+
+    def cancel_pending_approval_plan(
+        self,
+        *,
+        session_id: str,
+        run_id: str,
+        assistant_message_id: str,
+        plan: ApprovalPlan,
+    ) -> _TurnOutcome:
+        self._update_plan_status(session_id=session_id, plan_id=plan.planId, status="canceled")
+        self._publish_summary_event(
+            session_id=session_id,
+            run_id=run_id,
+            event_type="approval_plan_canceled",
+            summary=f"审批计划 {plan.planId} 已取消。",
+            message_id=assistant_message_id,
+        )
+        return self._publish_static_reply(
+            session_id=session_id,
+            run_id=run_id,
+            assistant_message_id=assistant_message_id,
+            status="canceled",
+            assistant_text=f"审批计划 {plan.planId} 已取消，不会再执行真实提交。",
+        )
+
+    @staticmethod
+    def _normalize_command_text(text: str) -> str:
+        return " ".join(str(text or "").strip().lower().split())
+
+    def _detect_approval_command_type(self, normalized_text: str) -> str | None:
+        if any(keyword in normalized_text for keyword in _APPROVAL_VERIFY_KEYWORDS):
+            return "verify"
+        if any(keyword in normalized_text for keyword in _APPROVAL_CANCEL_KEYWORDS):
+            return "cancel"
+        if any(keyword in normalized_text for keyword in _APPROVAL_CONFIRM_KEYWORDS):
+            return "confirm"
+        return None
+
+    def _parse_approval_command(self, text: str) -> ApprovalCommand | None:
+        normalized_text = self._normalize_command_text(text)
+        if not normalized_text:
+            return None
+        command_type = self._detect_approval_command_type(normalized_text)
+        if command_type is None:
+            return None
+        plan_id_match = _APPROVAL_PLAN_ID_PATTERN.search(normalized_text)
+        if plan_id_match is None:
+            return None
+        return ApprovalCommand(commandType=command_type, planId=plan_id_match.group(1))
+
+    def _infer_implicit_approval_command(
+        self,
+        *,
+        session_id: str,
+        text: str,
+    ) -> tuple[ApprovalCommand | None, str | None]:
+        normalized_text = self._normalize_command_text(text)
+        if not normalized_text:
+            return None, None
+        if _APPROVAL_PLAN_ID_PATTERN.search(normalized_text) is not None:
+            return None, None
+
+        command_type = self._detect_approval_command_type(normalized_text)
+        if command_type is None:
+            return None, None
+
+        active_plans = [
+            plan
+            for plan in self._approval_plan_store.list_session_plans(session_id)
+            if plan.status in ACTIVE_APPROVAL_PLAN_STATUSES
+        ]
+        if not active_plans:
+            return None, None
+
+        if len(active_plans) > 1:
+            candidate_ids = "、".join(plan.planId for plan in active_plans[-3:])
+            return (
+                None,
+                f"检测到多个待确认审批计划，请指定 planId 再执行。可用计划：{candidate_ids}",
+            )
+
+        plan = active_plans[-1]
+        return ApprovalCommand(commandType=command_type, planId=plan.planId), None
+
+    def try_handle_approval_confirmation_command(
+        self,
+        *,
+        session_id: str,
+        run_id: str,
+        assistant_message_id: str,
+        latest_user_message: str,
+    ) -> _TurnOutcome | None:
+        command = self._parse_approval_command(latest_user_message)
+        if command is None:
+            command, infer_error = self._infer_implicit_approval_command(
+                session_id=session_id,
+                text=latest_user_message,
+            )
+            if infer_error:
+                return self._publish_static_reply(
+                    session_id=session_id,
+                    run_id=run_id,
+                    assistant_message_id=assistant_message_id,
+                    status="clarifying",
+                    assistant_text=infer_error,
+                )
+            if command is None:
+                return None
+        if not self._approval_enabled:
+            return self._publish_static_reply(
+                session_id=session_id,
+                run_id=run_id,
+                assistant_message_id=assistant_message_id,
+                status="clarifying",
+                assistant_text=self._build_approval_disabled_reply(for_command=True),
+            )
+
+        plan = self._approval_plan_store.get_plan(session_id, command.planId)
+        if plan is None:
+            return self._publish_static_reply(
+                session_id=session_id,
+                run_id=run_id,
+                assistant_message_id=assistant_message_id,
+                status="clarifying",
+                assistant_text=f"未找到审批计划 {command.planId}，请确认 planId 是否正确。",
+            )
+        if plan.status == "expired":
+            return self._publish_static_reply(
+                session_id=session_id,
+                run_id=run_id,
+                assistant_message_id=assistant_message_id,
+                status="clarifying",
+                assistant_text=f"审批计划 {plan.planId} 已过期，请重新发起审批请求。",
+            )
+        if command.commandType == "cancel":
+            if plan.status in TERMINAL_APPROVAL_PLAN_STATUSES:
+                return self._publish_static_reply(
+                    session_id=session_id,
+                    run_id=run_id,
+                    assistant_message_id=assistant_message_id,
+                    status="clarifying",
+                    assistant_text=f"审批计划 {plan.planId} 当前状态为 {plan.status}，不能再取消。",
+                )
+            return self.cancel_pending_approval_plan(
+                session_id=session_id,
+                run_id=run_id,
+                assistant_message_id=assistant_message_id,
+                plan=plan,
+            )
+        if plan.status not in ACTIVE_APPROVAL_PLAN_STATUSES:
+            return self._publish_static_reply(
+                session_id=session_id,
+                run_id=run_id,
+                assistant_message_id=assistant_message_id,
+                status="clarifying",
+                assistant_text=f"审批计划 {plan.planId} 当前状态为 {plan.status}，不能继续执行。",
+            )
+        if command.commandType == "verify" and plan.status != "pending_confirmation":
+            return self._publish_static_reply(
+                session_id=session_id,
+                run_id=run_id,
+                assistant_message_id=assistant_message_id,
+                status="clarifying",
+                assistant_text=f"审批计划 {plan.planId} 当前状态为 {plan.status}，不能再次执行 dry-run。",
+            )
+        if command.commandType == "confirm" and self._approval_dry_run_only:
+            return self._publish_static_reply(
+                session_id=session_id,
+                run_id=run_id,
+                assistant_message_id=assistant_message_id,
+                status="clarifying",
+                assistant_text="当前环境处于 dry-run only 灰度期，暂不允许真实提交。请先执行验证审批计划命令。",
+            )
+        if command.commandType == "confirm" and plan.approvalOpinionSource == "suggested_from_109":
+            return self._publish_static_reply(
+                session_id=session_id,
+                run_id=run_id,
+                assistant_message_id=assistant_message_id,
+                status="clarifying",
+                assistant_text=(
+                    f"审批计划 {plan.planId} 当前审批意见仍是系统建议稿，不能直接真实提交。"
+                    "请重新发起审批请求并补充最终审批意见。"
+                ),
+            )
+        if command.commandType == "confirm":
+            self._update_plan_status(session_id=session_id, plan_id=plan.planId, status="submit_requested")
+            plan = self._approval_plan_store.get_plan(session_id, plan.planId) or plan
+        return self.execute_pending_approval_plan(
+            session_id=session_id,
+            run_id=run_id,
+            assistant_message_id=assistant_message_id,
+            plan=plan,
+            dry_run=command.commandType == "verify",
+        )
 
     def route_turn(
         self,
@@ -993,6 +1658,14 @@ class ChatService:
             )
             return None
 
+        if decision.route == "approval_prepare":
+            return self.prepare_approval_plan(
+                session_id=session_id,
+                run_id=run_id,
+                assistant_message_id=assistant_message_id,
+                decision=decision,
+            )
+
         loaded_skill_contexts = self._load_selected_skill_contexts(decision)
         tool_results: list[ToolExecutionResult] = []
         if decision.route == "tool_first" and not decision.requires_clarification:
@@ -1065,7 +1738,16 @@ class ChatService:
         session = self._store.get_session(session_id)
         run_workspace = self._resolve_run_workspace(session)
 
-        if self._router_enabled:
+        approval_outcome = self.try_handle_approval_confirmation_command(
+            session_id=session_id,
+            run_id=run_id,
+            assistant_message_id=assistant_message_id,
+            latest_user_message=latest_user_message,
+        )
+
+        if approval_outcome is not None:
+            outcome = approval_outcome
+        elif self._router_enabled:
             outcome = self._execute_structured_turn(
                 run_id=run_id,
                 session_id=session_id,
@@ -1175,6 +1857,8 @@ class ChatService:
             "provider": self._provider_config.provider,
             "baseUrl": self._provider_config.base_url,
             "model": self._provider_config.model,
+            "routerModel": self._provider_config.router_model,
+            "routerReasoningEffort": self._provider_config.router_reasoning_effort,
             "timeoutSeconds": self._provider_config.timeout_seconds,
             "maxOutputTokens": self._provider_config.max_output_tokens,
             "apiKeyEnv": self._provider_config.api_key_env,
@@ -1183,6 +1867,9 @@ class ChatService:
             "codexCliResolvedPath": codex_path or "",
             "workspaceDir": str(self._provider_config.workspace_dir),
             "routerEnabled": self._router_enabled,
+            "approvalEnabled": self._approval_enabled,
+            "approvalDryRunOnly": self._approval_dry_run_only,
+            "approvalPlanTtlSeconds": self._approval_plan_ttl_seconds,
         }
 
     def get_health(self) -> dict[str, Any]:
@@ -1213,7 +1900,12 @@ class ChatService:
             "apiKeyConfigured": key_ok,
             "provider": self._provider_config.provider,
             "model": self._provider_config.model,
+            "routerModel": self._provider_config.router_model,
+            "routerReasoningEffort": self._provider_config.router_reasoning_effort,
             "routerEnabled": self._router_enabled,
+            "approvalEnabled": self._approval_enabled,
+            "approvalDryRunOnly": self._approval_dry_run_only,
+            "approvalPlanTtlSeconds": self._approval_plan_ttl_seconds,
         }
 
 

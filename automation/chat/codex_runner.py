@@ -110,7 +110,10 @@ def _build_exec_command(
     config: ChatProviderConfig,
     workspace_dir: Path,
     output_schema_path: Path | None = None,
+    model_override: str | None = None,
+    reasoning_effort_override: str | None = None,
 ) -> list[str]:
+    selected_model = (model_override or "").strip() or config.model
     command = [
         codex_cli_path,
         "exec",
@@ -121,8 +124,11 @@ def _build_exec_command(
         "--cd",
         str(workspace_dir),
         "-m",
-        config.model,
+        selected_model,
     ]
+    selected_reasoning_effort = (reasoning_effort_override or "").strip().lower()
+    if selected_reasoning_effort:
+        command.extend(["-c", f'model_reasoning_effort="{selected_reasoning_effort}"'])
     if _supports_exec_option(codex_cli_path, "--ask-for-approval"):
         command.extend(["--ask-for-approval", "never"])
     if output_schema_path is not None:
@@ -375,11 +381,15 @@ def run_router_exec(
     )
 
     try:
+        router_model = config.router_model.strip() or config.model
+        router_reasoning_effort = config.router_reasoning_effort.strip()
         command = _build_exec_command(
             codex_cli_path=codex_cli_path,
             config=config,
             workspace_dir=workspace_dir,
             output_schema_path=schema_path,
+            model_override=router_model,
+            reasoning_effort_override=router_reasoning_effort,
         )
         process = _start_exec_process(
             command=command,

@@ -19,6 +19,8 @@ class ChatProviderConfig:
     api_key: str
     codex_cli_executable: str
     workspace_dir: Path
+    router_model: str = ""
+    router_reasoning_effort: str = "low"
 
 
 def _resolve_workspace_dir(raw_path: str | None) -> Path:
@@ -53,6 +55,12 @@ def load_chat_provider_config(settings: Settings) -> ChatProviderConfig:
         api_key = settings.ai.api_key.strip()
     codex_cli_executable = os.getenv("CLAWCHECK_CODEX_CLI", "codex").strip() or "codex"
     workspace_dir = _resolve_workspace_dir(os.getenv("CLAWCHECK_CHAT_WORKDIR"))
+    router_model = os.getenv("CLAWCHECK_CHAT_ROUTER_MODEL", "").strip() or model
+    router_reasoning_effort = (
+        os.getenv("CLAWCHECK_CHAT_ROUTER_REASONING_EFFORT", "low").strip().lower() or "low"
+    )
+    if router_reasoning_effort not in {"minimal", "low", "medium", "high"}:
+        router_reasoning_effort = "low"
 
     return ChatProviderConfig(
         provider=provider,
@@ -64,4 +72,6 @@ def load_chat_provider_config(settings: Settings) -> ChatProviderConfig:
         api_key=api_key,
         codex_cli_executable=codex_cli_executable,
         workspace_dir=workspace_dir,
+        router_model=router_model,
+        router_reasoning_effort=router_reasoning_effort,
     )

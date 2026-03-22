@@ -67,8 +67,26 @@ function getRunStatusLabel(status: string): string {
   if (status === "composing") {
     return "组织答案中";
   }
+  if (status === "approval_preparing") {
+    return "生成审批计划中";
+  }
+  if (status === "approval_confirmation_required") {
+    return "等待审批确认";
+  }
+  if (status === "approval_dry_running") {
+    return "审批连通验证中";
+  }
+  if (status === "approval_submitting") {
+    return "审批提交中";
+  }
   if (status === "cancel_requested") {
     return "取消中";
+  }
+  if (status === "succeeded") {
+    return "已完成";
+  }
+  if (status === "failed") {
+    return "执行失败";
   }
   return status || "-";
 }
@@ -348,6 +366,14 @@ export function ChatWorkspacePage() {
             Codex CLI: {health?.codexCliAvailable ? "Available" : "Unavailable"}
           </Typography>
           <Typography variant="body2">Router: {configSummary?.routerEnabled ? "Enabled" : "Disabled"}</Typography>
+          <Typography variant="body2">
+            Approval:{" "}
+            {configSummary?.approvalEnabled
+              ? configSummary?.approvalDryRunOnly
+                ? "Enabled (Dry-run only)"
+                : "Enabled (Submit allowed)"
+              : "Disabled"}
+          </Typography>
           <Typography variant="body2">Run status: {getRunStatusLabel(runStatus)}</Typography>
         </Stack>
         <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>

@@ -6,6 +6,7 @@ import unittest
 
 from automation.pages.login_page import LoginPage
 from automation.scripts.run import ensure_login
+from automation.utils.login_resilience import ensure_login_with_retry
 from automation.utils.playwright_helpers import save_screenshot
 from automation.utils.retry import retry_call
 
@@ -149,7 +150,7 @@ class LoginPageNavigationResilienceTest(unittest.TestCase):
             page.goto_calls,
             [
                 ("https://hr.onewo.com/ierp/?formId=home_page", "domcontentloaded"),
-                ("https://hr.onewo.com/ierp/?formId=home_page", "domcontentloaded"),
+                ("https://thr.onewo.com:8443/ierp/?formId=home_page", "domcontentloaded"),
             ],
         )
         self.assertEqual(page.wait_for_timeout_calls, [LoginPage._OPEN_RETRY_WAIT_MS])
@@ -161,10 +162,7 @@ class LoginPageNavigationResilienceTest(unittest.TestCase):
         logger = _FakeLogger()
         page = _FakePage(
             url="about:blank",
-            goto_results=[
-                "chrome-error://chromewebdata/",
-                "chrome-error://chromewebdata/",
-            ],
+            goto_results=["chrome-error://chromewebdata/"] * LoginPage._OPEN_RETRY_COUNT,
         )
         login_page = LoginPage(
             home_url="https://hr.onewo.com/ierp/?formId=home_page",
@@ -179,10 +177,39 @@ class LoginPageNavigationResilienceTest(unittest.TestCase):
 
         self.assertIn("Unable to open login entry page after navigation retries", str(ctx.exception))
         self.assertIn("Target URL: https://hr.onewo.com/ierp/?formId=home_page", str(ctx.exception))
+        self.assertIn("attempted URLs:", str(ctx.exception))
         self.assertIn("current URL: chrome-error://chromewebdata/", str(ctx.exception))
         self.assertEqual(len(page.goto_calls), LoginPage._OPEN_RETRY_COUNT)
-        self.assertEqual(page.wait_for_timeout_calls, [LoginPage._OPEN_RETRY_WAIT_MS])
+        self.assertEqual(page.wait_for_timeout_calls, [LoginPage._OPEN_RETRY_WAIT_MS] * (LoginPage._OPEN_RETRY_COUNT - 1))
         self.assertEqual(len(logger.warnings), LoginPage._OPEN_RETRY_COUNT)
+
+
+class SharedLoginResilienceHelperTest(unittest.TestCase):
+    def test_ensure_login_with_retry_recreates_closed_page(self) -> None:
+        context = _FakeContext()
+        initial_page = _FakePage(context=context)
+        login_page = _FakeLoginPage(initial_page)
+        home_page = _FakePageHolder(initial_page)
+        events: list[str] = []
+
+        final_page = ensure_login_with_retry(
+            login_page=login_page,
+            username="tester",
+            password="tester",
+            require_manual_captcha=False,
+            retries=1,
+            wait_sec=0,
+            bound_pages=[login_page, home_page],
+            event_callback=lambda message, **_: events.append(message),
+        )
+
+        self.assertEqual(login_page.login_calls, 2)
+        self.assertIs(final_page, context.new_pages[0])
+        self.assertIs(login_page.page, final_page)
+        self.assertIs(home_page.page, final_page)
+        self.assertIn("login_attempt_failed", events)
+        self.assertIn("login_retry_page_recreated", events)
+        self.assertIn("login_attempt_succeeded", events)
 
 
 class SaveScreenshotResilienceTest(unittest.TestCase):

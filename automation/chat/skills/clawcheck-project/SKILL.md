@@ -7,6 +7,7 @@ domain: workbench
 references:
   - process-workbench
   - collect-workbench
+  - process-approval
   - answer-policy
 ---
 

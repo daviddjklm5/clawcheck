@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from pathlib import Path
 import threading
 from typing import Any
@@ -8,6 +9,8 @@ from unittest.mock import patch
 
 from pydantic import BaseModel, ConfigDict
 
+from automation.chat.approval_models import ApprovalRequest
+from automation.chat.approval_plan_store import ApprovalPlanStore
 from automation.chat.codex_runner import CodexExecutionResult, RouterExecutionResult
 from automation.chat.provider_config import ChatProviderConfig
 from automation.chat.service import ChatService, _SessionRunState
@@ -197,12 +200,14 @@ def _build_skill_loader(tmp_path: Path) -> SkillLoader:
         "status: active\n"
         "references:\n"
         "  - process-workbench\n"
+        "  - process-approval\n"
         "  - answer-policy\n"
         "---\n\n"
         "test skill body\n",
         encoding="utf-8",
     )
     (reference_dir / "process-workbench.md").write_text("process ref", encoding="utf-8")
+    (reference_dir / "process-approval.md").write_text("approval ref", encoding="utf-8")
     (reference_dir / "answer-policy.md").write_text("answer policy", encoding="utf-8")
     return SkillLoader(
         root_dir=tmp_path / "skills",
@@ -220,6 +225,31 @@ def _attach_active_run(service: ChatService, *, session_id: str, user_message_id
         thread=_FakeThread(),  # type: ignore[arg-type]
         status="queued",
     )
+
+
+def _build_process_document_detail(
+    *,
+    document_no: str = "RA-20260310-00019845",
+    todo_status: str = "待处理",
+    document_status: str = "审批中",
+) -> dict[str, Any]:
+    return {
+        "documentNo": document_no,
+        "overviewFields": [
+            {"label": "单据编号", "value": document_no},
+            {"label": "单据状态", "value": document_status},
+            {"label": "待办处理状态", "value": todo_status},
+            {"label": "评估批次号", "value": "audit_20260322_103000"},
+        ],
+        "feedbackOverview": {
+            "summaryConclusionLabel": "加强审核",
+            "feedbackGroups": [
+                {"summaryLines": ["缺战区人行审批", "建议拒绝或补齐审批链"]},
+                {"summary": "组织范围扩大，需补充授权依据"},
+            ],
+        },
+        "notes": [],
+    }
 
 
 def test_execute_turn_uses_process_workbench_templated_reply_for_pending_count_query(tmp_path: Path) -> None:
@@ -531,3 +561,759 @@ def test_execute_turn_falls_back_to_general_chat_when_router_fails(tmp_path: Pat
         )
 
     assert fake_store.messages["a1"]["content"] == "这是 clawcheck 项目的通用介绍。"
+
+
+def test_execute_turn_creates_approval_plan_for_approve_request(tmp_path: Path) -> None:
+    fake_store = _FakeChatStore()
+    fake_store.create_session(
+        session_id="s1",
+        title="Test",
+        workspace_dir=str(Path.cwd()),
+        model_provider="openai_compatible",
+        model_name="gpt-test",
+    )
+    user_message = fake_store.create_message(
+        message_id="u1",
+        session_id="s1",
+        role="user",
+        content="帮我批准单据 RA-20260310-00019845，审批意见：同意，按当前职责范围处理。",
+        token_count=1,
+    )
+    assistant_message = fake_store.create_message(
+        message_id="a1",
+        session_id="s1",
+        role="assistant",
+        content="",
+        token_count=0,
+    )
+
+    with patch.dict(
+        os.environ,
+        {
+            "CLAWCHECK_CHAT_APPROVAL_ENABLED": "true",
+            "CLAWCHECK_CHAT_APPROVAL_DRY_RUN_ONLY": "true",
+            "CLAWCHECK_CHAT_APPROVAL_PLAN_TTL_SECONDS": "600",
+        },
+        clear=False,
+    ):
+        service = ChatService(
+            _build_settings(),
+            store=fake_store,  # type: ignore[arg-type]
+            provider_config=_build_provider_config(),
+            skill_loader=_build_skill_loader(tmp_path),
+            tool_registry=ToolRegistry({}),
+        )
+    service._approval_plan_store = ApprovalPlanStore(tmp_path / "runtime" / "chat" / "approval-plans")
+    _attach_active_run(
+        service,
+        session_id="s1",
+        user_message_id=user_message["messageId"],
+        assistant_message_id=assistant_message["messageId"],
+    )
+
+    with patch(
+        "automation.chat.service.run_router_exec",
+        return_value=RouterExecutionResult(
+            status="succeeded",
+            decision={
+                "route": "approval_prepare",
+                "selectedSkills": ["clawcheck-project"],
+                "selectedReferences": ["process-approval"],
+                "toolCalls": [],
+                "answerMode": "templated",
+                "confidence": 0.95,
+                "missingInputs": [],
+                "clarificationQuestion": "",
+                "reason": "approval intent",
+                "approvalRequest": {
+                    "documentNo": "RA-20260310-00019845",
+                    "action": "approve",
+                    "approvalOpinion": "同意，按当前职责范围处理。",
+                    "dryRun": False,
+                },
+            },
+            exit_code=0,
+            raw_output="{}",
+            error_message="",
+        ),
+    ), patch(
+        "automation.chat.service.get_process_document_detail",
+        return_value=_build_process_document_detail(),
+    ):
+        service._execute_turn(
+            run_id="run-1",
+            session_id="s1",
+            user_message_id=user_message["messageId"],
+            assistant_message_id=assistant_message["messageId"],
+        )
+
+    content = fake_store.messages["a1"]["content"]
+    assert "已生成待确认审批计划 approval-plan-" in content
+    assert "确认命令：确认审批计划 approval-plan-" in content
+    assert "验证命令：验证审批计划 approval-plan-" in content
+    plan_files = list((tmp_path / "runtime" / "chat" / "approval-plans").glob("s1_approval-plan-*.json"))
+    assert len(plan_files) == 1
+
+
+def test_execute_turn_returns_operable_hint_when_chat_approval_disabled(tmp_path: Path) -> None:
+    fake_store = _FakeChatStore()
+    fake_store.create_session(
+        session_id="s1",
+        title="Test",
+        workspace_dir=str(Path.cwd()),
+        model_provider="openai_compatible",
+        model_name="gpt-test",
+    )
+    user_message = fake_store.create_message(
+        message_id="u1",
+        session_id="s1",
+        role="user",
+        content="请批准单据 RA-20260310-00019845，意见：同意",
+        token_count=1,
+    )
+    assistant_message = fake_store.create_message(
+        message_id="a1",
+        session_id="s1",
+        role="assistant",
+        content="",
+        token_count=0,
+    )
+
+    with patch.dict(os.environ, {"CLAWCHECK_CHAT_APPROVAL_ENABLED": "false"}, clear=False):
+        service = ChatService(
+            _build_settings(),
+            store=fake_store,  # type: ignore[arg-type]
+            provider_config=_build_provider_config(),
+            skill_loader=_build_skill_loader(tmp_path),
+            tool_registry=ToolRegistry({}),
+        )
+    _attach_active_run(
+        service,
+        session_id="s1",
+        user_message_id=user_message["messageId"],
+        assistant_message_id=assistant_message["messageId"],
+    )
+
+    with patch(
+        "automation.chat.service.run_router_exec",
+        return_value=RouterExecutionResult(
+            status="succeeded",
+            decision={
+                "route": "approval_prepare",
+                "selectedSkills": ["clawcheck-project"],
+                "selectedReferences": ["process-approval"],
+                "toolCalls": [],
+                "answerMode": "templated",
+                "confidence": 0.95,
+                "missingInputs": [],
+                "clarificationQuestion": "",
+                "reason": "approval intent",
+                "approvalRequest": {
+                    "documentNo": "RA-20260310-00019845",
+                    "action": "approve",
+                    "approvalOpinion": "同意",
+                    "dryRun": False,
+                },
+            },
+            exit_code=0,
+            raw_output="{}",
+            error_message="",
+        ),
+    ):
+        service._execute_turn(
+            run_id="run-1",
+            session_id="s1",
+            user_message_id=user_message["messageId"],
+            assistant_message_id=assistant_message["messageId"],
+        )
+
+    content = fake_store.messages["a1"]["content"]
+    assert "CLAWCHECK_CHAT_APPROVAL_ENABLED=true" in content
+    assert "CLAWCHECK_CHAT_APPROVAL_DRY_RUN_ONLY=true" in content
+    assert "false" in content
+
+
+def test_execute_turn_generates_suggested_reject_plan_without_direct_submit(tmp_path: Path) -> None:
+    fake_store = _FakeChatStore()
+    fake_store.create_session(
+        session_id="s1",
+        title="Test",
+        workspace_dir=str(Path.cwd()),
+        model_provider="openai_compatible",
+        model_name="gpt-test",
+    )
+    user_message = fake_store.create_message(
+        message_id="u1",
+        session_id="s1",
+        role="user",
+        content="帮我驳回单据 RA-20260310-00019845",
+        token_count=1,
+    )
+    assistant_message = fake_store.create_message(
+        message_id="a1",
+        session_id="s1",
+        role="assistant",
+        content="",
+        token_count=0,
+    )
+
+    with patch.dict(
+        os.environ,
+        {"CLAWCHECK_CHAT_APPROVAL_ENABLED": "true"},
+        clear=False,
+    ):
+        service = ChatService(
+            _build_settings(),
+            store=fake_store,  # type: ignore[arg-type]
+            provider_config=_build_provider_config(),
+            skill_loader=_build_skill_loader(tmp_path),
+            tool_registry=ToolRegistry({}),
+        )
+    service._approval_plan_store = ApprovalPlanStore(tmp_path / "runtime" / "chat" / "approval-plans")
+    _attach_active_run(
+        service,
+        session_id="s1",
+        user_message_id=user_message["messageId"],
+        assistant_message_id=assistant_message["messageId"],
+    )
+
+    with patch(
+        "automation.chat.service.run_router_exec",
+        return_value=RouterExecutionResult(
+            status="succeeded",
+            decision={
+                "route": "approval_prepare",
+                "selectedSkills": ["clawcheck-project"],
+                "selectedReferences": ["process-approval"],
+                "toolCalls": [],
+                "answerMode": "templated",
+                "confidence": 0.95,
+                "missingInputs": [],
+                "clarificationQuestion": "",
+                "reason": "reject intent",
+                "approvalRequest": {
+                    "documentNo": "RA-20260310-00019845",
+                    "action": "reject",
+                    "approvalOpinion": "",
+                    "dryRun": False,
+                },
+            },
+            exit_code=0,
+            raw_output="{}",
+            error_message="",
+        ),
+    ), patch(
+        "automation.chat.service.get_process_document_detail",
+        return_value=_build_process_document_detail(),
+    ):
+        service._execute_turn(
+            run_id="run-1",
+            session_id="s1",
+            user_message_id=user_message["messageId"],
+            assistant_message_id=assistant_message["messageId"],
+        )
+
+    assert "当前审批意见为系统建议稿，不能直接真实提交。" in fake_store.messages["a1"]["content"]
+    assert "缺战区人行审批" in fake_store.messages["a1"]["content"]
+
+
+def test_execute_turn_verify_command_executes_dry_run_on_pending_plan(tmp_path: Path) -> None:
+    fake_store = _FakeChatStore()
+    fake_store.create_session(
+        session_id="s1",
+        title="Test",
+        workspace_dir=str(Path.cwd()),
+        model_provider="openai_compatible",
+        model_name="gpt-test",
+    )
+
+    with patch.dict(
+        os.environ,
+        {"CLAWCHECK_CHAT_APPROVAL_ENABLED": "true"},
+        clear=False,
+    ):
+        service = ChatService(
+            _build_settings(),
+            store=fake_store,  # type: ignore[arg-type]
+            provider_config=_build_provider_config(),
+            skill_loader=_build_skill_loader(tmp_path),
+            tool_registry=ToolRegistry({}),
+        )
+    service._approval_plan_store = ApprovalPlanStore(tmp_path / "runtime" / "chat" / "approval-plans")
+
+    plan = service._create_approval_plan(
+        session_id="s1",
+        request=ApprovalRequest(
+            documentNo="RA-20260310-00019845",
+            action="approve",
+            approvalOpinion="同意，按当前职责范围处理。",
+            dryRun=False,
+        ),
+        approval_opinion="同意，按当前职责范围处理。",
+        approval_opinion_source="user_input",
+        document_detail=_build_process_document_detail(),
+    )
+    service._approval_plan_store.save_plan(plan)
+
+    user_message = fake_store.create_message(
+        message_id="u1",
+        session_id="s1",
+        role="user",
+        content=f"验证审批计划 {plan.planId}",
+        token_count=1,
+    )
+    assistant_message = fake_store.create_message(
+        message_id="a1",
+        session_id="s1",
+        role="assistant",
+        content="",
+        token_count=0,
+    )
+    _attach_active_run(
+        service,
+        session_id="s1",
+        user_message_id=user_message["messageId"],
+        assistant_message_id=assistant_message["messageId"],
+    )
+
+    with patch(
+        "automation.chat.service.get_process_document_detail",
+        return_value=_build_process_document_detail(),
+    ), patch(
+        "automation.chat.service.approve_process_document",
+        return_value={
+            "documentNo": plan.documentNo,
+            "action": "approve",
+            "approvalOpinion": plan.approvalOpinion,
+            "dryRun": True,
+            "status": "succeeded",
+            "confirmationType": "dry_run",
+            "message": "dry run ok",
+            "logFile": "automation/logs/approval.json",
+            "screenshotFile": "",
+        },
+    ):
+        service._execute_turn(
+            run_id="run-1",
+            session_id="s1",
+            user_message_id=user_message["messageId"],
+            assistant_message_id=assistant_message["messageId"],
+        )
+
+    assert "dry-run：是" in fake_store.messages["a1"]["content"]
+    saved_plan = service._approval_plan_store.get_plan("s1", plan.planId)
+    assert saved_plan is not None
+    assert saved_plan.status == "dry_run_succeeded"
+
+
+def test_execute_turn_verify_short_phrase_uses_single_pending_plan(tmp_path: Path) -> None:
+    fake_store = _FakeChatStore()
+    fake_store.create_session(
+        session_id="s1",
+        title="Test",
+        workspace_dir=str(Path.cwd()),
+        model_provider="openai_compatible",
+        model_name="gpt-test",
+    )
+
+    with patch.dict(
+        os.environ,
+        {"CLAWCHECK_CHAT_APPROVAL_ENABLED": "true"},
+        clear=False,
+    ):
+        service = ChatService(
+            _build_settings(),
+            store=fake_store,  # type: ignore[arg-type]
+            provider_config=_build_provider_config(),
+            skill_loader=_build_skill_loader(tmp_path),
+            tool_registry=ToolRegistry({}),
+        )
+    service._approval_plan_store = ApprovalPlanStore(tmp_path / "runtime" / "chat" / "approval-plans")
+
+    plan = service._create_approval_plan(
+        session_id="s1",
+        request=ApprovalRequest(
+            documentNo="RA-20260310-00019845",
+            action="approve",
+            approvalOpinion="同意",
+            dryRun=False,
+        ),
+        approval_opinion="同意",
+        approval_opinion_source="user_input",
+        document_detail=_build_process_document_detail(),
+    )
+    service._approval_plan_store.save_plan(plan)
+
+    user_message = fake_store.create_message(
+        message_id="u1",
+        session_id="s1",
+        role="user",
+        content="请先验证",
+        token_count=1,
+    )
+    assistant_message = fake_store.create_message(
+        message_id="a1",
+        session_id="s1",
+        role="assistant",
+        content="",
+        token_count=0,
+    )
+    _attach_active_run(
+        service,
+        session_id="s1",
+        user_message_id=user_message["messageId"],
+        assistant_message_id=assistant_message["messageId"],
+    )
+
+    with patch(
+        "automation.chat.service.get_process_document_detail",
+        return_value=_build_process_document_detail(),
+    ), patch(
+        "automation.chat.service.approve_process_document",
+        return_value={
+            "documentNo": plan.documentNo,
+            "action": "approve",
+            "approvalOpinion": plan.approvalOpinion,
+            "dryRun": True,
+            "status": "succeeded",
+            "confirmationType": "dry_run",
+            "message": "dry run ok",
+            "logFile": "automation/logs/approval.json",
+            "screenshotFile": "",
+        },
+    ):
+        service._execute_turn(
+            run_id="run-1",
+            session_id="s1",
+            user_message_id=user_message["messageId"],
+            assistant_message_id=assistant_message["messageId"],
+        )
+
+    assert "dry-run" in fake_store.messages["a1"]["content"]
+    saved_plan = service._approval_plan_store.get_plan("s1", plan.planId)
+    assert saved_plan is not None
+    assert saved_plan.status == "dry_run_succeeded"
+
+
+def test_execute_turn_confirm_command_with_label_prefix_is_supported(tmp_path: Path) -> None:
+    fake_store = _FakeChatStore()
+    fake_store.create_session(
+        session_id="s1",
+        title="Test",
+        workspace_dir=str(Path.cwd()),
+        model_provider="openai_compatible",
+        model_name="gpt-test",
+    )
+
+    with patch.dict(
+        os.environ,
+        {
+            "CLAWCHECK_CHAT_APPROVAL_ENABLED": "true",
+            "CLAWCHECK_CHAT_APPROVAL_DRY_RUN_ONLY": "false",
+        },
+        clear=False,
+    ):
+        service = ChatService(
+            _build_settings(),
+            store=fake_store,  # type: ignore[arg-type]
+            provider_config=_build_provider_config(),
+            skill_loader=_build_skill_loader(tmp_path),
+            tool_registry=ToolRegistry({}),
+        )
+    service._approval_plan_store = ApprovalPlanStore(tmp_path / "runtime" / "chat" / "approval-plans")
+
+    plan = service._create_approval_plan(
+        session_id="s1",
+        request=ApprovalRequest(
+            documentNo="RA-20260310-00019845",
+            action="approve",
+            approvalOpinion="同意",
+            dryRun=False,
+        ),
+        approval_opinion="同意",
+        approval_opinion_source="user_input",
+        document_detail=_build_process_document_detail(),
+    )
+    service._approval_plan_store.save_plan(plan)
+
+    user_message = fake_store.create_message(
+        message_id="u1",
+        session_id="s1",
+        role="user",
+        content=f"确认命令：确认审批计划 {plan.planId}",
+        token_count=1,
+    )
+    assistant_message = fake_store.create_message(
+        message_id="a1",
+        session_id="s1",
+        role="assistant",
+        content="",
+        token_count=0,
+    )
+    _attach_active_run(
+        service,
+        session_id="s1",
+        user_message_id=user_message["messageId"],
+        assistant_message_id=assistant_message["messageId"],
+    )
+
+    with patch(
+        "automation.chat.service.get_process_document_detail",
+        return_value=_build_process_document_detail(),
+    ), patch(
+        "automation.chat.service.approve_process_document",
+        return_value={
+            "documentNo": plan.documentNo,
+            "action": "approve",
+            "approvalOpinion": plan.approvalOpinion,
+            "dryRun": False,
+            "status": "succeeded",
+            "confirmationType": "submitted",
+            "message": "submit ok",
+            "logFile": "automation/logs/approval_submit.json",
+            "screenshotFile": "",
+        },
+    ):
+        service._execute_turn(
+            run_id="run-1",
+            session_id="s1",
+            user_message_id=user_message["messageId"],
+            assistant_message_id=assistant_message["messageId"],
+        )
+
+    assert "dry-run" in fake_store.messages["a1"]["content"]
+    saved_plan = service._approval_plan_store.get_plan("s1", plan.planId)
+    assert saved_plan is not None
+    assert saved_plan.status == "submitted"
+
+
+def test_execute_turn_verify_short_phrase_with_multiple_pending_plans_requires_plan_id(tmp_path: Path) -> None:
+    fake_store = _FakeChatStore()
+    fake_store.create_session(
+        session_id="s1",
+        title="Test",
+        workspace_dir=str(Path.cwd()),
+        model_provider="openai_compatible",
+        model_name="gpt-test",
+    )
+
+    with patch.dict(
+        os.environ,
+        {"CLAWCHECK_CHAT_APPROVAL_ENABLED": "true"},
+        clear=False,
+    ):
+        service = ChatService(
+            _build_settings(),
+            store=fake_store,  # type: ignore[arg-type]
+            provider_config=_build_provider_config(),
+            skill_loader=_build_skill_loader(tmp_path),
+            tool_registry=ToolRegistry({}),
+        )
+    service._approval_plan_store = ApprovalPlanStore(tmp_path / "runtime" / "chat" / "approval-plans")
+
+    for idx in range(2):
+        plan = service._create_approval_plan(
+            session_id="s1",
+            request=ApprovalRequest(
+                documentNo=f"RA-20260310-0001984{idx}",
+                action="approve",
+                approvalOpinion="同意",
+                dryRun=False,
+            ),
+            approval_opinion="同意",
+            approval_opinion_source="user_input",
+            document_detail=_build_process_document_detail(document_no=f"RA-20260310-0001984{idx}"),
+        )
+        service._approval_plan_store.save_plan(plan)
+
+    user_message = fake_store.create_message(
+        message_id="u1",
+        session_id="s1",
+        role="user",
+        content="请先验证",
+        token_count=1,
+    )
+    assistant_message = fake_store.create_message(
+        message_id="a1",
+        session_id="s1",
+        role="assistant",
+        content="",
+        token_count=0,
+    )
+    _attach_active_run(
+        service,
+        session_id="s1",
+        user_message_id=user_message["messageId"],
+        assistant_message_id=assistant_message["messageId"],
+    )
+
+    with patch("automation.chat.service.approve_process_document") as mocked_approve:
+        service._execute_turn(
+            run_id="run-1",
+            session_id="s1",
+            user_message_id=user_message["messageId"],
+            assistant_message_id=assistant_message["messageId"],
+        )
+
+    assert "多个待确认审批计划" in fake_store.messages["a1"]["content"]
+    mocked_approve.assert_not_called()
+
+
+def test_execute_turn_blocks_confirm_for_suggested_plan(tmp_path: Path) -> None:
+    fake_store = _FakeChatStore()
+    fake_store.create_session(
+        session_id="s1",
+        title="Test",
+        workspace_dir=str(Path.cwd()),
+        model_provider="openai_compatible",
+        model_name="gpt-test",
+    )
+
+    with patch.dict(
+        os.environ,
+        {
+            "CLAWCHECK_CHAT_APPROVAL_ENABLED": "true",
+            "CLAWCHECK_CHAT_APPROVAL_DRY_RUN_ONLY": "false",
+        },
+        clear=False,
+    ):
+        service = ChatService(
+            _build_settings(),
+            store=fake_store,  # type: ignore[arg-type]
+            provider_config=_build_provider_config(),
+            skill_loader=_build_skill_loader(tmp_path),
+            tool_registry=ToolRegistry({}),
+        )
+    service._approval_plan_store = ApprovalPlanStore(tmp_path / "runtime" / "chat" / "approval-plans")
+
+    plan = service._create_approval_plan(
+        session_id="s1",
+        request=ApprovalRequest(documentNo="RA-20260310-00019845", action="reject", approvalOpinion="", dryRun=False),
+        approval_opinion="缺战区人行审批\n建议拒绝或补齐审批链",
+        approval_opinion_source="suggested_from_109",
+        document_detail=_build_process_document_detail(),
+    )
+    service._approval_plan_store.save_plan(plan)
+
+    user_message = fake_store.create_message(
+        message_id="u1",
+        session_id="s1",
+        role="user",
+        content=f"确认审批计划 {plan.planId}",
+        token_count=1,
+    )
+    assistant_message = fake_store.create_message(
+        message_id="a1",
+        session_id="s1",
+        role="assistant",
+        content="",
+        token_count=0,
+    )
+    _attach_active_run(
+        service,
+        session_id="s1",
+        user_message_id=user_message["messageId"],
+        assistant_message_id=assistant_message["messageId"],
+    )
+
+    with patch("automation.chat.service.approve_process_document") as mocked_approve:
+        service._execute_turn(
+            run_id="run-1",
+            session_id="s1",
+            user_message_id=user_message["messageId"],
+            assistant_message_id=assistant_message["messageId"],
+        )
+
+    assert "当前审批意见仍是系统建议稿" in fake_store.messages["a1"]["content"]
+    mocked_approve.assert_not_called()
+
+
+def test_execute_turn_confirm_command_executes_real_submit_when_allowed(tmp_path: Path) -> None:
+    fake_store = _FakeChatStore()
+    fake_store.create_session(
+        session_id="s1",
+        title="Test",
+        workspace_dir=str(Path.cwd()),
+        model_provider="openai_compatible",
+        model_name="gpt-test",
+    )
+
+    with patch.dict(
+        os.environ,
+        {
+            "CLAWCHECK_CHAT_APPROVAL_ENABLED": "true",
+            "CLAWCHECK_CHAT_APPROVAL_DRY_RUN_ONLY": "false",
+        },
+        clear=False,
+    ):
+        service = ChatService(
+            _build_settings(),
+            store=fake_store,  # type: ignore[arg-type]
+            provider_config=_build_provider_config(),
+            skill_loader=_build_skill_loader(tmp_path),
+            tool_registry=ToolRegistry({}),
+        )
+
+    plan = service._create_approval_plan(
+        session_id="s1",
+        request=ApprovalRequest(
+            documentNo="RA-20260310-00019845",
+            action="approve",
+            approvalOpinion="同意，按当前职责范围处理。",
+            dryRun=False,
+        ),
+        approval_opinion="同意，按当前职责范围处理。",
+        approval_opinion_source="user_input",
+        document_detail=_build_process_document_detail(),
+    )
+    service._approval_plan_store.save_plan(plan)
+
+    user_message = fake_store.create_message(
+        message_id="u1",
+        session_id="s1",
+        role="user",
+        content=f"确认审批计划 {plan.planId}",
+        token_count=1,
+    )
+    assistant_message = fake_store.create_message(
+        message_id="a1",
+        session_id="s1",
+        role="assistant",
+        content="",
+        token_count=0,
+    )
+    _attach_active_run(
+        service,
+        session_id="s1",
+        user_message_id=user_message["messageId"],
+        assistant_message_id=assistant_message["messageId"],
+    )
+
+    with patch(
+        "automation.chat.service.get_process_document_detail",
+        return_value=_build_process_document_detail(),
+    ), patch(
+        "automation.chat.service.approve_process_document",
+        return_value={
+            "documentNo": plan.documentNo,
+            "action": "approve",
+            "approvalOpinion": plan.approvalOpinion,
+            "dryRun": False,
+            "status": "succeeded",
+            "confirmationType": "submitted",
+            "message": "submit ok",
+            "logFile": "automation/logs/approval_submit.json",
+            "screenshotFile": "",
+        },
+    ):
+        service._execute_turn(
+            run_id="run-1",
+            session_id="s1",
+            user_message_id=user_message["messageId"],
+            assistant_message_id=assistant_message["messageId"],
+        )
+
+    assert "dry-run：否" in fake_store.messages["a1"]["content"]
+    saved_plan = service._approval_plan_store.get_plan("s1", plan.planId)
+    assert saved_plan is not None
+    assert saved_plan.status == "submitted"
