@@ -12,20 +12,6 @@ $ErrorActionPreference = "Stop"
 
 . (Join-Path $PSScriptRoot "dev_runtime_helpers.ps1")
 
-function Invoke-PythonCommand {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$PythonExe,
-        [Parameter(Mandatory = $true)]
-        [string[]]$ArgumentList
-    )
-
-    $Process = Start-Process -FilePath $PythonExe -ArgumentList $ArgumentList -NoNewWindow -Wait -PassThru
-    if ($Process.ExitCode -ne 0) {
-        exit $Process.ExitCode
-    }
-}
-
 $RepoRoot = Get-RepoRoot -ScriptRoot $PSScriptRoot
 $PythonExe = Resolve-PythonExe -RepoRoot $RepoRoot -VenvDir $VenvDir
 if (-not (Test-Path $PythonExe)) {
@@ -35,15 +21,24 @@ if (-not (Test-Path $PythonExe)) {
 Push-Location $RepoRoot
 try {
     if (-not $SkipRuff) {
-        Invoke-PythonCommand -PythonExe $PythonExe -ArgumentList @("-m", "ruff", "check", "automation", "tests")
+        & $PythonExe -m ruff check automation tests
+        if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+        }
     }
 
     if (-not $SkipCompileAll) {
-        Invoke-PythonCommand -PythonExe $PythonExe -ArgumentList @("-m", "compileall", "automation")
+        & $PythonExe -m compileall automation
+        if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+        }
     }
 
     if (-not $SkipPytest) {
-        Invoke-PythonCommand -PythonExe $PythonExe -ArgumentList @("-m", "pytest", "-q", "-p", "no:unraisableexception")
+        & $PythonExe -m pytest -q -p no:unraisableexception
+        if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+        }
     }
 
     if (-not $SkipWebuiBuild) {
