@@ -35,9 +35,28 @@ try {
     }
 
     if (-not $SkipPytest) {
-        & $PythonExe -m pytest -q -p no:unraisableexception -p no:threadexception
-        if ($LASTEXITCODE -ne 0) {
-            exit $LASTEXITCODE
+        $PytestReportPath = Join-Path ([System.IO.Path]::GetTempPath()) "clawcheck_pytest_junit.xml"
+        Remove-Item $PytestReportPath -ErrorAction SilentlyContinue
+        & $PythonExe -m pytest -q -p no:unraisableexception -p no:threadexception --junitxml $PytestReportPath
+        $PytestExitCode = $LASTEXITCODE
+        if (-not (Test-Path $PytestReportPath)) {
+            exit $PytestExitCode
+        }
+
+        [xml]$PytestReport = Get-Content $PytestReportPath -Raw
+        $SuiteNodes = @($PytestReport.testsuites.testsuite)
+        if ($SuiteNodes.Count -eq 0 -and $null -ne $PytestReport.testsuite) {
+            $SuiteNodes = @($PytestReport.testsuite)
+        }
+
+        $FailedCount = 0
+        $ErrorCount = 0
+        foreach ($Suite in $SuiteNodes) {
+            $FailedCount += [int]$Suite.failures
+            $ErrorCount += [int]$Suite.errors
+        }
+        if ($FailedCount -ne 0 -or $ErrorCount -ne 0) {
+            exit $PytestExitCode
         }
     }
 
