@@ -77,6 +77,13 @@ class ChatProviderConfigTest(unittest.TestCase):
                 "CLAWCHECK_CHAT_WORKDIR": ".",
                 "CLAWCHECK_CHAT_ROUTER_MODEL": "gpt-router-override",
                 "CLAWCHECK_CHAT_ROUTER_REASONING_EFFORT": "medium",
+                "CLAWCHECK_CHAT_EXEC_MODE": "oneshot_exec",
+                "CLAWCHECK_CHAT_GLOBAL_MAX_CONCURRENT_RUNS": "4",
+                "CLAWCHECK_CHAT_RUN_QUEUE_SIZE": "200",
+                "CLAWCHECK_CHAT_SESSION_IDLE_TTL_SECONDS": "900",
+                "CLAWCHECK_CHAT_APP_SERVER_BASE_URL": "",
+                "CLAWCHECK_CHAT_APP_SERVER_TIMEOUT_SECONDS": "60",
+                "CLAWCHECK_CHAT_EXEC_AUTO_FALLBACK": "true",
             }
             with patch.dict(os.environ, env, clear=False):
                 config = load_chat_provider_config(settings)

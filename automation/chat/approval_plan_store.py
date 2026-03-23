@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import datetime
-import json
 from pathlib import Path
 import threading
 from typing import TypeVar
