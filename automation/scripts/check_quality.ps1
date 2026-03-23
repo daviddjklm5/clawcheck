@@ -43,10 +43,24 @@ try {
     }
 
     if (-not $SkipPytest) {
-        Invoke-PythonCommand -PythonExe $PythonExe -ArgumentList @(
-            "-c",
-            "import os,sys,pytest;rc=pytest.main(['-q']);print(f'pytest_main_rc={rc}');sys.stdout.flush();sys.stderr.flush();os._exit(rc)"
-        )
+        $PytestRunnerPath = Join-Path ([System.IO.Path]::GetTempPath()) "clawcheck_pytest_runner.py"
+        @'
+import os
+import sys
+import pytest
+
+rc = pytest.main(["-q"])
+print(f"pytest_main_rc={rc}")
+sys.stdout.flush()
+sys.stderr.flush()
+os._exit(rc)
+'@ | Set-Content -Path $PytestRunnerPath -Encoding utf8
+        try {
+            Invoke-PythonCommand -PythonExe $PythonExe -ArgumentList @($PytestRunnerPath)
+        }
+        finally {
+            Remove-Item $PytestRunnerPath -ErrorAction SilentlyContinue
+        }
     }
 
     if (-not $SkipWebuiBuild) {
