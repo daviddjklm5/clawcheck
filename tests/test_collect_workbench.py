@@ -187,6 +187,59 @@ class CollectWorkbenchTaskTest(unittest.TestCase):
             self.assertIn("--headless", command)
             self.assertIn("--force-recollect", command)
 
+    def test_run_collect_task_marks_no_pending_as_fast_exit(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            task_state = self._build_task_state(
+                temp_dir,
+                task_id="task-empty",
+                requested_document_no="",
+                auto_audit=False,
+                dry_run=False,
+            )
+            task_state["requestedLimit"] = 100
+            collect_workbench._TASK_STATE_BY_ID["task-empty"] = task_state
+            dump_file = Path(str(task_state["dumpFile"]))
+            runtime_settings = SimpleNamespace(runtime=SimpleNamespace(logs_dir=temp_dir))
+
+            with (
+                patch("automation.api.collect_workbench._load_runtime_settings", return_value=(None, runtime_settings)),
+                patch(
+                    "automation.api.collect_workbench.subprocess.run",
+                    return_value=_FakeCompletedProcess(
+                        returncode=0,
+                        stdout="No permission application documents found in todo list; continuing with empty result\n"
+                        "Log file: /tmp/run_collect.log",
+                    ),
+                ),
+                patch(
+                    "automation.api.collect_workbench._load_json_file",
+                    side_effect=lambda path: [] if path == dump_file else None,
+                ),
+                patch("automation.api.collect_workbench._count_from_sidecar", return_value=0),
+            ):
+                collect_workbench._run_collect_task("task-empty")
+
+            final_task = collect_workbench._TASK_STATE_BY_ID["task-empty"]
+            self.assertEqual(final_task["status"], "succeeded")
+            self.assertEqual(final_task["requestedCount"], 0)
+            self.assertEqual(final_task["successCount"], 0)
+            self.assertIn("本轮无待办，已快速结束", str(final_task["message"]))
+
+    def test_start_collect_task_rejects_when_global_collect_lock_exists(self) -> None:
+        runtime_settings = SimpleNamespace(
+            browser=SimpleNamespace(headed=False),
+            runtime=SimpleNamespace(logs_dir="automation/logs"),
+        )
+
+        with (
+            patch("automation.api.collect_workbench._load_runtime_settings", return_value=(None, runtime_settings)),
+            patch("automation.api.collect_workbench.is_collect_execution_locked", return_value=True),
+        ):
+            with self.assertRaises(RuntimeError) as context:
+                collect_workbench.start_collect_task(document_no="", limit=10, dry_run=False)
+
+        self.assertIn("当前已有采集任务在执行", str(context.exception))
+
 
 if __name__ == "__main__":
     unittest.main()

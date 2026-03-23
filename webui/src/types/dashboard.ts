@@ -379,10 +379,34 @@ export interface ProcessApprovalResponse {
   status: string;
   startedAt: string;
   finishedAt: string;
+  durationMs?: number;
   logFile: string;
   screenshotFile: string;
   confirmationType?: string;
   confirmationMessage?: string;
+  message: string;
+}
+
+export interface ProcessBatchApprovalRequest {
+  action: "approve" | "reject";
+  documentNos: string[];
+  dryRun: boolean;
+  headed?: boolean | null;
+}
+
+export interface ProcessBatchApprovalResponse {
+  action: "approve" | "reject" | string;
+  dryRun: boolean;
+  documentNos: string[];
+  totalCount: number;
+  succeededCount: number;
+  failedCount: number;
+  results: ProcessApprovalResponse[];
+  status: string;
+  startedAt: string;
+  finishedAt: string;
+  durationMs: number;
+  logFile: string;
   message: string;
 }
 
@@ -465,6 +489,28 @@ export interface ProcessDashboard {
   documents: ProcessDocumentRow[];
 }
 
+export interface CollectScheduleSummary {
+  enabled: boolean;
+  intervalMinutes: number;
+  pollSeconds: number;
+  mode: string;
+  isRunning: boolean;
+  lastStartedAt: string;
+  lastFinishedAt: string;
+  nextPlannedAt: string;
+  lastExitCode: number | null;
+  lastMessage: string;
+  lastLogPath: string;
+  configFile: string;
+  stateFile: string;
+  lockFile: string;
+}
+
+export interface CollectScheduleUpdateRequest {
+  enabled: boolean;
+  intervalMinutes: number;
+}
+
 export interface RuntimeSettingsSummary {
   environmentLabel: string;
   configFile: string;
@@ -474,4 +520,5 @@ export interface RuntimeSettingsSummary {
   database: DetailField[];
   paths: DetailField[];
   securityNotes: string[];
+  collectSchedule: CollectScheduleSummary;
 }

@@ -15,6 +15,14 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from automation.utils.collect_schedule import (  # noqa: E402
+    COLLECT_EXECUTION_CONFLICT_EXIT_CODE,
+    CollectExecutionLockedError,
+    acquire_collect_execution_lock,
+    record_collect_task_finished,
+    record_collect_task_started,
+)
+
 DEFAULT_CONFIG_PATH = "automation/config/settings.yaml"
 DEFAULT_CREDENTIALS_PATH = "automation/config/credentials.local.yaml"
 DEFAULT_SELECTORS_PATH = "automation/config/selectors.yaml"
@@ -254,6 +262,22 @@ def ensure_login(login_page, settings, retries: int, wait_sec: float, retry_call
     )
 
 
+def _build_collect_state_message(
+    *,
+    success_count: int,
+    skipped_count: int,
+    failed_count: int,
+    dry_run: bool,
+    no_pending: bool = False,
+) -> str:
+    if no_pending:
+        return f"本轮无待办，已快速结束{'（dry-run，未写入 PostgreSQL）' if dry_run else ''}".strip()
+    return (
+        f"采集执行完成：成功 {success_count} 张，跳过 {skipped_count} 张，失败 {failed_count} 张"
+        + ("（dry-run，未写入 PostgreSQL）" if dry_run else "")
+    )
+
+
 def main() -> int:
     args = parse_args()
     from automation.utils.config_loader import load_local_auth, load_selectors, load_settings
@@ -309,6 +333,25 @@ def main() -> int:
     if credentials_path.exists():
         logger.info("Credentials: %s", credentials_path)
     logger.info("Selectors: %s", selectors_path)
+
+    collect_lock = None
+    collect_state_started = False
+    collect_state_message = ""
+    collect_log_path = str(getattr(logger, "log_file_path", "") or "")
+
+    if args.action == "collect":
+        try:
+            collect_lock = acquire_collect_execution_lock(
+                requested_document_no=args.document_no.strip(),
+                requested_limit=args.limit,
+                dry_run=bool(args.dry_run),
+                headed=bool(settings.browser.headed),
+            )
+        except CollectExecutionLockedError as exc:
+            logger.warning(str(exc))
+            return COLLECT_EXECUTION_CONFLICT_EXIT_CODE
+        record_collect_task_started(log_path=collect_log_path)
+        collect_state_started = True
 
     if args.action in {"rolecatalog", "dbinit"}:
         from automation.db.postgres import (
@@ -711,6 +754,13 @@ def main() -> int:
                     document_sync_states: dict[str, dict[str, object]] = {}
                     if not target_document_nos:
                         logger.info("No permission application documents found in todo list; continuing with empty result")
+                        collect_state_message = _build_collect_state_message(
+                            success_count=0,
+                            skipped_count=0,
+                            failed_count=0,
+                            dry_run=bool(args.dry_run),
+                            no_pending=True,
+                        )
                     elif PostgresPermissionStore.is_configured(settings.db):
                         try:
                             document_sync_states = store.fetch_document_sync_states(target_document_nos)
@@ -913,6 +963,13 @@ def main() -> int:
                         len(target_document_nos),
                         len(skipped_documents),
                         dump_path,
+                    )
+                    collect_state_message = _build_collect_state_message(
+                        success_count=len(documents),
+                        skipped_count=len(skipped_documents),
+                        failed_count=len(failed_documents),
+                        dry_run=bool(args.dry_run),
+                        no_pending=not target_document_nos,
                     )
 
                     if skipped_documents:
@@ -1179,6 +1236,8 @@ def main() -> int:
 
             except Exception as exc:  # noqa: BLE001
                 result_code = 1
+                if args.action == "collect" and not collect_state_message:
+                    collect_state_message = f"采集执行失败：{exc}"
                 logger.exception("Automation failed: %s", exc)
                 shot = save_screenshot(page, shots_dir, "error")
                 logger.error("Error screenshot: %s", shot)
@@ -1188,10 +1247,34 @@ def main() -> int:
 
     except Exception as exc:  # noqa: BLE001
         result_code = 1
+        if args.action == "collect" and not collect_state_message:
+            collect_state_message = f"采集执行失败：{exc}"
         logger.exception("Automation failed before browser startup: %s", exc)
 
     if result_code == 0:
         logger.info("Automation finished successfully")
+        if args.action == "collect" and not collect_state_message:
+            collect_state_message = _build_collect_state_message(
+                success_count=0,
+                skipped_count=0,
+                failed_count=0,
+                dry_run=bool(args.dry_run),
+                no_pending=True,
+            )
+
+    if args.action == "collect":
+        try:
+            if collect_state_started:
+                record_collect_task_finished(
+                    exit_code=result_code,
+                    message=collect_state_message or ("采集执行失败" if result_code != 0 else "采集执行完成"),
+                    log_path=collect_log_path,
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Failed to persist collect schedule state: %s", exc)
+        finally:
+            if collect_lock is not None:
+                collect_lock.release()
     return result_code
 
 

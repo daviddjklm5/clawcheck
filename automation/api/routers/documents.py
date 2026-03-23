@@ -12,6 +12,7 @@ from automation.api.collect_workbench import (
 from automation.api.audit_workbench import start_audit_task
 from automation.api.process_dashboard import (
     approve_process_document,
+    approve_process_documents_batch,
     get_process_analysis_dashboard,
     get_process_dashboard as get_process_dashboard_live,
     get_process_document_detail,
@@ -27,6 +28,15 @@ class ProcessDocumentApprovalRequest(BaseModel):
 
     action: str = "approve"
     approvalOpinion: str = ""
+    dryRun: bool = False
+    headed: bool | None = None
+
+
+class ProcessBatchApprovalRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: str = "approve"
+    documentNos: list[str] = Field(default_factory=list)
     dryRun: bool = False
     headed: bool | None = None
 
@@ -147,6 +157,23 @@ def post_process_workbench_audit(payload: ProcessAuditRunRequest) -> dict[str, o
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/process-workbench/approval/batch")
+def post_process_workbench_batch_approval(
+    payload: ProcessBatchApprovalRequest,
+) -> dict[str, object]:
+    try:
+        _, settings = _load_runtime_settings()
+        resolved_headed = settings.browser.headed if payload.headed is None else bool(payload.headed)
+        return approve_process_documents_batch(
+            document_nos=payload.documentNos,
+            action=payload.action,
+            dry_run=payload.dryRun,
+            headed=resolved_headed,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/process-dashboard/{document_no}/approval")

@@ -21,7 +21,7 @@ import {
   TextField,
   Typography,
 } from "@mui/material";
-import type { GridColDef, GridRenderCellParams } from "@mui/x-data-grid";
+import type { GridColDef, GridRenderCellParams, GridRowSelectionModel } from "@mui/x-data-grid";
 import { useSearchParams } from "react-router-dom";
 
 import { AppDataGrid } from "../components/AppDataGrid";
@@ -35,6 +35,7 @@ import type {
   FeedbackGroupRow,
   OrgScopeRow,
   ProcessApprovalResponse,
+  ProcessBatchApprovalResponse,
   ProcessDetail,
   ProcessDocumentRow,
   ProcessTodoSyncResponse,
@@ -60,6 +61,15 @@ const DETAIL_GRID_PAGE_SIZE = 20;
 const MAIN_GRID_HEIGHT = 760;
 const DETAIL_GRID_HEIGHT = 920;
 const APPROVAL_DRAFT_STORAGE_PREFIX = "clawcheck.process.approval_opinion.";
+const EMPTY_ROW_SELECTION_MODEL: GridRowSelectionModel = { type: "include", ids: new Set() };
+
+function buildRowSelectionModel(ids: Iterable<string>): GridRowSelectionModel {
+  return { type: "include", ids: new Set(ids) };
+}
+
+function isBatchSelectableDocument(row: ProcessDocumentRow): boolean {
+  return row.hasAssessment && row.todoProcessStatus === "待处理";
+}
 
 const conclusionTone: Record<string, Tone> = {
   拒绝: "danger",
@@ -179,6 +189,21 @@ function getApprovalResultSeverity(result: ProcessApprovalResponse): "success" |
     return "info";
   }
   if (result.status === "submitted_pending_confirmation") {
+    return "warning";
+  }
+  return "success";
+}
+
+function getBatchApprovalResultSeverity(
+  result: ProcessBatchApprovalResponse,
+): "success" | "warning" | "error" | "info" {
+  if (result.dryRun) {
+    return result.failedCount > 0 ? "warning" : "info";
+  }
+  if (result.status === "failed") {
+    return "error";
+  }
+  if (result.status === "partial") {
     return "warning";
   }
   return "success";
@@ -322,6 +347,11 @@ export function ProcessDocumentsPage() {
   const [rejectConfirmOpen, setRejectConfirmOpen] = useState(false);
   const [approvalResult, setApprovalResult] = useState<ProcessApprovalResponse | null>(null);
   const [approvalError, setApprovalError] = useState<string | null>(null);
+  const [rowSelectionModel, setRowSelectionModel] = useState<GridRowSelectionModel>(EMPTY_ROW_SELECTION_MODEL);
+  const [batchSubmittingMode, setBatchSubmittingMode] = useState<"approve" | "reject" | null>(null);
+  const [batchRejectConfirmOpen, setBatchRejectConfirmOpen] = useState(false);
+  const [batchApprovalResult, setBatchApprovalResult] = useState<ProcessBatchApprovalResponse | null>(null);
+  const [batchApprovalError, setBatchApprovalError] = useState<string | null>(null);
   const [runHeaded, setRunHeaded] = useState(true);
   const [todoSyncing, setTodoSyncing] = useState(false);
   const [todoSyncResult, setTodoSyncResult] = useState<ProcessTodoSyncResponse | null>(null);
@@ -346,6 +376,13 @@ export function ProcessDocumentsPage() {
   const currentTaskRunning = currentTask?.status === "queued" || currentTask?.status === "running";
   const workbenchStats = workbench?.stats ?? [];
   const workbenchDocuments = workbench?.documents ?? [];
+  const selectedRowIds =
+    rowSelectionModel.type === "include"
+      ? new Set(Array.from(rowSelectionModel.ids, (id) => String(id)))
+      : new Set<string>();
+  const selectedDocumentRows = workbenchDocuments.filter((item) => selectedRowIds.has(item.id));
+  const selectedBatchDocumentNos = selectedDocumentRows.map((item) => item.documentNo);
+  const selectedBatchCount = selectedBatchDocumentNos.length;
   const latestAuditRun = workbench?.recentRuns?.[0] ?? null;
   const selectedDocumentRow =
     workbenchDocuments.find((item) => item.documentNo === selectedDocumentNo) ?? null;
@@ -414,6 +451,17 @@ export function ProcessDocumentsPage() {
   const hasActiveFilters = Boolean(
     queryText || conclusionFilter !== "all" || statusFilter !== "all" || !isPendingOnlyTodoFilter,
   );
+  const selectableFilteredRowIds = new Set(
+    filteredDocuments.filter((item) => isBatchSelectableDocument(item)).map((item) => item.id),
+  );
+  const selectableFilteredRowIdsKey = Array.from(selectableFilteredRowIds).join("|");
+  const batchActionDisabled =
+    loading ||
+    batchSubmittingMode !== null ||
+    approvalSubmittingMode !== null ||
+    todoSyncing ||
+    selectedBatchCount === 0;
+  const batchApprovalFailedResults = (batchApprovalResult?.results ?? []).filter((item) => item.status !== "succeeded");
 
   function updateSearchParams(
     updates: Record<string, string | null>,
@@ -433,6 +481,25 @@ export function ProcessDocumentsPage() {
       setSearchParams(nextParams, { replace: options.replace ?? true });
     }
   }
+
+  useEffect(() => {
+    setRowSelectionModel((currentModel) => {
+      if (currentModel.type !== "include") {
+        return EMPTY_ROW_SELECTION_MODEL;
+      }
+
+      const nextIds = Array.from(currentModel.ids, (id) => String(id)).filter((id) =>
+        selectableFilteredRowIds.has(id),
+      );
+      if (
+        nextIds.length === currentModel.ids.size &&
+        nextIds.every((id) => currentModel.ids.has(id))
+      ) {
+        return currentModel;
+      }
+      return buildRowSelectionModel(nextIds);
+    });
+  }, [selectableFilteredRowIdsKey]);
 
   useEffect(() => {
     let active = true;
@@ -659,6 +726,78 @@ export function ProcessDocumentsPage() {
   function confirmReject() {
     setRejectConfirmOpen(false);
     void runApproval("reject", false);
+  }
+
+  function updateBatchSelectionFromFailedResults(results: ProcessApprovalResponse[]) {
+    const failedDocumentNos = new Set(
+      results.filter((item) => item.status !== "succeeded").map((item) => item.documentNo),
+    );
+    if (failedDocumentNos.size === 0) {
+      setRowSelectionModel(EMPTY_ROW_SELECTION_MODEL);
+      return;
+    }
+
+    const failedRowIds = workbenchDocuments
+      .filter((item) => failedDocumentNos.has(item.documentNo))
+      .map((item) => item.id);
+    setRowSelectionModel(buildRowSelectionModel(failedRowIds));
+  }
+
+  function handleBatchRowSelectionModelChange(nextModel: GridRowSelectionModel) {
+    if (nextModel.type !== "include") {
+      setRowSelectionModel(EMPTY_ROW_SELECTION_MODEL);
+      return;
+    }
+
+    const nextIds = Array.from(nextModel.ids, (id) => String(id)).filter((id) => selectableFilteredRowIds.has(id));
+    setRowSelectionModel(buildRowSelectionModel(nextIds));
+  }
+
+  async function runBatchApproval(action: "approve" | "reject") {
+    if (selectedBatchCount === 0) {
+      setBatchApprovalError("请先勾选至少 1 条待处理且已完成评估的单据。");
+      setBatchApprovalResult(null);
+      return;
+    }
+
+    try {
+      setBatchSubmittingMode(action);
+      setBatchApprovalError(null);
+      setBatchApprovalResult(null);
+      const response = await dashboardApi.approveProcessDocumentsBatch({
+        action,
+        documentNos: selectedBatchDocumentNos,
+        dryRun: false,
+        headed: runHeaded,
+      });
+      setBatchApprovalResult(response);
+      updateBatchSelectionFromFailedResults(response.results);
+      if (response.succeededCount > 0) {
+        setRefreshVersion((currentValue) => currentValue + 1);
+      }
+    } catch (approvalLoadError) {
+      setBatchApprovalError(approvalLoadError instanceof Error ? approvalLoadError.message : "批量审批执行失败");
+    } finally {
+      setBatchSubmittingMode(null);
+    }
+  }
+
+  function requestBatchRejectConfirm() {
+    if (selectedBatchCount === 0) {
+      setBatchApprovalError("请先勾选至少 1 条待处理且已完成评估的单据。");
+      setBatchApprovalResult(null);
+      return;
+    }
+    setBatchRejectConfirmOpen(true);
+  }
+
+  function cancelBatchRejectConfirm() {
+    setBatchRejectConfirmOpen(false);
+  }
+
+  function confirmBatchReject() {
+    setBatchRejectConfirmOpen(false);
+    void runBatchApproval("reject");
   }
 
   async function syncTodoStatus() {
@@ -909,7 +1048,7 @@ export function ProcessDocumentsPage() {
                 variant="contained"
                 size="small"
                 disableElevation
-                disabled={todoSyncing || loading}
+                disabled={todoSyncing || loading || approvalSubmittingMode !== null || batchSubmittingMode !== null}
                 onClick={() => void syncTodoStatus()}
               >
                 {todoSyncing ? "同步中..." : "同步待办状态"}
@@ -939,6 +1078,25 @@ export function ProcessDocumentsPage() {
               >
                 重置筛选
               </Button>
+              <Button
+                variant="contained"
+                size="small"
+                disableElevation
+                disabled={batchActionDisabled}
+                onClick={() => void runBatchApproval("approve")}
+              >
+                {batchSubmittingMode === "approve" ? "批量批准中..." : `批准${selectedBatchCount > 0 ? `（${selectedBatchCount}）` : ""}`}
+              </Button>
+              <Button
+                variant="contained"
+                size="small"
+                color="error"
+                disableElevation
+                disabled={batchActionDisabled}
+                onClick={requestBatchRejectConfirm}
+              >
+                {batchSubmittingMode === "reject" ? "批量驳回中..." : `驳回${selectedBatchCount > 0 ? `（${selectedBatchCount}）` : ""}`}
+              </Button>
             </Stack>
           </Stack>
 
@@ -959,12 +1117,33 @@ export function ProcessDocumentsPage() {
         </Stack>
       </Paper>
 
+      {batchApprovalError ? <Alert severity="error">{batchApprovalError}</Alert> : null}
+      {batchApprovalResult ? (
+        <Alert severity={getBatchApprovalResultSeverity(batchApprovalResult)}>
+          <Stack spacing={0.5}>
+            <Typography variant="body2">{batchApprovalResult.message}</Typography>
+            <Typography variant="caption" color="inherit">
+              状态：{formatTaskStatusLabel(batchApprovalResult.status)}；日志：{batchApprovalResult.logFile || "-"}
+            </Typography>
+            {batchApprovalFailedResults.slice(0, 5).map((item) => (
+              <Typography key={`${item.documentNo}-${item.status}`} variant="caption" color="inherit">
+                {item.documentNo}：{item.message}
+              </Typography>
+            ))}
+          </Stack>
+        </Alert>
+      ) : null}
+
       <AppDataGrid<ProcessDocumentRow>
         title="待处理单据列表"
         subtitle="默认每页 20 项，仅点击单据编号打开右侧详情抽屉；关闭抽屉后保留列表上下文。"
         rows={filteredDocuments}
         columns={documentColumns}
+        checkboxSelection
+        isRowSelectable={(params) => isBatchSelectableDocument(params.row)}
         loading={loading}
+        rowSelectionModel={rowSelectionModel}
+        onRowSelectionModelChange={handleBatchRowSelectionModelChange}
         rowCount={filteredDocuments.length}
         minHeight={MAIN_GRID_HEIGHT}
         pageSizeOptions={[10, 20, 50, 100]}
@@ -1381,7 +1560,7 @@ export function ProcessDocumentsPage() {
                     minRows={4}
                     value={approvalOpinion}
                     onChange={(event) => setApprovalOpinion(event.target.value)}
-                    disabled={!selectedDocumentNo || approvalSubmittingMode !== null}
+                    disabled={!selectedDocumentNo || approvalSubmittingMode !== null || batchSubmittingMode !== null}
                     placeholder="请输入要带到 EHR 的审批意见。"
                   />
 
@@ -1391,6 +1570,7 @@ export function ProcessDocumentsPage() {
                       disabled={
                         !selectedDocumentNo ||
                         approvalSubmittingMode !== null ||
+                        batchSubmittingMode !== null ||
                         !selectedDocumentRow?.hasAssessment ||
                         documentAlreadyHandled
                       }
@@ -1407,6 +1587,7 @@ export function ProcessDocumentsPage() {
                       disabled={
                         !selectedDocumentNo ||
                         approvalSubmittingMode !== null ||
+                        batchSubmittingMode !== null ||
                         !approvalOpinion.trim() ||
                         !selectedDocumentRow?.hasAssessment ||
                         documentAlreadyHandled
@@ -1422,6 +1603,7 @@ export function ProcessDocumentsPage() {
                       disabled={
                         !selectedDocumentNo ||
                         approvalSubmittingMode !== null ||
+                        batchSubmittingMode !== null ||
                         !approvalOpinion.trim() ||
                         !selectedDocumentRow?.hasAssessment ||
                         documentAlreadyHandled
@@ -1435,6 +1617,7 @@ export function ProcessDocumentsPage() {
                       disabled={
                         !selectedDocumentNo ||
                         approvalSubmittingMode !== null ||
+                        batchSubmittingMode !== null ||
                         !approvalOpinion.trim() ||
                         !selectedDocumentRow?.hasAssessment ||
                         documentAlreadyHandled
@@ -1449,6 +1632,7 @@ export function ProcessDocumentsPage() {
                       disabled={
                         !selectedDocumentNo ||
                         approvalSubmittingMode !== null ||
+                        batchSubmittingMode !== null ||
                         !approvalOpinion.trim() ||
                         !selectedDocumentRow?.hasAssessment ||
                         documentAlreadyHandled
@@ -1613,6 +1797,34 @@ export function ProcessDocumentsPage() {
                 autoFocus
               >
                 确认驳回
+              </Button>
+            </DialogActions>
+          </Dialog>
+          <Dialog open={batchRejectConfirmOpen} onClose={cancelBatchRejectConfirm}>
+            <DialogTitle>确认批量驳回</DialogTitle>
+            <DialogContent>
+              <DialogContentText>
+                即将对已勾选的 {selectedBatchCount} 条单据执行批量驳回，系统会在同一个 EHR 浏览器会话中依次打开并提交。
+                每条单据的审批意见将默认使用“生成驳回意见”带出的摘要。是否继续？
+              </DialogContentText>
+              {selectedBatchDocumentNos.length > 0 ? (
+                <Box sx={{ mt: 2 }}>
+                  <Typography variant="caption" color="text.secondary">
+                    本次单据：{selectedBatchDocumentNos.join("、")}
+                  </Typography>
+                </Box>
+              ) : null}
+            </DialogContent>
+            <DialogActions>
+              <Button onClick={cancelBatchRejectConfirm}>取消</Button>
+              <Button
+                onClick={confirmBatchReject}
+                color="error"
+                variant="contained"
+                disableElevation
+                autoFocus
+              >
+                确认批量驳回
               </Button>
             </DialogActions>
           </Dialog>

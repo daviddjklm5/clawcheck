@@ -191,20 +191,7 @@ def _capture_failure_screenshot(
         add_event("screenshot_failed", error=str(exc))
 
 
-def approve_process_document(
-    document_no: str,
-    action: str,
-    approval_opinion: str,
-    dry_run: bool = False,
-    headed: bool | None = None,
-) -> dict[str, Any]:
-    normalized_action = str(action or "").strip().lower()
-    action_config = _APPROVAL_ACTION_CONFIG.get(normalized_action)
-    if action_config is None:
-        raise ValueError(
-            f"暂不支持审批动作 {action!r}，当前仅支持 {sorted(_APPROVAL_ACTION_CONFIG)}"
-        )
-
+def _prepare_approval_runtime(headed: bool | None = None) -> tuple[Path, Any, Path, dict[str, Any], Path, Path, Path]:
     settings_path, settings = _load_runtime_settings()
     if headed is not None:
         settings.browser.headed = bool(headed)
@@ -217,83 +204,145 @@ def approve_process_document(
     logs_dir.mkdir(parents=True, exist_ok=True)
     screenshots_dir.mkdir(parents=True, exist_ok=True)
     state_file.parent.mkdir(parents=True, exist_ok=True)
+    return settings_path, settings, credentials_path, selectors, logs_dir, screenshots_dir, state_file
 
-    started_at = datetime.now()
+
+def _build_approval_artifact_paths(
+    *,
+    logs_dir: Path,
+    screenshots_dir: Path,
+    started_at: datetime,
+    document_no: str,
+) -> tuple[Path, Path]:
     timestamp_slug = started_at.strftime("%Y%m%d_%H%M%S")
     safe_document_no = re.sub(r"[^A-Za-z0-9._-]+", "_", document_no).strip("_") or "document"
     log_path = logs_dir / f"approval_{timestamp_slug}_{safe_document_no}.json"
     screenshot_path = screenshots_dir / f"approval_error_{timestamp_slug}_{safe_document_no}.png"
+    return log_path, screenshot_path
 
-    execution_log: dict[str, Any] = {
-        "request": {
-            "documentNo": document_no,
-            "action": normalized_action,
-            "approvalOpinion": approval_opinion,
-            "dryRun": dry_run,
-            "headed": bool(settings.browser.headed),
-        },
-        "runtime": {
-            "settingsFile": _to_repo_relative(settings_path),
-            "credentialsFile": _to_repo_relative(credentials_path),
-            "selectorsFile": _to_repo_relative(SELECTORS_PATH),
-            "stateFile": _to_repo_relative(state_file),
-        },
-        "events": [],
-    }
 
-    response_payload: dict[str, Any] | None = None
-    started_perf = time.perf_counter()
-    last_event_perf = started_perf
+def _normalize_document_nos(document_nos: list[str] | tuple[str, ...]) -> list[str]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw_document_no in document_nos:
+        document_no = str(raw_document_no or "").strip()
+        if not document_no or document_no in seen:
+            continue
+        normalized.append(document_no)
+        seen.add(document_no)
+    return normalized
 
-    def flush_execution_log() -> None:
-        if response_payload is not None:
-            execution_log["response"] = response_payload
-        log_path.write_text(
-            json.dumps(execution_log, ensure_ascii=False, indent=2),
-            encoding="utf-8",
+
+def _extract_generated_reject_opinion_lines(detail_payload: dict[str, Any] | None) -> list[str]:
+    if not detail_payload:
+        return []
+    feedback_overview = detail_payload.get("feedbackOverview")
+    if not isinstance(feedback_overview, dict):
+        return []
+    feedback_groups = feedback_overview.get("feedbackGroups")
+    if not isinstance(feedback_groups, list):
+        return []
+
+    lines: list[str] = []
+    for group in feedback_groups:
+        if not isinstance(group, dict):
+            continue
+        raw_lines = group.get("summaryLines")
+        if not isinstance(raw_lines, list) or not raw_lines:
+            raw_lines = [group.get("summary")]
+        for raw_line in raw_lines:
+            normalized_line = str(raw_line or "").strip()
+            if normalized_line and normalized_line not in lines:
+                lines.append(normalized_line)
+    return lines
+
+
+def _resolve_batch_approval_opinion(
+    *,
+    store: PostgresRiskTrustStore,
+    document_no: str,
+    action: str,
+) -> str:
+    if action == "approve":
+        return "通过"
+
+    detail_payload = store.fetch_process_document_detail(document_no=document_no)
+    generated_lines = _extract_generated_reject_opinion_lines(detail_payload)
+    if not generated_lines:
+        raise ValueError(
+            f"单据 {document_no} 未命中可用的“生成驳回意见”摘要，请先检查风险总览是否已产出内容。"
         )
+    return "\n".join(generated_lines)
 
-    def add_event(message: str, **extra: Any) -> None:
-        nonlocal last_event_perf
-        now_dt = datetime.now()
-        now_perf = time.perf_counter()
-        event = {
-            "timestamp": now_dt.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],
-            "elapsedMs": round((now_perf - started_perf) * 1000, 1),
-            "deltaMs": round((now_perf - last_event_perf) * 1000, 1),
-            "message": message,
-        }
-        last_event_perf = now_perf
-        if extra:
-            event.update(extra)
-        execution_log["events"].append(event)
-        flush_execution_log()
 
-    page = None
-    browser = None
-    context = None
-    browser_session_acquired = False
-    response_payload = {
+def _ensure_approval_page(
+    *,
+    page: Any,
+    context: Any,
+    add_event: Callable[..., None],
+) -> Any:
+    try:
+        if page is not None and not page.is_closed():
+            return page
+    except Exception as exc:  # noqa: BLE001
+        add_event("approval_page_probe_failed", error=str(exc))
+
+    recreated_page = context.new_page()
+    add_event("approval_page_recreated")
+    return recreated_page
+
+
+def _build_failed_approval_response(
+    *,
+    document_no: str,
+    normalized_action: str,
+    action_config: dict[str, str],
+    approval_opinion: str,
+    dry_run: bool,
+    message: str,
+    started_at: datetime | None = None,
+    log_file: str = "",
+    screenshot_file: str = "",
+) -> dict[str, Any]:
+    finished_at = datetime.now()
+    effective_started_at = started_at or finished_at
+    return {
         "documentNo": document_no,
         "action": normalized_action,
         "ehrDecision": action_config["ehrDecision"],
         "ehrSubmitLabel": "提交",
         "approvalOpinion": approval_opinion,
         "dryRun": dry_run,
-        "status": "running",
-        "startedAt": started_at.strftime("%Y-%m-%d %H:%M:%S"),
-        "finishedAt": "",
-        "durationMs": 0.0,
-        "logFile": _to_repo_relative(log_path),
-        "screenshotFile": "",
+        "status": "failed",
+        "startedAt": effective_started_at.strftime("%Y-%m-%d %H:%M:%S"),
+        "finishedAt": finished_at.strftime("%Y-%m-%d %H:%M:%S"),
+        "durationMs": round(max((finished_at - effective_started_at).total_seconds(), 0.0) * 1000, 1),
+        "logFile": log_file,
+        "screenshotFile": screenshot_file,
         "confirmationType": "",
         "confirmationMessage": "",
-        "message": "",
+        "message": message,
     }
-    flush_execution_log()
-    logger = logging.getLogger("approval_api")
 
-    permission_store = PostgresPermissionStore(settings.db)
+
+def _execute_document_approval_in_active_session(
+    *,
+    page: Any,
+    context: Any,
+    settings: Any,
+    selectors: dict[str, Any],
+    logger: logging.Logger,
+    state_file: Path,
+    permission_store: PostgresPermissionStore,
+    document_no: str,
+    normalized_action: str,
+    approval_opinion: str,
+    dry_run: bool,
+    action_config: dict[str, str],
+    add_event: Callable[..., None],
+    response_payload: dict[str, Any],
+    started_perf: float,
+) -> tuple[dict[str, Any], Any]:
     try:
         sync_state = permission_store.fetch_document_sync_states([document_no]).get(document_no, {})
     except Exception as exc:  # noqa: BLE001
@@ -315,16 +364,407 @@ def approve_process_document(
             response_payload["durationMs"] = round((time.perf_counter() - started_perf) * 1000, 1)
             response_payload["message"] = (
                 f"该单据最近一次待办同步结果为“{todo_process_status}”，当前账号待办列表中未找到。"
-                "若怀疑单据已驳回后重新提交，请先点击“同步待办状态”后再重试。"
+                "如怀疑单据已驳回后重新提交，请先点击“同步待办状态”后再重试。"
             )
-            flush_execution_log()
             raise ValueError(response_payload["message"])
 
+    page = _ensure_approval_page(page=page, context=context, add_event=add_event)
+    home_page = HomePage(
+        home_url=settings.app.home_url,
+        page=page,
+        selectors=selectors,
+        logger=logger,
+        timeout_ms=settings.browser.timeout_ms,
+    )
+    login_page = LoginPage(
+        home_url=settings.app.home_url,
+        page=page,
+        selectors=selectors,
+        logger=logger,
+        timeout_ms=settings.browser.timeout_ms,
+    )
+    approval_flow = DocumentApprovalFlow(
+        page=page,
+        logger=logger,
+        timeout_ms=settings.browser.timeout_ms,
+        home_url=settings.app.home_url,
+        event_callback=add_event,
+    )
+
+    add_event("open_home_page", homeUrl=settings.app.home_url)
+    home_page.open()
     try:
-        browser, context, page, browser_session_meta = acquire_approval_browser_session(
+        home_page.wait_ready()
+        add_event("home_ready")
+    except Exception as exc:  # noqa: BLE001
+        add_event("home_ready_probe_failed", error=str(exc))
+
+    if not login_page.is_logged_in():
+        if not settings.auth.username.strip() or not settings.auth.password.strip():
+            raise RuntimeError("当前登录态失效，且未配置可用账号密码，无法执行审批。")
+        add_event("login_required")
+        page = ensure_login_with_retry(
+            login_page=login_page,
+            username=settings.auth.username.strip(),
+            password=settings.auth.password.strip(),
+            require_manual_captcha=False,
+            retries=settings.runtime.retries,
+            wait_sec=settings.runtime.retry_wait_sec,
+            bound_pages=[login_page, home_page, approval_flow],
+            event_callback=add_event,
+        )
+        context = page.context
+        home_page.set_page(page)
+        login_page.set_page(page)
+        approval_flow.set_page(page)
+        context.storage_state(path=str(state_file))
+        add_event("login_refreshed", stateFile=_to_repo_relative(state_file))
+    else:
+        add_event("reuse_existing_login_state")
+
+    add_event(
+        "approval_flow_started",
+        documentNo=document_no,
+        action=normalized_action,
+        dryRun=dry_run,
+    )
+    flow_result = approval_flow.execute_action(
+        action=normalized_action,
+        document_no=document_no,
+        approval_opinion=approval_opinion,
+        dry_run=dry_run,
+    )
+    add_event("approval_flow_finished", result=flow_result)
+
+    flow_status = str(flow_result.get("status") or "succeeded")
+    response_payload["ehrSubmitLabel"] = str(flow_result.get("submitLabel") or "提交")
+    response_payload["confirmationType"] = str(flow_result.get("confirmationType") or "")
+    response_payload["confirmationMessage"] = str(flow_result.get("confirmationMessage") or "")
+    response_payload["status"] = flow_status
+    response_payload["finishedAt"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    response_payload["durationMs"] = round((time.perf_counter() - started_perf) * 1000, 1)
+    response_payload["message"] = (
+        "已完成 EHR 写入验证，未点击提交。"
+        if dry_run
+        else (
+            response_payload["confirmationMessage"]
+            or (
+                "提交动作已发出，但当前未拿到强成功回执。"
+                f"请先不要重复点击{action_config['submitActionLabel']}。"
+            )
+        )
+        if flow_status == "submitted_pending_confirmation"
+        else action_config["successMessage"]
+    )
+    if not dry_run and flow_status == "succeeded":
+        try:
+            final_todo_process_status = action_config["todoProcessStatusOnSucceeded"]
+            permission_store.update_single_todo_process_status(document_no, final_todo_process_status)
+            add_event(
+                "todo_process_status_updated",
+                documentNo=document_no,
+                todoProcessStatus=final_todo_process_status,
+            )
+        except Exception as exc:  # noqa: BLE001
+            add_event("todo_process_status_update_failed", error=str(exc), documentNo=document_no)
+    return flow_result, page
+
+
+def _run_logged_document_approval_in_active_session(
+    *,
+    page: Any,
+    context: Any,
+    settings: Any,
+    selectors: dict[str, Any],
+    state_file: Path,
+    logs_dir: Path,
+    screenshots_dir: Path,
+    permission_store: PostgresPermissionStore,
+    logger: logging.Logger,
+    document_no: str,
+    normalized_action: str,
+    approval_opinion: str,
+    dry_run: bool,
+    action_config: dict[str, str],
+    raise_on_failed: bool,
+    browser_session_meta: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], Any]:
+    started_at = datetime.now()
+    log_path, screenshot_path = _build_approval_artifact_paths(
+        logs_dir=logs_dir,
+        screenshots_dir=screenshots_dir,
+        started_at=started_at,
+        document_no=document_no,
+    )
+    execution_log: dict[str, Any] = {
+        "request": {
+            "documentNo": document_no,
+            "action": normalized_action,
+            "approvalOpinion": approval_opinion,
+            "dryRun": dry_run,
+            "headed": bool(settings.browser.headed),
+        },
+        "runtime": {
+            "selectorsFile": _to_repo_relative(SELECTORS_PATH),
+            "stateFile": _to_repo_relative(state_file),
+        },
+        "events": [],
+    }
+    response_payload: dict[str, Any] = {
+        "documentNo": document_no,
+        "action": normalized_action,
+        "ehrDecision": action_config["ehrDecision"],
+        "ehrSubmitLabel": "提交",
+        "approvalOpinion": approval_opinion,
+        "dryRun": dry_run,
+        "status": "running",
+        "startedAt": started_at.strftime("%Y-%m-%d %H:%M:%S"),
+        "finishedAt": "",
+        "durationMs": 0.0,
+        "logFile": _to_repo_relative(log_path),
+        "screenshotFile": "",
+        "confirmationType": "",
+        "confirmationMessage": "",
+        "message": "",
+    }
+    started_perf = time.perf_counter()
+    last_event_perf = started_perf
+
+    def flush_execution_log() -> None:
+        execution_log["response"] = response_payload
+        log_path.write_text(
+            json.dumps(execution_log, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    def add_event(message: str, **extra: Any) -> None:
+        nonlocal last_event_perf
+        now_dt = datetime.now()
+        now_perf = time.perf_counter()
+        event = {
+            "timestamp": now_dt.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],
+            "elapsedMs": round((now_perf - started_perf) * 1000, 1),
+            "deltaMs": round((now_perf - last_event_perf) * 1000, 1),
+            "message": message,
+        }
+        last_event_perf = now_perf
+        if extra:
+            event.update(extra)
+        execution_log["events"].append(event)
+        flush_execution_log()
+
+    flush_execution_log()
+    if browser_session_meta is not None:
+        add_event(
+            "browser_context_ready",
+            stateFile=_to_repo_relative(state_file),
+            sessionReused=bool(browser_session_meta.get("reused", False)),
+            sessionAgeMs=browser_session_meta.get("sessionAgeMs", 0.0),
+            sessionIdleMs=browser_session_meta.get("sessionIdleMs", 0.0),
+            pageRecreated=bool(browser_session_meta.get("pageRecreated", False)),
+        )
+
+    try:
+        flow_result, page = _execute_document_approval_in_active_session(
+            page=page,
+            context=context,
+            settings=settings,
+            selectors=selectors,
+            logger=logger,
+            state_file=state_file,
+            permission_store=permission_store,
+            document_no=document_no,
+            normalized_action=normalized_action,
+            approval_opinion=approval_opinion,
+            dry_run=dry_run,
+            action_config=action_config,
+            add_event=add_event,
+            response_payload=response_payload,
+            started_perf=started_perf,
+        )
+        execution_log["result"] = flow_result
+        flush_execution_log()
+        return response_payload, page
+    except Exception as exc:  # noqa: BLE001
+        _capture_failure_screenshot(
+            page=page,
+            screenshot_path=screenshot_path,
+            response_payload=response_payload,
+            add_event=add_event,
+        )
+        response_payload["status"] = "failed"
+        response_payload["finishedAt"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        response_payload["durationMs"] = round((time.perf_counter() - started_perf) * 1000, 1)
+        response_payload["message"] = f"审批执行失败：{exc}。详见 {response_payload['logFile']}"
+        execution_log["error"] = {
+            "type": type(exc).__name__,
+            "message": str(exc),
+            "traceback": traceback.format_exc(),
+        }
+        flush_execution_log()
+        if raise_on_failed:
+            raise RuntimeError(response_payload["message"]) from exc
+        return response_payload, page
+
+
+def approve_process_document(
+    document_no: str,
+    action: str,
+    approval_opinion: str,
+    dry_run: bool = False,
+    headed: bool | None = None,
+) -> dict[str, Any]:
+    normalized_action = str(action or "").strip().lower()
+    action_config = _APPROVAL_ACTION_CONFIG.get(normalized_action)
+    if action_config is None:
+        raise ValueError(
+            f"暂不支持审批动作 {action!r}，当前仅支持 {sorted(_APPROVAL_ACTION_CONFIG)}"
+        )
+
+    _, settings, _, selectors, logs_dir, screenshots_dir, state_file = _prepare_approval_runtime(headed=headed)
+    logger = logging.getLogger("approval_api")
+    permission_store = PostgresPermissionStore(settings.db)
+
+    page = None
+    context = None
+    browser_session_acquired = False
+    response_payload: dict[str, Any] | None = None
+
+    try:
+        _, context, page, browser_session_meta = acquire_approval_browser_session(
             settings=settings,
             state_file=state_file,
-            event_callback=add_event,
+            event_callback=None,
+        )
+        browser_session_acquired = True
+        response_payload, page = _run_logged_document_approval_in_active_session(
+            page=page,
+            context=context,
+            settings=settings,
+            selectors=selectors,
+            state_file=state_file,
+            logs_dir=logs_dir,
+            screenshots_dir=screenshots_dir,
+            permission_store=permission_store,
+            logger=logger,
+            document_no=document_no,
+            normalized_action=normalized_action,
+            approval_opinion=approval_opinion,
+            dry_run=dry_run,
+            action_config=action_config,
+            raise_on_failed=True,
+            browser_session_meta=browser_session_meta,
+        )
+    except Exception as exc:  # noqa: BLE001
+        if response_payload is not None:
+            raise RuntimeError(response_payload["message"]) from exc
+        raise RuntimeError(f"审批执行失败：{exc}") from exc
+    finally:
+        if browser_session_acquired:
+            release_approval_browser_session(
+                close_session=True,
+                close_reason="approval_request_finished",
+            )
+
+    return response_payload
+
+
+def approve_process_documents_batch(
+    document_nos: list[str],
+    action: str,
+    dry_run: bool = False,
+    headed: bool | None = None,
+) -> dict[str, Any]:
+    normalized_action = str(action or "").strip().lower()
+    action_config = _APPROVAL_ACTION_CONFIG.get(normalized_action)
+    if action_config is None:
+        raise ValueError(
+            f"暂不支持审批动作 {action!r}，当前仅支持 {sorted(_APPROVAL_ACTION_CONFIG)}"
+        )
+
+    normalized_document_nos = _normalize_document_nos(document_nos)
+    if not normalized_document_nos:
+        raise ValueError("批量审批至少需要 1 个单据编号。")
+
+    settings_path, settings, credentials_path, selectors, logs_dir, screenshots_dir, state_file = _prepare_approval_runtime(
+        headed=headed
+    )
+    logger = logging.getLogger("approval_api")
+    permission_store = PostgresPermissionStore(settings.db)
+    store = PostgresRiskTrustStore(settings.db)
+
+    started_at = datetime.now()
+    batch_log_path = logs_dir / (
+        f"approval_batch_{started_at.strftime('%Y%m%d_%H%M%S')}_{normalized_action}_{len(normalized_document_nos)}.json"
+    )
+    execution_log: dict[str, Any] = {
+        "request": {
+            "documentNos": normalized_document_nos,
+            "action": normalized_action,
+            "dryRun": dry_run,
+            "headed": bool(settings.browser.headed),
+        },
+        "runtime": {
+            "settingsFile": _to_repo_relative(settings_path),
+            "credentialsFile": _to_repo_relative(credentials_path),
+            "selectorsFile": _to_repo_relative(SELECTORS_PATH),
+            "stateFile": _to_repo_relative(state_file),
+        },
+        "events": [],
+        "results": [],
+    }
+    response_payload: dict[str, Any] = {
+        "action": normalized_action,
+        "dryRun": dry_run,
+        "documentNos": normalized_document_nos,
+        "totalCount": len(normalized_document_nos),
+        "succeededCount": 0,
+        "failedCount": 0,
+        "results": [],
+        "status": "running",
+        "startedAt": started_at.strftime("%Y-%m-%d %H:%M:%S"),
+        "finishedAt": "",
+        "durationMs": 0.0,
+        "logFile": _to_repo_relative(batch_log_path),
+        "message": "",
+    }
+    started_perf = time.perf_counter()
+    last_event_perf = started_perf
+    batch_results: list[dict[str, Any]] = []
+
+    def flush_execution_log() -> None:
+        execution_log["results"] = batch_results
+        execution_log["response"] = response_payload
+        batch_log_path.write_text(
+            json.dumps(execution_log, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    def add_event(message: str, **extra: Any) -> None:
+        nonlocal last_event_perf
+        now_dt = datetime.now()
+        now_perf = time.perf_counter()
+        event = {
+            "timestamp": now_dt.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],
+            "elapsedMs": round((now_perf - started_perf) * 1000, 1),
+            "deltaMs": round((now_perf - last_event_perf) * 1000, 1),
+            "message": message,
+        }
+        last_event_perf = now_perf
+        if extra:
+            event.update(extra)
+        execution_log["events"].append(event)
+        flush_execution_log()
+
+    flush_execution_log()
+    browser_session_acquired = False
+    page = None
+    context = None
+    try:
+        _, context, page, browser_session_meta = acquire_approval_browser_session(
+            settings=settings,
+            state_file=state_file,
+            event_callback=None,
         )
         browser_session_acquired = True
         add_event(
@@ -336,156 +776,109 @@ def approve_process_document(
             pageRecreated=bool(browser_session_meta.get("pageRecreated", False)),
         )
 
-        home_page = HomePage(
-            home_url=settings.app.home_url,
-            page=page,
-            selectors=selectors,
-            logger=logger,
-            timeout_ms=settings.browser.timeout_ms,
-        )
-        login_page = LoginPage(
-            home_url=settings.app.home_url,
-            page=page,
-            selectors=selectors,
-            logger=logger,
-            timeout_ms=settings.browser.timeout_ms,
-        )
-        approval_flow = DocumentApprovalFlow(
-            page=page,
-            logger=logger,
-            timeout_ms=settings.browser.timeout_ms,
-            home_url=settings.app.home_url,
-            event_callback=add_event,
-        )
-        home_probe_page = HomePage(
-            home_url=settings.app.home_url,
-            page=page,
-            selectors=selectors,
-            logger=logger,
-            timeout_ms=min(settings.browser.timeout_ms, 1500),
-        )
-        try:
-            if browser_session_meta.get("reused", False):
-                try:
-                    home_probe_page.wait_ready()
-                    add_event("reuse_existing_home_page")
-                except Exception as exc:  # noqa: BLE001
-                    add_event("open_home_page", homeUrl=settings.app.home_url, reason="reuse_probe_failed", error=str(exc))
-                    home_page.open()
-                    try:
-                        home_page.wait_ready()
-                        add_event("home_ready")
-                    except Exception as wait_exc:  # noqa: BLE001
-                        add_event("home_ready_probe_failed", error=str(wait_exc))
-            else:
-                try:
-                    add_event("open_home_page", homeUrl=settings.app.home_url)
-                    home_page.open()
-                    home_page.wait_ready()
-                    add_event("home_ready")
-                except Exception as exc:  # noqa: BLE001
-                    add_event("home_ready_probe_failed", error=str(exc))
-
-            if not login_page.is_logged_in():
-                if not settings.auth.username.strip() or not settings.auth.password.strip():
-                    raise RuntimeError("当前登录态失效，且未配置可用账号密码，无法执行审批。")
-                add_event("login_required")
-                page = ensure_login_with_retry(
-                    login_page=login_page,
-                    username=settings.auth.username.strip(),
-                    password=settings.auth.password.strip(),
-                    require_manual_captcha=False,
-                    retries=settings.runtime.retries,
-                    wait_sec=settings.runtime.retry_wait_sec,
-                    bound_pages=[login_page, home_page, approval_flow, home_probe_page],
-                    event_callback=add_event,
+        for index, document_no in enumerate(normalized_document_nos, start=1):
+            try:
+                approval_opinion = _resolve_batch_approval_opinion(
+                    store=store,
+                    document_no=document_no,
+                    action=normalized_action,
                 )
-                context = page.context
-                context.storage_state(path=str(state_file))
-                add_event("login_refreshed", stateFile=_to_repo_relative(state_file))
-            else:
-                add_event("reuse_existing_login_state")
+                add_event(
+                    "batch_document_started",
+                    index=index,
+                    total=len(normalized_document_nos),
+                    documentNo=document_no,
+                    approvalOpinionSource="fixed_pass" if normalized_action == "approve" else "generated_reject_opinion",
+                    approvalOpinionLength=len(approval_opinion),
+                )
+                result, page = _run_logged_document_approval_in_active_session(
+                    page=page,
+                    context=context,
+                    settings=settings,
+                    selectors=selectors,
+                    state_file=state_file,
+                    logs_dir=logs_dir,
+                    screenshots_dir=screenshots_dir,
+                    permission_store=permission_store,
+                    logger=logger,
+                    document_no=document_no,
+                    normalized_action=normalized_action,
+                    approval_opinion=approval_opinion,
+                    dry_run=dry_run,
+                    action_config=action_config,
+                    raise_on_failed=False,
+                    browser_session_meta=None,
+                )
+            except Exception as exc:  # noqa: BLE001
+                result = _build_failed_approval_response(
+                    document_no=document_no,
+                    normalized_action=normalized_action,
+                    action_config=action_config,
+                    approval_opinion="",
+                    dry_run=dry_run,
+                    message=f"批量{action_config['submitActionLabel']}前置处理失败：{exc}",
+                )
+                add_event(
+                    "batch_document_failed_before_execution",
+                    index=index,
+                    total=len(normalized_document_nos),
+                    documentNo=document_no,
+                    error=str(exc),
+                )
 
+            batch_results.append(result)
             add_event(
-                "approval_flow_started",
+                "batch_document_finished",
+                index=index,
+                total=len(normalized_document_nos),
                 documentNo=document_no,
-                action=normalized_action,
-                dryRun=dry_run,
+                status=result.get("status", ""),
+                logFile=result.get("logFile", ""),
+                message=result.get("message", ""),
             )
-            flow_result = approval_flow.execute_action(
-                action=normalized_action,
-                document_no=document_no,
-                approval_opinion=approval_opinion,
-                dry_run=dry_run,
-            )
-            add_event("approval_flow_finished", result=flow_result)
-
-            flow_status = str(flow_result.get("status") or "succeeded")
-            response_payload["ehrSubmitLabel"] = str(flow_result.get("submitLabel") or "提交")
-            response_payload["confirmationType"] = str(flow_result.get("confirmationType") or "")
-            response_payload["confirmationMessage"] = str(flow_result.get("confirmationMessage") or "")
-            response_payload["status"] = flow_status
-            response_payload["finishedAt"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            response_payload["durationMs"] = round((time.perf_counter() - started_perf) * 1000, 1)
-            response_payload["message"] = (
-                "已完成 EHR 写入验证，未点击提交。"
-                if dry_run
-                else (
-                    response_payload["confirmationMessage"]
-                    or (
-                        "提交动作已发出，但当前未拿到强成功回执。"
-                        f"请先不要重复点击{action_config['submitActionLabel']}。"
-                    )
-                )
-                if flow_status == "submitted_pending_confirmation"
-                else action_config["successMessage"]
-            )
-            if not dry_run and flow_status == "succeeded":
-                try:
-                    final_todo_process_status = action_config["todoProcessStatusOnSucceeded"]
-                    permission_store.update_single_todo_process_status(document_no, final_todo_process_status)
-                    add_event(
-                        "todo_process_status_updated",
-                        documentNo=document_no,
-                        todoProcessStatus=final_todo_process_status,
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    add_event("todo_process_status_update_failed", error=str(exc), documentNo=document_no)
-            execution_log["result"] = flow_result
-            execution_log["response"] = response_payload
-        except Exception:
-            _capture_failure_screenshot(
-                page=page,
-                screenshot_path=screenshot_path,
-                response_payload=response_payload,
-                add_event=add_event,
-            )
-            raise
     except Exception as exc:  # noqa: BLE001
-        response_payload["status"] = "failed"
-        response_payload["finishedAt"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        response_payload["durationMs"] = round((time.perf_counter() - started_perf) * 1000, 1)
-        response_payload["message"] = (
-            f"审批执行失败：{exc}。详见 {response_payload['logFile']}"
-        )
-
-        execution_log["error"] = {
-            "type": type(exc).__name__,
-            "message": str(exc),
-            "traceback": traceback.format_exc(),
-        }
-        execution_log["response"] = response_payload
-        log_path.write_text(
-            json.dumps(execution_log, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        raise RuntimeError(response_payload["message"]) from exc
+        add_event("batch_request_failed", error=str(exc))
+        processed_document_nos = {str(item.get("documentNo") or "").strip() for item in batch_results}
+        for document_no in normalized_document_nos:
+            if document_no in processed_document_nos:
+                continue
+            batch_results.append(
+                _build_failed_approval_response(
+                    document_no=document_no,
+                    normalized_action=normalized_action,
+                    action_config=action_config,
+                    approval_opinion="",
+                    dry_run=dry_run,
+                    message=f"批量{action_config['submitActionLabel']}未执行：{exc}",
+                )
+            )
     finally:
         if browser_session_acquired:
             release_approval_browser_session(
                 close_session=True,
-                close_reason="approval_request_finished",
+                close_reason="batch_approval_request_finished",
             )
 
+    succeeded_count = sum(1 for item in batch_results if item.get("status") == "succeeded")
+    failed_count = len(batch_results) - succeeded_count
+    response_payload["results"] = batch_results
+    response_payload["succeededCount"] = succeeded_count
+    response_payload["failedCount"] = failed_count
+    response_payload["finishedAt"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    response_payload["durationMs"] = round((time.perf_counter() - started_perf) * 1000, 1)
+
+    if failed_count == 0:
+        response_payload["status"] = "succeeded"
+    elif succeeded_count == 0:
+        response_payload["status"] = "failed"
+    else:
+        response_payload["status"] = "partial"
+
+    action_label = "批量批准" if normalized_action == "approve" else "批量驳回"
+    if dry_run:
+        action_label = f"{action_label}连通性验证"
+    response_payload["message"] = (
+        f"{action_label}完成：成功 {succeeded_count}，失败 {failed_count}，共 {len(batch_results)} 条。"
+    )
     flush_execution_log()
     return response_payload

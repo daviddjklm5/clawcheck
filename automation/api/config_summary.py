@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from automation.utils.collect_schedule import get_collect_schedule_summary
 from automation.utils.config_loader import Settings, load_settings
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -55,6 +56,7 @@ def _to_repo_relative(raw_path: str) -> str:
 
 def get_runtime_configuration_summary() -> dict[str, Any]:
     settings_path, settings = _load_runtime_settings()
+    collect_schedule = get_collect_schedule_summary().to_payload()
 
     env_overrides = {
         "IERP_PG_HOST": bool(os.getenv("IERP_PG_HOST")),
@@ -103,6 +105,22 @@ def get_runtime_configuration_summary() -> dict[str, Any]:
                 "value": "不展示密码",
                 "hint": "只显示 host / port / dbname / schema 等摘要。",
                 "tone": "warning",
+            },
+            {
+                "label": "定时采集",
+                "value": (
+                    "运行中"
+                    if collect_schedule["isRunning"]
+                    else f"每 {collect_schedule['intervalMinutes']} 分钟"
+                    if collect_schedule["enabled"]
+                    else "未启用"
+                ),
+                "hint": (
+                    "当前批次运行中，下一次时间待本批结束后重算。"
+                    if collect_schedule["isRunning"]
+                    else f"由 task daemon 按 {collect_schedule['pollSeconds']} 秒轮询生效。"
+                ),
+                "tone": "warning" if collect_schedule["isRunning"] else "success" if collect_schedule["enabled"] else "default",
             },
         ],
         "runtime": [
@@ -208,4 +226,5 @@ def get_runtime_configuration_summary() -> dict[str, Any]:
             "数据库密码仍只保留在本地 YAML 或环境变量中。",
             f"环境变量覆盖状态：{', '.join([name for name, enabled in env_overrides.items() if enabled]) or '无'}。",
         ],
+        "collectSchedule": collect_schedule,
     }
