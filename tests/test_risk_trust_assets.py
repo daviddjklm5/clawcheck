@@ -101,6 +101,9 @@ class RiskTrustYamlAssetsTest(unittest.TestCase):
             rule for rule in target_org_rules if rule["id"] == "TARGET_ORG_CANCEL_ROLE_SKIPPED"
         )
         skipped_scope_rule = next(rule for rule in target_org_rules if rule["id"] == "TARGET_ORG_SCOPE_SKIPPED")
+        ss001_wyw_override_rule = next(
+            rule for rule in target_org_rules if rule["id"] == "TARGET_ORG_SS001_50702609_OVERRIDE"
+        )
         l4_skip_rule = next(rule for rule in target_org_rules if rule["id"] == "TARGET_ORG_L4_SKIPPED")
         local_same_company_trusted_rule = next(
             rule for rule in target_org_rules if rule["id"] == "TARGET_ORG_LOCAL_SAME_COMPANY_TRUSTED"
@@ -182,6 +185,10 @@ class RiskTrustYamlAssetsTest(unittest.TestCase):
             "cancel_role_apply_types",
         )
         self.assertEqual(skipped_scope_rule["score"], 2.5)
+        self.assertEqual(ss001_wyw_override_rule["priority"], 100)
+        self.assertEqual(ss001_wyw_override_rule["score"], 2.5)
+        self.assertEqual(ss001_wyw_override_rule["when"]["role_code_equals"], "SS001")
+        self.assertEqual(ss001_wyw_override_rule["when"]["target_org_code_equals"], "50702609")
         self.assertEqual(l4_skip_rule["score"], 2.5)
         self.assertEqual(
             l4_skip_rule["when"]["target_org_auth_level_in_ref"],

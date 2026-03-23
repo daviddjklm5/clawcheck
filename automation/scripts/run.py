@@ -701,9 +701,17 @@ def main() -> int:
                         retries=settings.runtime.retries,
                         wait_sec=settings.runtime.retry_wait_sec,
                     )
+                    requested_document_no = args.document_no.strip()
+                    if not target_document_nos and requested_document_no:
+                        raise RuntimeError(
+                            f"Requested permission application document was not found in todo list: {requested_document_no}"
+                        )
+
                     store = PostgresPermissionStore(settings.db)
                     document_sync_states: dict[str, dict[str, object]] = {}
-                    if PostgresPermissionStore.is_configured(settings.db):
+                    if not target_document_nos:
+                        logger.info("No permission application documents found in todo list; continuing with empty result")
+                    elif PostgresPermissionStore.is_configured(settings.db):
                         try:
                             document_sync_states = store.fetch_document_sync_states(target_document_nos)
                             logger.info(
@@ -861,7 +869,7 @@ def main() -> int:
                                     "error": f"{type(exc).__name__}: {exc}",
                                 }
                             )
-                    if not documents and not skipped_documents:
+                    if target_document_nos and not documents and not skipped_documents:
                         raise RuntimeError("No permission application documents were collected successfully")
 
                     documents = store.prepare_documents(documents)
@@ -893,7 +901,7 @@ def main() -> int:
                     else:
                         logger.info("No document required PostgreSQL write after sync-state comparison")
 
-                    if not documents and not skipped_documents:
+                    if target_document_nos and not documents and not skipped_documents:
                         raise RuntimeError("No permission application documents were persisted successfully")
 
                     dump_path = resolve_path(args.dump_json) if args.dump_json else logs_dir / f"collect_{timestamp_slug()}.json"

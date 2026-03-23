@@ -235,6 +235,7 @@ class RiskTrustEvaluator:
                     assessment_batch_no=assessment_batch_no,
                 )
             )
+            candidates[-1]["_priority"] = 0
 
         for rule in dimension_config.get("rules", []):
             if not self._rule_matches(rule.get("when", {}), context):
@@ -263,6 +264,7 @@ class RiskTrustEvaluator:
                     assessment_batch_no=assessment_batch_no,
                 )
             )
+            candidates[-1]["_priority"] = int(rule.get("priority", 0) or 0)
 
         if not candidates:
             raise ValueError(
@@ -270,10 +272,16 @@ class RiskTrustEvaluator:
                 f"role={role_row.get('role_code') if role_row else None}, org={target_row.get('org_code') if target_row else None}"
             )
 
-        min_score = min(float(item["score"]) for item in candidates)
-        selected = [item for item in candidates if float(item["score"]) == min_score]
+        max_priority = max(int(item.get("_priority", 0) or 0) for item in candidates)
+        prioritized = [item for item in candidates if int(item.get("_priority", 0) or 0) == max_priority]
+
+        min_score = min(float(item["score"]) for item in prioritized)
+        selected = [item for item in prioritized if float(item["score"]) == min_score]
         selected.sort(key=lambda item: str(item["rule_id"]))
-        return [selected[0]]
+
+        output_row = dict(selected[0])
+        output_row.pop("_priority", None)
+        return [output_row]
 
     def _build_rule_context(
         self,
@@ -309,6 +317,7 @@ class RiskTrustEvaluator:
             "has_warzone_hr_in_history": bool(approval.get("has_warzone_hr_in_history")),
             "has_warzone_hr_in_current_round": bool(approval.get("has_warzone_hr_in_current_round")),
             "all_details_cancel_role_apply_type": bool(document_flags.get("all_details_cancel_role_apply_type")),
+            "role_code": self._normalized_text(role_row.get("role_code")),
             "role_catalog_matched": bool(role_row.get("catalog_matched")),
             "apply_type": self._normalized_text(role_row.get("apply_type")),
             "permission_level": self._normalized_text(role_row.get("permission_level")),

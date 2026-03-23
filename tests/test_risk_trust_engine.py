@@ -1040,6 +1040,58 @@ class RiskTrustEvaluatorTest(unittest.TestCase):
         self.assertFalse(self.evaluator._rule_matches(cross_unit_other_rule["when"], context))
         self.assertTrue(self.evaluator._rule_matches(auth_level_map_rule["when"], context))
 
+    def test_ss001_target_50702609_uses_priority_override(self) -> None:
+        bundle = {
+            "basic_info": {"document_no": "RA-SS001-50702609", "employee_no": "001", "company_name": "OTHER_COMPANY"},
+            "applicant_person_attributes": {"hr_type": "H1"},
+            "applicant_org_attributes": {"process_level_category": "ANY_CATEGORY", "org_unit_name": "ORG-A"},
+            "approval_records": [
+                {
+                    "node_name": "N1",
+                    "approver_employee_no": "001",
+                    "approval_action": "submit",
+                    "approval_time": "2026-03-23 10:00:00",
+                    "approver_org_attributes": {"process_level_category": "ANY_CATEGORY"},
+                },
+                {
+                    "node_name": "N2",
+                    "approver_employee_no": "008",
+                    "approval_action": "agree",
+                    "approval_time": "2026-03-23 10:10:00",
+                    "approver_org_attributes": {"process_level_category": "WARZONE_HR"},
+                },
+            ],
+            "permission_details": [
+                {
+                    "document_no": "RA-SS001-50702609",
+                    "role_code": "SS001",
+                    "role_name": "REMOTE_SOCIAL_SECURITY",
+                    "apply_type": "NEW_ROLE",
+                    "catalog_matched": True,
+                    "permission_level": "C类-常规",
+                    "skip_org_scope_check": False,
+                    "targets": [
+                        {
+                            "org_code": "50702609",
+                            "org_auth_level": "1级授权",
+                            "org_unit_name": "WYW",
+                            "org_company_name": "ONEWO",
+                        }
+                    ],
+                }
+            ],
+        }
+
+        summary_rows, detail_rows = self.evaluator.evaluate_documents(
+            [bundle], assessment_batch_no="audit_batch_ss001_50702609"
+        )
+
+        target_org_detail = next(row for row in detail_rows if row["rule_id"] == "TARGET_ORG_SS001_50702609_OVERRIDE")
+        self.assertEqual(target_org_detail["rule_id"], "TARGET_ORG_SS001_50702609_OVERRIDE")
+        self.assertEqual(target_org_detail["score"], 2.5)
+        self.assertFalse(any(row["rule_id"] == "TARGET_ORG_L1_NOT_ALLOWED" for row in detail_rows))
+        self.assertEqual(len(summary_rows), 1)
+
     def test_none_payload_sections_do_not_break_evaluation(self) -> None:
         bundle = {
             "basic_info": {"document_no": "RA-6", "employee_no": "001"},

@@ -220,6 +220,14 @@ dimensions:
           target_org_code_is_null: true
         score: 2.5
         summary: "角色不检查组织范围"
+      - id: "TARGET_ORG_SS001_50702609_OVERRIDE"
+        priority: 100
+        when:
+          apply_type_not_in_ref: "cancel_role_apply_types"
+          role_code_equals: "SS001"
+          target_org_code_equals: "50702609"
+        score: 2.5
+        summary: "SS001 目标组织为万物云(50702609)按可信任处理"
       - id: "TARGET_ORG_L4_SKIPPED"
         when:
           target_org_auth_level_in_ref: "target_org_auth_level_skip_assessment_levels"
