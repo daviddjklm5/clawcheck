@@ -42,17 +42,13 @@ try {
     }
 
     if (-not $SkipWebuiBuild) {
-        $BuildArgs = @(
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
-            (Join-Path $RepoRoot "automation\scripts\build_webui.ps1")
-        )
+        $BuildScript = Join-Path $RepoRoot "automation\scripts\build_webui.ps1"
         if ($NodeDir) {
-            $BuildArgs += @("-NodeDir", $NodeDir)
+            & $BuildScript -NodeDir $NodeDir
         }
-        & powershell.exe @BuildArgs
+        else {
+            & $BuildScript
+        }
         if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
         }
