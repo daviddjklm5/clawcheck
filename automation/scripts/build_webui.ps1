@@ -21,10 +21,21 @@ try {
 
     if ($Install -or -not (Test-Path (Join-Path $WebuiDir "node_modules"))) {
         & $NodeResolution.NpmCommand ci
+        if ($LASTEXITCODE -ne 0) {
+            throw "npm ci failed."
+        }
     }
 
     $env:VITE_API_BASE_URL = $ApiBaseUrl
-    & $NodeResolution.NpmCommand run build
+    & $NodeResolution.NpmCommand exec -- tsc --noEmit
+    if ($LASTEXITCODE -ne 0) {
+        throw "tsc --noEmit failed."
+    }
+
+    & $NodeResolution.NpmCommand exec -- vite build
+    if ($LASTEXITCODE -ne 0) {
+        throw "vite build failed."
+    }
 }
 finally {
     Remove-Item Env:VITE_API_BASE_URL -ErrorAction SilentlyContinue
