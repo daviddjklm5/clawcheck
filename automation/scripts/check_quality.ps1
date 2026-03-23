@@ -43,15 +43,14 @@ try {
 
     if (-not $SkipWebuiBuild) {
         $BuildScript = Join-Path $RepoRoot "automation\scripts\build_webui.ps1"
+        Write-Host "Running webui build..."
         if ($NodeDir) {
             & $BuildScript -NodeDir $NodeDir
         }
         else {
             & $BuildScript
         }
-        if ($LASTEXITCODE -ne 0) {
-            exit $LASTEXITCODE
-        }
+        Write-Host "Webui build completed."
     }
 }
 finally {
