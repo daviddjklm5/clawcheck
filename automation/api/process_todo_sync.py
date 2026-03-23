@@ -44,8 +44,9 @@ def _extract_log_file(output_text: str) -> str:
     return _to_repo_relative(Path(matches[-1].strip()))
 
 
-def run_process_todo_sync_now(*, dry_run: bool = False) -> dict[str, Any]:
+def run_process_todo_sync_now(*, dry_run: bool = False, headed: bool | None = None) -> dict[str, Any]:
     _, settings = _load_runtime_settings()
+    resolved_headed = settings.browser.headed if headed is None else bool(headed)
     logs_dir = _resolve_runtime_path(settings.runtime.logs_dir)
     logs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -57,6 +58,7 @@ def run_process_todo_sync_now(*, dry_run: bool = False) -> dict[str, Any]:
         sys.executable,
         "automation/scripts/run.py",
         "sync-todo-status",
+        "--headed" if resolved_headed else "--headless",
         "--dump-json",
         str(dump_path),
     ]

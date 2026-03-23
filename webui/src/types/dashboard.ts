@@ -164,6 +164,7 @@ export interface CollectDetail {
 export interface CollectRunRequest {
   documentNo: string;
   limit: number;
+  headed?: boolean | null;
   dryRun: boolean;
   autoAudit: boolean;
   forceRecollect: boolean;
@@ -178,6 +179,7 @@ export interface CollectRunSummary {
   finishedAt: string;
   requestedDocumentNo: string;
   requestedLimit: number;
+  headed: boolean;
   dryRun: boolean;
   forceRecollect: boolean;
   requestedCount: number;
@@ -335,6 +337,7 @@ export interface ProcessApprovalRequest {
   action: "approve" | "reject";
   approvalOpinion: string;
   dryRun: boolean;
+  headed?: boolean | null;
 }
 
 export interface ProcessAuditRunRequest {
@@ -385,6 +388,7 @@ export interface ProcessApprovalResponse {
 
 export interface ProcessTodoSyncRequest {
   dryRun: boolean;
+  headed?: boolean | null;
 }
 
 export interface ProcessTodoSyncResponse {

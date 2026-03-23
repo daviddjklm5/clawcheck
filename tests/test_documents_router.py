@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import unittest
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 from fastapi import HTTPException
 
@@ -61,6 +61,7 @@ class DocumentsRouterTest(unittest.TestCase):
         mocked_start.assert_called_once_with(
             document_no="RA-TEST-001",
             limit=1,
+            headed=ANY,
             dry_run=True,
             auto_audit=False,
             force_recollect=True,
@@ -186,7 +187,7 @@ class DocumentsRouterTest(unittest.TestCase):
             result = post_process_workbench_todo_sync(request)
 
         self.assertEqual(result, payload)
-        mocked_sync.assert_called_once_with(dry_run=False)
+        mocked_sync.assert_called_once_with(dry_run=False, headed=ANY)
 
 
 if __name__ == "__main__":

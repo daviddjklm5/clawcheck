@@ -10,10 +10,12 @@ import {
   DialogContentText,
   DialogTitle,
   Drawer,
+  FormControlLabel,
   IconButton,
   MenuItem,
   Paper,
   Stack,
+  Switch,
   Tab,
   Tabs,
   TextField,
@@ -320,6 +322,7 @@ export function ProcessDocumentsPage() {
   const [rejectConfirmOpen, setRejectConfirmOpen] = useState(false);
   const [approvalResult, setApprovalResult] = useState<ProcessApprovalResponse | null>(null);
   const [approvalError, setApprovalError] = useState<string | null>(null);
+  const [runHeaded, setRunHeaded] = useState(true);
   const [todoSyncing, setTodoSyncing] = useState(false);
   const [todoSyncResult, setTodoSyncResult] = useState<ProcessTodoSyncResponse | null>(null);
   const [todoSyncError, setTodoSyncError] = useState<string | null>(null);
@@ -611,6 +614,7 @@ export function ProcessDocumentsPage() {
         action,
         approvalOpinion: opinion,
         dryRun,
+        headed: runHeaded,
       });
       setApprovalResult(response);
       if (!dryRun && response.status === "succeeded") {
@@ -662,7 +666,7 @@ export function ProcessDocumentsPage() {
       setTodoSyncing(true);
       setTodoSyncError(null);
       setTodoSyncResult(null);
-      const response = await dashboardApi.syncProcessTodoStatus({ dryRun: false });
+      const response = await dashboardApi.syncProcessTodoStatus({ dryRun: false, headed: runHeaded });
       setTodoSyncResult(response);
       setRefreshVersion((currentValue) => currentValue + 1);
     } catch (syncError) {
@@ -877,6 +881,11 @@ export function ProcessDocumentsPage() {
                 </MenuItem>
               ))}
             </TextField>
+            <FormControlLabel
+              control={<Switch checked={runHeaded} onChange={(event) => setRunHeaded(event.target.checked)} />}
+              label="可见浏览器"
+              sx={{ ml: 0 }}
+            />
             <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap" }}>
               {quickConclusionFilters.map((item) => {
                 const selected = conclusionFilter === item || (item === "all" && conclusionFilter === "all");

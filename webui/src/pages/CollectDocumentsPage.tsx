@@ -217,6 +217,7 @@ export function CollectDocumentsPage() {
   const [refreshVersion, setRefreshVersion] = useState(0);
   const [runDocumentNo, setRunDocumentNo] = useState("");
   const [runLimit, setRunLimit] = useState("100");
+  const [runHeaded, setRunHeaded] = useState(true);
   const [runDryRun, setRunDryRun] = useState(false);
   const [runAutoAudit, setRunAutoAudit] = useState(true);
   const [runForceRecollect, setRunForceRecollect] = useState(false);
@@ -425,6 +426,7 @@ export function CollectDocumentsPage() {
       const result = await dashboardApi.startCollectTask({
         documentNo: normalizedDocumentNo,
         limit: normalizedDocumentNo ? 1 : parsedLimit,
+        headed: runHeaded,
         dryRun: runDryRun,
         autoAudit: runDryRun ? false : runAutoAudit,
         forceRecollect: normalizedDocumentNo ? forceRecollect : false,
@@ -601,6 +603,11 @@ export function CollectDocumentsPage() {
               size="small"
               sx={{ width: { xs: "100%", sm: 120 } }}
               disabled={Boolean(runDocumentNo.trim())}
+            />
+            <FormControlLabel
+              control={<Switch checked={runHeaded} onChange={(event) => setRunHeaded(event.target.checked)} />}
+              label="可见浏览器"
+              sx={{ ml: 0 }}
             />
             <FormControlLabel
               control={<Switch checked={runDryRun} onChange={(event) => setRunDryRun(event.target.checked)} />}

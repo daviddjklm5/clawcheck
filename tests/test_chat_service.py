@@ -31,6 +31,13 @@ class _EmptyArgs(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class _DocumentDetailArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    documentNo: str
+    assessmentBatchNo: str = ""
+
+
 @dataclass
 class _FakeThread:
     name: str = "fake-thread"
@@ -250,6 +257,159 @@ def _build_process_document_detail(
         },
         "notes": [],
     }
+
+
+def _build_process_workbench_payload(
+    *,
+    pending_document_nos: list[str],
+    processed_document_nos: list[str] | None = None,
+) -> dict[str, Any]:
+    processed_document_nos = processed_document_nos or []
+    documents: list[dict[str, Any]] = [
+        {"documentNo": document_no, "todoProcessStatus": "\u5f85\u5904\u7406"}
+        for document_no in pending_document_nos
+    ]
+    documents.extend(
+        {"documentNo": document_no, "todoProcessStatus": "\u5df2\u5904\u7406"}
+        for document_no in processed_document_nos
+    )
+    return {
+        "stats": [{"label": "\u5f85\u5904\u7406\u5355\u636e", "value": str(len(pending_document_nos))}],
+        "documents": documents,
+    }
+
+
+def test_execute_turn_uses_fast_path_for_pending_document_list_without_model_calls(tmp_path: Path) -> None:
+    fake_store = _FakeChatStore()
+    fake_store.create_session(
+        session_id="s1",
+        title="Test",
+        workspace_dir=str(Path.cwd()),
+        model_provider="openai_compatible",
+        model_name="gpt-test",
+    )
+    user_message = fake_store.create_message(
+        message_id="u1",
+        session_id="s1",
+        role="user",
+        content="列出全部的待处理单据编号，不要只给数量",
+        token_count=1,
+    )
+    assistant_message = fake_store.create_message(
+        message_id="a1",
+        session_id="s1",
+        role="assistant",
+        content="",
+        token_count=0,
+    )
+    tool_registry = ToolRegistry(
+        {
+            "get_process_workbench": ToolDefinition(
+                name="get_process_workbench",
+                description="test",
+                arguments_model=_EmptyArgs,
+                resolver=lambda _: _build_process_workbench_payload(
+                    pending_document_nos=["RA-20260310-00019862", "RA-20260316-00020025"],
+                    processed_document_nos=["RA-20260317-00020118"],
+                ),
+                source_of_truth="GET /api/documents/process-workbench",
+            )
+        }
+    )
+    service = ChatService(
+        _build_settings(),
+        store=fake_store,  # type: ignore[arg-type]
+        provider_config=_build_provider_config(),
+        skill_loader=_build_skill_loader(tmp_path),
+        tool_registry=tool_registry,
+    )
+    _attach_active_run(
+        service,
+        session_id="s1",
+        user_message_id=user_message["messageId"],
+        assistant_message_id=assistant_message["messageId"],
+    )
+
+    with patch("automation.chat.service.run_router_exec", side_effect=AssertionError("fast path should skip router")), patch(
+        "automation.chat.service.run_codex_exec",
+        side_effect=AssertionError("fast path should skip answer model"),
+    ):
+        service._execute_turn(
+            run_id="run-1",
+            session_id="s1",
+            user_message_id=user_message["messageId"],
+            assistant_message_id=assistant_message["messageId"],
+        )
+
+    content = fake_store.messages["a1"]["content"]
+    assert "RA-20260310-00019862" in content
+    assert "RA-20260316-00020025" in content
+    assert "RA-20260317-00020118" not in content
+    assert any(log["eventType"] == "fast_path_hit" for log in fake_store.logs)
+
+
+def test_execute_turn_uses_fast_path_for_document_status_query_without_model_calls(tmp_path: Path) -> None:
+    fake_store = _FakeChatStore()
+    fake_store.create_session(
+        session_id="s1",
+        title="Test",
+        workspace_dir=str(Path.cwd()),
+        model_provider="openai_compatible",
+        model_name="gpt-test",
+    )
+    user_message = fake_store.create_message(
+        message_id="u1",
+        session_id="s1",
+        role="user",
+        content="RA-20260310-00019862 当前状态是什么",
+        token_count=1,
+    )
+    assistant_message = fake_store.create_message(
+        message_id="a1",
+        session_id="s1",
+        role="assistant",
+        content="",
+        token_count=0,
+    )
+    tool_registry = ToolRegistry(
+        {
+            "get_process_document_detail": ToolDefinition(
+                name="get_process_document_detail",
+                description="test",
+                arguments_model=_DocumentDetailArgs,
+                resolver=lambda _: _build_process_document_detail(document_no="RA-20260310-00019862"),
+                source_of_truth="GET /api/documents/process-workbench/{document_no}",
+            )
+        }
+    )
+    service = ChatService(
+        _build_settings(),
+        store=fake_store,  # type: ignore[arg-type]
+        provider_config=_build_provider_config(),
+        skill_loader=_build_skill_loader(tmp_path),
+        tool_registry=tool_registry,
+    )
+    _attach_active_run(
+        service,
+        session_id="s1",
+        user_message_id=user_message["messageId"],
+        assistant_message_id=assistant_message["messageId"],
+    )
+
+    with patch("automation.chat.service.run_router_exec", side_effect=AssertionError("fast path should skip router")), patch(
+        "automation.chat.service.run_codex_exec",
+        side_effect=AssertionError("fast path should skip answer model"),
+    ):
+        service._execute_turn(
+            run_id="run-1",
+            session_id="s1",
+            user_message_id=user_message["messageId"],
+            assistant_message_id=assistant_message["messageId"],
+        )
+
+    content = fake_store.messages["a1"]["content"]
+    assert "RA-20260310-00019862" in content
+    assert any(log["eventType"] == "fast_path_hit" for log in fake_store.logs)
 
 
 def test_execute_turn_uses_process_workbench_templated_reply_for_pending_count_query(tmp_path: Path) -> None:
@@ -614,13 +774,14 @@ def test_execute_turn_falls_back_to_general_chat_when_router_fails(tmp_path: Pat
         content="",
         token_count=0,
     )
-    service = ChatService(
-        _build_settings(),
-        store=fake_store,  # type: ignore[arg-type]
-        provider_config=_build_provider_config(),
-        skill_loader=_build_skill_loader(tmp_path),
-        tool_registry=ToolRegistry({}),
-    )
+    with patch.dict(os.environ, {"CLAWCHECK_CHAT_FAST_PATH_ENABLED": "false"}, clear=False):
+        service = ChatService(
+            _build_settings(),
+            store=fake_store,  # type: ignore[arg-type]
+            provider_config=_build_provider_config(),
+            skill_loader=_build_skill_loader(tmp_path),
+            tool_registry=ToolRegistry({}),
+        )
     _attach_active_run(
         service,
         session_id="s1",
@@ -683,13 +844,14 @@ def test_execute_turn_falls_back_to_general_chat_when_pending_list_directive_is_
         content="",
         token_count=0,
     )
-    service = ChatService(
-        _build_settings(),
-        store=fake_store,  # type: ignore[arg-type]
-        provider_config=_build_provider_config(),
-        skill_loader=_build_skill_loader(tmp_path),
-        tool_registry=ToolRegistry({}),
-    )
+    with patch.dict(os.environ, {"CLAWCHECK_CHAT_FAST_PATH_ENABLED": "false"}, clear=False):
+        service = ChatService(
+            _build_settings(),
+            store=fake_store,  # type: ignore[arg-type]
+            provider_config=_build_provider_config(),
+            skill_loader=_build_skill_loader(tmp_path),
+            tool_registry=ToolRegistry({}),
+        )
     _attach_active_run(
         service,
         session_id="s1",
@@ -830,6 +992,99 @@ def test_execute_turn_creates_approval_plan_for_approve_request(tmp_path: Path) 
     assert "验证命令：验证审批计划 approval-plan-" in content
     plan_files = list((tmp_path / "runtime" / "chat" / "approval-plans").glob("s1_approval-plan-*.json"))
     assert len(plan_files) == 1
+
+
+def test_execute_turn_auto_adds_process_approval_reference_for_approval_prepare(tmp_path: Path) -> None:
+    fake_store = _FakeChatStore()
+    fake_store.create_session(
+        session_id="s1",
+        title="Test",
+        workspace_dir=str(Path.cwd()),
+        model_provider="openai_compatible",
+        model_name="gpt-test",
+    )
+    user_message = fake_store.create_message(
+        message_id="u1",
+        session_id="s1",
+        role="user",
+        content="请批准单据 RA-20260310-00019845，意见：同意",
+        token_count=1,
+    )
+    assistant_message = fake_store.create_message(
+        message_id="a1",
+        session_id="s1",
+        role="assistant",
+        content="",
+        token_count=0,
+    )
+
+    with patch.dict(
+        os.environ,
+        {
+            "CLAWCHECK_CHAT_APPROVAL_ENABLED": "true",
+            "CLAWCHECK_CHAT_APPROVAL_DRY_RUN_ONLY": "true",
+            "CLAWCHECK_CHAT_APPROVAL_PLAN_TTL_SECONDS": "600",
+        },
+        clear=False,
+    ):
+        service = ChatService(
+            _build_settings(),
+            store=fake_store,  # type: ignore[arg-type]
+            provider_config=_build_provider_config(),
+            skill_loader=_build_skill_loader(tmp_path),
+            tool_registry=ToolRegistry({}),
+        )
+    service._approval_plan_store = ApprovalPlanStore(tmp_path / "runtime" / "chat" / "approval-plans")
+    _attach_active_run(
+        service,
+        session_id="s1",
+        user_message_id=user_message["messageId"],
+        assistant_message_id=assistant_message["messageId"],
+    )
+
+    with patch(
+        "automation.chat.service.run_router_exec",
+        return_value=RouterExecutionResult(
+            status="succeeded",
+            decision={
+                "route": "approval_prepare",
+                "selectedSkills": ["clawcheck-project"],
+                "selectedReferences": ["answer-policy"],
+                "toolCalls": [],
+                "answerMode": "templated",
+                "confidence": 0.95,
+                "missingInputs": [],
+                "clarificationQuestion": "",
+                "reason": "approval intent",
+                "approvalRequest": {
+                    "documentNo": "RA-20260310-00019845",
+                    "action": "approve",
+                    "approvalOpinion": "同意",
+                    "dryRun": False,
+                },
+            },
+            exit_code=0,
+            raw_output="{}",
+            error_message="",
+        ),
+    ), patch(
+        "automation.chat.service.get_process_document_detail",
+        return_value=_build_process_document_detail(),
+    ):
+        service._execute_turn(
+            run_id="run-1",
+            session_id="s1",
+            user_message_id=user_message["messageId"],
+            assistant_message_id=assistant_message["messageId"],
+        )
+
+    content = fake_store.messages["a1"]["content"]
+    assert "已生成待确认审批计划 approval-plan-" in content
+    assert any(
+        "process-approval reference; auto-added reference" in log["eventSummary"]
+        for log in fake_store.logs
+        if log["eventType"] == "router_decision_normalized"
+    )
 
 
 def test_execute_turn_returns_operable_hint_when_chat_approval_disabled(tmp_path: Path) -> None:

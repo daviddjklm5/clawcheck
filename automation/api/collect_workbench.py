@@ -19,7 +19,6 @@ _SUMMARY_PREFIX = "collect_summary_"
 _TASK_LOCK = threading.Lock()
 _TASK_STATE_BY_ID: dict[str, dict[str, Any]] = {}
 _COLLECT_TIMESTAMP_PATTERN = re.compile(r"collect_(\d{8}_\d{6})_[^.]+\.json$")
-_BACKGROUND_COLLECT_BROWSER_ARG = "--headless"
 
 
 def _resolve_runtime_path(raw_path: str) -> Path:
@@ -52,6 +51,7 @@ def _task_to_payload(task: dict[str, Any]) -> dict[str, Any]:
         "finishedAt": task.get("finishedAt", ""),
         "requestedDocumentNo": task.get("requestedDocumentNo", ""),
         "requestedLimit": int(task.get("requestedLimit") or 0),
+        "headed": bool(task.get("headed")),
         "dryRun": bool(task.get("dryRun")),
         "autoAudit": bool(task.get("autoAudit")),
         "forceRecollect": bool(task.get("forceRecollect")),
@@ -270,7 +270,7 @@ def _run_collect_task(task_id: str) -> None:
         sys.executable,
         "automation/scripts/run.py",
         "collect",
-        _BACKGROUND_COLLECT_BROWSER_ARG,
+        "--headed" if bool(task.get("headed")) else "--headless",
         "--limit",
         str(task["requestedLimit"]),
         "--dump-json",
@@ -387,6 +387,7 @@ def _load_recent_collect_runs(logs_dir: Path, limit: int = 8, active_task_ids: s
                 payload = _reconcile_stale_collect_run(path, payload)
             payload.setdefault("id", payload.get("taskId") or path.stem)
             payload.setdefault("summaryFile", _to_repo_relative(path))
+            payload.setdefault("headed", False)
             payload.setdefault("forceRecollect", False)
             runs.append(payload)
     return runs
@@ -417,6 +418,7 @@ def start_collect_task(
     *,
     document_no: str | None = None,
     limit: int = 100,
+    headed: bool | None = None,
     dry_run: bool = False,
     auto_audit: bool = True,
     force_recollect: bool = False,
@@ -425,6 +427,7 @@ def start_collect_task(
     normalized_limit = 1 if normalized_document_no else max(int(limit or 0), 1)
 
     _, settings = _load_runtime_settings()
+    resolved_headed = settings.browser.headed if headed is None else bool(headed)
     logs_dir = _resolve_runtime_path(settings.runtime.logs_dir)
     logs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -440,6 +443,7 @@ def start_collect_task(
         "finishedAt": "",
         "requestedDocumentNo": normalized_document_no,
         "requestedLimit": normalized_limit,
+        "headed": bool(resolved_headed),
         "dryRun": bool(dry_run),
         "autoAudit": bool(auto_audit),
         "forceRecollect": bool(force_recollect),

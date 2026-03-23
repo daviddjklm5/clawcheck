@@ -55,6 +55,7 @@ def build_router_prompt(
         "If a tool call requires a missing critical input, do not guess. Fill missingInputs and clarificationQuestion, and leave toolCalls empty until the user provides the missing value.",
         "If route is approval_prepare, do not include any toolCalls. approval actions must never be emitted as normal tools.",
         "If route is approval_prepare, fill approvalRequest with only the values explicitly given by the user. Do not invent document numbers, actions, or approval opinions.",
+        "If route is approval_prepare, selectedReferences must include process-approval.",
         "If route is not approval_prepare, set approvalRequest to null.",
         "Set requiresPendingDocumentList=true only when the user explicitly asks to list all pending document numbers.",
         "If requiresPendingDocumentList=true, route must be tool_first with get_process_workbench and no missingInputs.",

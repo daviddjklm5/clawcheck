@@ -196,6 +196,7 @@ def approve_process_document(
     action: str,
     approval_opinion: str,
     dry_run: bool = False,
+    headed: bool | None = None,
 ) -> dict[str, Any]:
     normalized_action = str(action or "").strip().lower()
     action_config = _APPROVAL_ACTION_CONFIG.get(normalized_action)
@@ -205,6 +206,8 @@ def approve_process_document(
         )
 
     settings_path, settings = _load_runtime_settings()
+    if headed is not None:
+        settings.browser.headed = bool(headed)
     credentials_path = _apply_runtime_auth(settings_path, settings)
     selectors = load_selectors(SELECTORS_PATH)
     logs_dir = _resolve_runtime_path(settings.runtime.logs_dir)
@@ -227,6 +230,7 @@ def approve_process_document(
             "action": normalized_action,
             "approvalOpinion": approval_opinion,
             "dryRun": dry_run,
+            "headed": bool(settings.browser.headed),
         },
         "runtime": {
             "settingsFile": _to_repo_relative(settings_path),

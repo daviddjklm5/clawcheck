@@ -3,6 +3,7 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict, Field
 from fastapi import APIRouter, HTTPException, Query
 
+from automation.api.config_summary import _load_runtime_settings
 from automation.api.collect_workbench import (
     get_collect_document_detail,
     get_collect_workbench,
@@ -27,12 +28,14 @@ class ProcessDocumentApprovalRequest(BaseModel):
     action: str = "approve"
     approvalOpinion: str = ""
     dryRun: bool = False
+    headed: bool | None = None
 
 
 class ProcessTodoSyncRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     dryRun: bool = False
+    headed: bool | None = None
 
 
 class CollectRunRequest(BaseModel):
@@ -40,6 +43,7 @@ class CollectRunRequest(BaseModel):
 
     documentNo: str = ""
     limit: int = Field(default=100, ge=1)
+    headed: bool | None = None
     dryRun: bool = False
     autoAudit: bool = True
     forceRecollect: bool = False
@@ -75,9 +79,12 @@ def get_collect_workbench_document(document_no: str) -> dict[str, object]:
 @router.post("/collect-workbench/run")
 def post_collect_workbench_run(payload: CollectRunRequest) -> dict[str, object]:
     try:
+        _, settings = _load_runtime_settings()
+        resolved_headed = settings.browser.headed if payload.headed is None else bool(payload.headed)
         return start_collect_task(
             document_no=payload.documentNo,
             limit=payload.limit,
+            headed=resolved_headed,
             dry_run=payload.dryRun,
             auto_audit=payload.autoAudit,
             force_recollect=payload.forceRecollect,
@@ -148,11 +155,14 @@ def post_process_document_approval(
     payload: ProcessDocumentApprovalRequest,
 ) -> dict[str, object]:
     try:
+        _, settings = _load_runtime_settings()
+        resolved_headed = settings.browser.headed if payload.headed is None else bool(payload.headed)
         return approve_process_document(
             document_no=document_no,
             action=payload.action,
             approval_opinion=payload.approvalOpinion,
             dry_run=payload.dryRun,
+            headed=resolved_headed,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -166,11 +176,14 @@ def post_process_workbench_document_approval(
     payload: ProcessDocumentApprovalRequest,
 ) -> dict[str, object]:
     try:
+        _, settings = _load_runtime_settings()
+        resolved_headed = settings.browser.headed if payload.headed is None else bool(payload.headed)
         return approve_process_document(
             document_no=document_no,
             action=payload.action,
             approval_opinion=payload.approvalOpinion,
             dry_run=payload.dryRun,
+            headed=resolved_headed,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -183,6 +196,11 @@ def post_process_workbench_todo_sync(
     payload: ProcessTodoSyncRequest,
 ) -> dict[str, object]:
     try:
-        return run_process_todo_sync_now(dry_run=payload.dryRun)
+        _, settings = _load_runtime_settings()
+        resolved_headed = settings.browser.headed if payload.headed is None else bool(payload.headed)
+        return run_process_todo_sync_now(
+            dry_run=payload.dryRun,
+            headed=resolved_headed,
+        )
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc

@@ -114,6 +114,53 @@ _APPROVAL_CANCEL_KEYWORDS = (
 )
 
 
+_FAST_PATH_DOCUMENT_NO_PATTERN = re.compile(r"\bRA-\d{8}-\d{8}\b", re.IGNORECASE)
+_FAST_PATH_PENDING_HINTS = ("\u5f85\u5904\u7406", "\u5f85\u529e")
+_FAST_PATH_DOCUMENT_HINTS = ("\u5355\u636e",)
+_FAST_PATH_LIST_HINTS = (
+    "\u5217\u51fa",
+    "\u5217\u4e00\u4e0b",
+    "\u6e05\u5355",
+    "\u5217\u8868",
+    "\u7f16\u53f7",
+    "\u5168\u90e8",
+    "\u660e\u7ec6",
+    "\u90fd\u5217",
+)
+_FAST_PATH_COUNT_HINTS = (
+    "\u591a\u5c11",
+    "\u51e0\u6761",
+    "\u51e0\u5f20",
+    "\u6570\u91cf",
+    "\u7edf\u8ba1",
+    "\u603b\u6570",
+    "count",
+)
+_FAST_PATH_STATUS_HINTS = (
+    "\u72b6\u6001",
+    "\u5f85\u529e",
+    "\u5f85\u5904\u7406",
+    "\u5df2\u5904\u7406",
+    "\u8be6\u60c5",
+    "\u60c5\u51b5",
+    "status",
+)
+_FAST_PATH_APPROVAL_ACTION_HINTS = (
+    "\u6279\u51c6",
+    "\u9a73\u56de",
+    "\u62d2\u7edd",
+    "\u540c\u610f",
+    "\u4e0d\u540c\u610f",
+    "\u5ba1\u6279\u610f\u89c1",
+    "\u786e\u8ba4\u5ba1\u6279\u8ba1\u5212",
+    "\u9a8c\u8bc1\u5ba1\u6279\u8ba1\u5212",
+    "\u53d6\u6d88\u5ba1\u6279\u8ba1\u5212",
+    "approve",
+    "approval",
+    "reject",
+)
+
+
 @dataclass
 class _SessionRunState:
     run_id: str
@@ -154,6 +201,7 @@ class ChatService:
         self._skill_loader = skill_loader or SkillLoader()
         self._tool_registry = tool_registry or build_default_tool_registry()
         self._router_enabled = _env_flag("CLAWCHECK_CHAT_ROUTER_ENABLED", default=True)
+        self._fast_path_enabled = _env_flag("CLAWCHECK_CHAT_FAST_PATH_ENABLED", default=True)
         self._runtime_dir = Path(__file__).resolve().parents[1] / "runtime" / "chat"
         self._approval_enabled = _env_flag("CLAWCHECK_CHAT_APPROVAL_ENABLED", default=False)
         self._approval_dry_run_only = _env_flag("CLAWCHECK_CHAT_APPROVAL_DRY_RUN_ONLY", default=True)
@@ -187,6 +235,7 @@ class ChatService:
         self._store.ensure_table()
         self._run_state_store = RunStateStore(self._store)
         self._router_enabled = _env_flag("CLAWCHECK_CHAT_ROUTER_ENABLED", default=True)
+        self._fast_path_enabled = _env_flag("CLAWCHECK_CHAT_FAST_PATH_ENABLED", default=True)
         self._approval_enabled = _env_flag("CLAWCHECK_CHAT_APPROVAL_ENABLED", default=False)
         self._approval_dry_run_only = _env_flag("CLAWCHECK_CHAT_APPROVAL_DRY_RUN_ONLY", default=True)
         self._approval_plan_ttl_seconds = _env_int(
@@ -829,6 +878,135 @@ class ChatService:
                 pending_document_nos.append(document_no)
         return pending_document_nos
 
+    @staticmethod
+    def _normalize_fast_path_text(text: str) -> str:
+        return "".join(str(text or "").lower().split())
+
+    @staticmethod
+    def _contains_any_keyword(text: str, keywords: tuple[str, ...]) -> bool:
+        return any(keyword in text for keyword in keywords)
+
+    def _match_fast_path_plan(
+        self,
+        latest_user_message: str,
+    ) -> tuple[str, str, dict[str, Any], str] | None:
+        normalized_text = self._normalize_fast_path_text(latest_user_message)
+        if not normalized_text:
+            return None
+
+        has_pending_scope = (
+            self._contains_any_keyword(normalized_text, _FAST_PATH_PENDING_HINTS)
+            and self._contains_any_keyword(normalized_text, _FAST_PATH_DOCUMENT_HINTS)
+        )
+        if has_pending_scope and self._contains_any_keyword(normalized_text, _FAST_PATH_LIST_HINTS):
+            return (
+                "pending_document_list",
+                "get_process_workbench",
+                {},
+                "命中待处理单据编号清单快路径。",
+            )
+        if has_pending_scope and self._contains_any_keyword(normalized_text, _FAST_PATH_COUNT_HINTS):
+            return (
+                "pending_document_count",
+                "get_process_workbench",
+                {},
+                "命中待处理单据数量快路径。",
+            )
+
+        document_match = _FAST_PATH_DOCUMENT_NO_PATTERN.search(latest_user_message)
+        if document_match is None:
+            return None
+        if self._contains_any_keyword(normalized_text, _FAST_PATH_APPROVAL_ACTION_HINTS):
+            return None
+        if not self._contains_any_keyword(normalized_text, _FAST_PATH_STATUS_HINTS):
+            return None
+        document_no = document_match.group(0).upper()
+        return (
+            "document_status_query",
+            "get_process_document_detail",
+            {"documentNo": document_no},
+            f"命中单据状态查询快路径：{document_no}。",
+        )
+
+    def try_handle_fast_path_query(
+        self,
+        *,
+        session_id: str,
+        run_id: str,
+        assistant_message_id: str,
+        latest_user_message: str,
+    ) -> _TurnOutcome | None:
+        if not self._fast_path_enabled:
+            return None
+
+        matched = self._match_fast_path_plan(latest_user_message)
+        if matched is None:
+            return None
+        intent_name, tool_name, tool_arguments, intent_summary = matched
+        self._publish_summary_event(
+            session_id=session_id,
+            run_id=run_id,
+            event_type="fast_path_hit",
+            summary=intent_summary,
+            message_id=assistant_message_id,
+        )
+        self._publish_status(
+            session_id=session_id,
+            run_id=run_id,
+            status="running_tool",
+            message_id=assistant_message_id,
+        )
+        self._publish_tool_event(
+            session_id=session_id,
+            run_id=run_id,
+            event_type="tool_call",
+            summary=(
+                f"快路径直接调用正式工具 {tool_name}，参数："
+                f"{json.dumps(tool_arguments, ensure_ascii=False)}"
+            ),
+            message_id=assistant_message_id,
+        )
+        try:
+            tool_result = self._tool_registry.execute(tool_name, tool_arguments)
+            if tool_result.result is None:
+                raise LookupError(f"正式工具 {tool_name} 未返回结果。")
+        except Exception as exc:  # noqa: BLE001
+            self._publish_summary_event(
+                session_id=session_id,
+                run_id=run_id,
+                event_type="fast_path_fallback",
+                summary=f"快路径执行失败，回退到常规路由链路。原因：{exc}",
+                message_id=assistant_message_id,
+            )
+            return None
+
+        self._publish_tool_event(
+            session_id=session_id,
+            run_id=run_id,
+            event_type="tool_result",
+            summary=f"正式工具 {tool_result.name} 调用成功，来源：{tool_result.source_of_truth}",
+            message_id=assistant_message_id,
+        )
+        if intent_name == "pending_document_list":
+            assistant_text = self._build_pending_document_list_reply(tool_result)
+        else:
+            assistant_text = self.build_templated_reply(tool_results=[tool_result])
+
+        self._publish_summary_event(
+            session_id=session_id,
+            run_id=run_id,
+            event_type="templated_answer",
+            summary="快路径已完成模板化直答。",
+            message_id=assistant_message_id,
+        )
+        return self._publish_static_reply(
+            session_id=session_id,
+            run_id=run_id,
+            assistant_message_id=assistant_message_id,
+            status="templated",
+            assistant_text=assistant_text,
+        )
+
     def _build_pending_document_list_reply(self, tool_result: ToolExecutionResult) -> str:
         if not isinstance(tool_result.result, dict):
             return self.build_templated_reply(tool_results=[tool_result])
@@ -1142,6 +1320,48 @@ class ChatService:
             if self._tool_registry.get_tool(tool_call.name) is None:
                 return False, f"Router selected unregistered tool: {tool_call.name}"
         return True, ""
+
+    def _normalize_router_decision(self, decision: RouterDecision) -> list[str]:
+        notes: list[str] = []
+        if decision.route != "approval_prepare":
+            return notes
+
+        target_reference = "process-approval"
+        if target_reference in decision.selectedReferences:
+            return notes
+
+        index = self._skill_loader.get_index()
+        selected_skill_supports_reference = any(
+            (
+                entry is not None
+                and entry.status != "deprecated"
+                and target_reference in entry.references
+            )
+            for entry in (index.entries.get(skill_name) for skill_name in decision.selectedSkills)
+        )
+        if selected_skill_supports_reference:
+            decision.selectedReferences.append(target_reference)
+            notes.append("approval_prepare missing process-approval reference; auto-added reference.")
+            return notes
+
+        supporting_skills = [
+            entry.skill_name
+            for entry in index.active_entries()
+            if target_reference in entry.references
+        ]
+        if not supporting_skills:
+            return notes
+
+        fallback_skill = supporting_skills[0]
+        if fallback_skill not in decision.selectedSkills:
+            decision.selectedSkills.append(fallback_skill)
+            notes.append(
+                "approval_prepare missing skill with process-approval reference; "
+                f"auto-added skill {fallback_skill}."
+            )
+        decision.selectedReferences.append(target_reference)
+        notes.append("approval_prepare missing process-approval reference; auto-added reference.")
+        return notes
 
     def prepare_approval_plan(
         self,
@@ -1648,6 +1868,16 @@ class ChatService:
             )
             return None
 
+        normalization_notes = self._normalize_router_decision(decision)
+        if normalization_notes:
+            self._publish_summary_event(
+                session_id=session_id,
+                run_id=run_id,
+                event_type="router_decision_normalized",
+                summary="; ".join(normalization_notes),
+                message_id=assistant_message_id,
+            )
+
         is_valid, validation_message = self._validate_router_decision(decision)
         if not is_valid:
             self._publish_summary_event(
@@ -2048,6 +2278,15 @@ class ChatService:
 
                     if approval_outcome is not None:
                         outcome = approval_outcome
+                    elif (
+                        fast_path_outcome := self.try_handle_fast_path_query(
+                            session_id=session_id,
+                            run_id=run_id,
+                            assistant_message_id=assistant_message_id,
+                            latest_user_message=latest_user_message,
+                        )
+                    ) is not None:
+                        outcome = fast_path_outcome
                     elif self._router_enabled:
                         outcome = self._execute_structured_turn(
                             run_id=run_id,
@@ -2214,6 +2453,7 @@ class ChatService:
             "appServerTimeoutSeconds": self._provider_config.app_server_timeout_seconds,
             "scheduler": scheduler_snapshot,
             "routerEnabled": self._router_enabled,
+            "fastPathEnabled": self._fast_path_enabled,
             "approvalEnabled": self._approval_enabled,
             "approvalDryRunOnly": self._approval_dry_run_only,
             "approvalPlanTtlSeconds": self._approval_plan_ttl_seconds,
@@ -2258,6 +2498,7 @@ class ChatService:
             "routerModel": self._provider_config.router_model,
             "routerReasoningEffort": self._provider_config.router_reasoning_effort,
             "routerEnabled": self._router_enabled,
+            "fastPathEnabled": self._fast_path_enabled,
             "approvalEnabled": self._approval_enabled,
             "approvalDryRunOnly": self._approval_dry_run_only,
             "approvalPlanTtlSeconds": self._approval_plan_ttl_seconds,
