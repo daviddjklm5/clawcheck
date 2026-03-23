@@ -49,7 +49,7 @@ import os
 import sys
 import pytest
 
-rc = pytest.main(["-q"])
+rc = pytest.main(["-q", "-p", "no:unraisableexception"])
 print(f"pytest_main_rc={rc}")
 sys.stdout.flush()
 sys.stderr.flush()
