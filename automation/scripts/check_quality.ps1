@@ -45,7 +45,7 @@ try {
     if (-not $SkipPytest) {
         Invoke-PythonCommand -PythonExe $PythonExe -ArgumentList @(
             "-c",
-            "import os, sys, pytest; rc = pytest.main(['-q']); print(f'pytest main rc={rc}'); sys.stdout.flush(); sys.stderr.flush(); os._exit(rc)"
+            "import os,sys,pytest;rc=pytest.main(['-q']);print(f'pytest_main_rc={rc}');sys.stdout.flush();sys.stderr.flush();os._exit(rc)"
         )
     }
 
