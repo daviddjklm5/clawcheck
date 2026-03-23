@@ -43,24 +43,7 @@ try {
     }
 
     if (-not $SkipPytest) {
-        $PytestRunnerPath = Join-Path ([System.IO.Path]::GetTempPath()) "clawcheck_pytest_runner.py"
-        @'
-import os
-import sys
-import pytest
-
-rc = pytest.main(["-q", "-p", "no:unraisableexception"])
-print(f"pytest_main_rc={rc}")
-sys.stdout.flush()
-sys.stderr.flush()
-os._exit(rc)
-'@ | Set-Content -Path $PytestRunnerPath -Encoding utf8
-        try {
-            Invoke-PythonCommand -PythonExe $PythonExe -ArgumentList @($PytestRunnerPath)
-        }
-        finally {
-            Remove-Item $PytestRunnerPath -ErrorAction SilentlyContinue
-        }
+        Invoke-PythonCommand -PythonExe $PythonExe -ArgumentList @("-m", "pytest", "-q", "-p", "no:unraisableexception")
     }
 
     if (-not $SkipWebuiBuild) {
