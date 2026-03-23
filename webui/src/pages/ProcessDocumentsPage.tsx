@@ -21,7 +21,7 @@ import {
   TextField,
   Typography,
 } from "@mui/material";
-import type { GridColDef, GridRenderCellParams } from "@mui/x-data-grid";
+import type { GridColDef, GridRenderCellParams, GridRowSelectionModel } from "@mui/x-data-grid";
 import { useSearchParams } from "react-router-dom";
 
 import { AppDataGrid } from "../components/AppDataGrid";
@@ -35,6 +35,7 @@ import type {
   FeedbackGroupRow,
   OrgScopeRow,
   ProcessApprovalResponse,
+  ProcessBatchApprovalResponse,
   ProcessDetail,
   ProcessDocumentRow,
   ProcessTodoSyncResponse,
@@ -60,6 +61,15 @@ const DETAIL_GRID_PAGE_SIZE = 20;
 const MAIN_GRID_HEIGHT = 760;
 const DETAIL_GRID_HEIGHT = 920;
 const APPROVAL_DRAFT_STORAGE_PREFIX = "clawcheck.process.approval_opinion.";
+const EMPTY_ROW_SELECTION_MODEL: GridRowSelectionModel = { type: "include", ids: new Set() };
+
+function buildRowSelectionModel(ids: Iterable<string>): GridRowSelectionModel {
+  return { type: "include", ids: new Set(ids) };
+}
+
+function isBatchSelectableDocument(row: ProcessDocumentRow): boolean {
+  return row.hasAssessment && row.todoProcessStatus === "待处理";
+}
 
 const conclusionTone: Record<string, Tone> = {
   拒绝: "danger",
@@ -179,6 +189,21 @@ function getApprovalResultSeverity(result: ProcessApprovalResponse): "success" |
     return "info";
   }
   if (result.status === "submitted_pending_confirmation") {
+    return "warning";
+  }
+  return "success";
+}
+
+function getBatchApprovalResultSeverity(
+  result: ProcessBatchApprovalResponse,
+): "success" | "warning" | "error" | "info" {
+  if (result.dryRun) {
+    return result.failedCount > 0 ? "warning" : "info";
+  }
+  if (result.status === "failed") {
+    return "error";
+  }
+  if (result.status === "partial") {
     return "warning";
   }
   return "success";
@@ -322,6 +347,11 @@ export function ProcessDocumentsPage() {
   const [rejectConfirmOpen, setRejectConfirmOpen] = useState(false);
   const [approvalResult, setApprovalResult] = useState<ProcessApprovalResponse | null>(null);
   const [approvalError, setApprovalError] = useState<string | null>(null);
+  const [rowSelectionModel, setRowSelectionModel] = useState<GridRowSelectionModel>(EMPTY_ROW_SELECTION_MODEL);
+  const [batchSubmittingMode, setBatchSubmittingMode] = useState<"approve" | "reject" | null>(null);
+  const [batchRejectConfirmOpen, setBatchRejectConfirmOpen] = useState(false);
+  const [batchApprovalResult, setBatchApprovalResult] = useState<ProcessBatchApprovalResponse | null>(null);
+  const [batchApprovalError, setBatchApprovalError] = useState<string | null>(null);
   const [runHeaded, setRunHeaded] = useState(true);
   const [todoSyncing, setTodoSyncing] = useState(false);
   const [todoSyncResult, setTodoSyncResult] = useState<ProcessTodoSyncResponse | null>(null);
@@ -346,6 +376,10 @@ export function ProcessDocumentsPage() {
   const currentTaskRunning = currentTask?.status === "queued" || currentTask?.status === "running";
   const workbenchStats = workbench?.stats ?? [];
   const workbenchDocuments = workbench?.documents ?? [];
+  const selectedRowIds = rowSelectionModel.type === "include" ? rowSelectionModel.ids : new Set<string>();
+  const selectedDocumentRows = workbenchDocuments.filter((item) => selectedRowIds.has(item.id));
+  const selectedBatchDocumentNos = selectedDocumentRows.map((item) => item.documentNo);
+  const selectedBatchCount = selectedBatchDocumentNos.length;
   const latestAuditRun = workbench?.recentRuns?.[0] ?? null;
   const selectedDocumentRow =
     workbenchDocuments.find((item) => item.documentNo === selectedDocumentNo) ?? null;

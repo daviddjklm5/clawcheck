@@ -2,6 +2,7 @@ import type {
   CollectDetail,
   CollectRunRequest,
   CollectRunSummary,
+  CollectScheduleUpdateRequest,
   CollectWorkbench,
   MasterDataDashboard,
   MasterDataRunRequest,
@@ -11,6 +12,8 @@ import type {
   ProcessAuditRunSummary,
   ProcessApprovalRequest,
   ProcessApprovalResponse,
+  ProcessBatchApprovalRequest,
+  ProcessBatchApprovalResponse,
   ProcessDetail,
   ProcessTodoSyncRequest,
   ProcessTodoSyncResponse,
@@ -136,6 +139,16 @@ export const dashboardApi = {
       },
     );
   },
+  approveProcessDocumentsBatch(payload: ProcessBatchApprovalRequest): Promise<ProcessBatchApprovalResponse> {
+    const timeoutMs = Math.min(Math.max(payload.documentNos.length * 90_000, 180_000), 1_800_000);
+    return request<ProcessBatchApprovalResponse>("/documents/process-workbench/approval/batch", {
+      method: "POST",
+      body: JSON.stringify(payload),
+      timeoutMs,
+      timeoutMessage:
+        "批量审批请求长时间未返回，后端可能仍在同一 EHR 浏览器会话中顺序处理单据。请检查弹出的 EHR 浏览器，以及 automation/logs 下最新 approval_batch_*.json / approval_*.json。",
+    });
+  },
   syncProcessTodoStatus(payload: ProcessTodoSyncRequest = { dryRun: false }): Promise<ProcessTodoSyncResponse> {
     return request<ProcessTodoSyncResponse>("/documents/process-workbench/todo-sync", {
       method: "POST",
@@ -153,5 +166,11 @@ export const dashboardApi = {
   },
   getRuntimeSettings(): Promise<RuntimeSettingsSummary> {
     return request<RuntimeSettingsSummary>("/settings/runtime");
+  },
+  updateCollectSchedule(payload: CollectScheduleUpdateRequest): Promise<RuntimeSettingsSummary> {
+    return request<RuntimeSettingsSummary>("/settings/runtime/collect-schedule", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
   },
 };

@@ -13,6 +13,10 @@ from uuid import uuid4
 from automation.api.config_summary import REPO_ROOT, _load_runtime_settings
 from automation.api.audit_workbench import run_audit_now
 from automation.db.postgres import PostgresPermissionStore
+from automation.utils.collect_schedule import (
+    COLLECT_EXECUTION_CONFLICT_EXIT_CODE,
+    is_collect_execution_locked,
+)
 
 _LOG_FILE_PATTERN = re.compile(r"Log file:\s*(.+)")
 _SUMMARY_PREFIX = "collect_summary_"
@@ -32,9 +36,13 @@ def _to_repo_relative(path: Path | None) -> str:
     if path is None:
         return ""
     try:
-        return str(path.resolve().relative_to(REPO_ROOT))
+        resolved_path = path.resolve(strict=False)
+    except OSError:
+        return str(path)
+    try:
+        return str(resolved_path.relative_to(REPO_ROOT))
     except ValueError:
-        return str(path.resolve())
+        return str(resolved_path)
 
 
 def _now_text() -> str:
@@ -135,6 +143,15 @@ def _build_task_message(
     return (
         f"{prefix}：成功 {success_count} 张，跳过 {skipped_count} 张，失败 {failed_count} 张{suffix}".strip()
     )
+
+
+def _build_no_pending_message(*, dry_run: bool) -> str:
+    suffix = "（dry-run，未写入 PostgreSQL）" if dry_run else ""
+    return f"本轮无待办，已快速结束{suffix}".strip()
+
+
+def _build_lock_conflict_message() -> str:
+    return "当前已有其他采集任务在执行，本次未重复启动。"
 
 
 def _write_summary_file(path: Path, payload: dict[str, Any]) -> None:
@@ -303,10 +320,19 @@ def _run_collect_task(task_id: str) -> None:
             1 if task["requestedDocumentNo"] else int(task["requestedLimit"]),
         )
         audit_result: dict[str, Any] | None = None
+        no_pending_detected = "No permission application documents found in todo list" in combined_output
 
-        if process.returncode != 0:
+        if process.returncode == COLLECT_EXECUTION_CONFLICT_EXIT_CODE:
+            status = "succeeded"
+            requested_count = 0
+            message = _build_lock_conflict_message()
+        elif process.returncode != 0:
             status = "failed"
             message = output_tail or "collect runner 返回非 0 退出码。"
+        elif no_pending_detected and success_count == 0 and skipped_count == 0 and failed_count == 0:
+            status = "succeeded"
+            requested_count = 0
+            message = _build_no_pending_message(dry_run=bool(task["dryRun"]))
         elif failed_count > 0:
             status = "partial"
             message = _build_task_message(
@@ -474,6 +500,8 @@ def start_collect_task(
             raise RuntimeError(
                 f"当前已有采集任务在执行：{running_task['taskId']}。请等待该任务完成后再发起新的采集。"
             )
+        if is_collect_execution_locked():
+            raise RuntimeError("当前已有采集任务在执行。请等待当前批次完成后再发起新的采集。")
         _TASK_STATE_BY_ID[task_id] = task_state
         _persist_task_snapshot(task_id)
 
