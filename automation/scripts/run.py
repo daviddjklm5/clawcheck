@@ -15,7 +15,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from automation.utils.collect_schedule import (
+from automation.utils.collect_schedule import (  # noqa: E402
     COLLECT_EXECUTION_CONFLICT_EXIT_CODE,
     CollectExecutionLockedError,
     acquire_collect_execution_lock,
