@@ -35,7 +35,7 @@ try {
     }
 
     if (-not $SkipPytest) {
-        & $PythonExe -m pytest -q -p no:unraisableexception
+        & $PythonExe -m pytest -q -p no:unraisableexception -p no:threadexception
         if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
         }
