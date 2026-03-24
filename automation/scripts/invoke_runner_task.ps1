@@ -18,6 +18,8 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+. (Join-Path $PSScriptRoot "dev_runtime_helpers.ps1")
+
 if ($Headed -and $Headless) {
     throw "Headed and Headless cannot both be set."
 }
@@ -162,6 +164,7 @@ $HeaderLines = @(
 Set-Content -Path $LogPath -Value ($HeaderLines -join [Environment]::NewLine) -Encoding UTF8
 
 $env:PYTHONUTF8 = "1"
+$env:PYTHONIOENCODING = "utf-8"
 $env:PYTHONUNBUFFERED = "1"
 
 $StdOutPath = Join-Path ([System.IO.Path]::GetTempPath()) "clawcheck_$Action`_$Timestamp.stdout.log"

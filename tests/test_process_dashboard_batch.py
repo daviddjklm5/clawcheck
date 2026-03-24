@@ -98,6 +98,19 @@ class ProcessDashboardBatchApprovalTest(unittest.TestCase):
                 patch.object(process_dashboard, "PostgresRiskTrustStore", return_value=fake_risk_store),
                 patch.object(
                     process_dashboard,
+                    "run_process_todo_sync_now",
+                    return_value={
+                        "status": "succeeded",
+                        "pendingCount": 3,
+                        "processedCount": 8,
+                        "changedCount": 2,
+                        "dumpFile": "automation/logs/todo_sync_1.json",
+                        "logFile": "automation/logs/run_1.log",
+                        "message": "待办状态同步完成",
+                    },
+                ) as mocked_todo_sync,
+                patch.object(
+                    process_dashboard,
                     "acquire_approval_browser_session",
                     return_value=("browser", fake_context, fake_page, {"reused": False, "pageRecreated": False}),
                 ) as mocked_acquire,
@@ -120,6 +133,7 @@ class ProcessDashboardBatchApprovalTest(unittest.TestCase):
                     headed=True,
                 )
 
+        mocked_todo_sync.assert_called_once_with(dry_run=False, headed=True)
         mocked_acquire.assert_called_once()
         mocked_release.assert_called_once_with(
             close_session=True,
@@ -134,6 +148,58 @@ class ProcessDashboardBatchApprovalTest(unittest.TestCase):
         self.assertEqual(result["status"], "partial")
         self.assertIn("待确认 1", result["message"])
         self.assertEqual([item["status"] for item in result["results"]], ["succeeded", "submitted_pending_confirmation", "failed"])
+
+    def test_approve_process_documents_batch_fails_fast_when_todo_sync_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            logs_dir = temp_path / "logs"
+            screenshots_dir = temp_path / "screenshots"
+            state_file = temp_path / "state" / "approval.json"
+            logs_dir.mkdir(parents=True, exist_ok=True)
+            screenshots_dir.mkdir(parents=True, exist_ok=True)
+            state_file.parent.mkdir(parents=True, exist_ok=True)
+
+            settings = SimpleNamespace(
+                browser=SimpleNamespace(headed=True),
+                db=object(),
+            )
+
+            with (
+                patch.object(
+                    process_dashboard,
+                    "_prepare_approval_runtime",
+                    return_value=(
+                        temp_path / "settings.yaml",
+                        settings,
+                        temp_path / "credentials.yaml",
+                        {},
+                        logs_dir,
+                        screenshots_dir,
+                        state_file,
+                    ),
+                ),
+                patch.object(process_dashboard, "PostgresPermissionStore", return_value=MagicMock()),
+                patch.object(process_dashboard, "PostgresRiskTrustStore", return_value=MagicMock()),
+                patch.object(
+                    process_dashboard,
+                    "run_process_todo_sync_now",
+                    side_effect=RuntimeError("EHR 待办页打开失败"),
+                ) as mocked_todo_sync,
+                patch.object(process_dashboard, "acquire_approval_browser_session") as mocked_acquire,
+            ):
+                result = process_dashboard.approve_process_documents_batch(
+                    document_nos=["RA-TEST-001", "RA-TEST-002"],
+                    action="approve",
+                    dry_run=False,
+                    headed=True,
+                )
+
+        mocked_todo_sync.assert_called_once_with(dry_run=False, headed=True)
+        mocked_acquire.assert_not_called()
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["failedCount"], 2)
+        self.assertTrue(all(item["status"] == "failed" for item in result["results"]))
+        self.assertIn("同步待办状态失败", result["results"][0]["message"])
 
 
 if __name__ == "__main__":

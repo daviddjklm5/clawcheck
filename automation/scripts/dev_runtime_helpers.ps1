@@ -1,5 +1,33 @@
 Set-StrictMode -Version Latest
 
+function Initialize-Utf8Console {
+    $Utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+
+    try {
+        [Console]::InputEncoding = $Utf8NoBom
+    }
+    catch {
+    }
+
+    try {
+        [Console]::OutputEncoding = $Utf8NoBom
+    }
+    catch {
+    }
+
+    try {
+        $global:OutputEncoding = $Utf8NoBom
+    }
+    catch {
+    }
+
+    try {
+        & chcp.com 65001 > $null
+    }
+    catch {
+    }
+}
+
 function Get-RepoRoot {
     param(
         [string]$ScriptRoot = $PSScriptRoot
@@ -392,3 +420,5 @@ function Start-ManagedProcess {
         -RedirectStandardError $StderrLog `
         -PassThru
 }
+
+Initialize-Utf8Console

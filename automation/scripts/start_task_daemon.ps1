@@ -8,6 +8,8 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+. (Join-Path $PSScriptRoot "dev_runtime_helpers.ps1")
+
 $RepoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\.."))
 $PythonExe = Join-Path $RepoRoot "$VenvDir\Scripts\python.exe"
 if (-not (Test-Path $PythonExe)) {
@@ -16,6 +18,8 @@ if (-not (Test-Path $PythonExe)) {
 
 Push-Location $RepoRoot
 try {
+    $env:PYTHONUTF8 = "1"
+    $env:PYTHONIOENCODING = "utf-8"
     $Args = @(
         "-m",
         "automation.scripts.windows_task_daemon",

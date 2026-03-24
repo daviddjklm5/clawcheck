@@ -51,16 +51,31 @@ class DocumentApprovalFlowTest(unittest.TestCase):
 
     def test_open_todo_list_ready_reuses_collect_wait_flow(self) -> None:
         todo_trigger = MagicMock()
-        self.page.locator.return_value.filter.return_value.first = todo_trigger
         self.flow.collector._wait_for_todo_list_ready = MagicMock()
 
-        self.flow._open_todo_list_ready()
+        with patch.object(self.flow, "_find_visible_todo_trigger", return_value=todo_trigger) as mocked_find_trigger:
+            self.flow._open_todo_list_ready()
 
-        self.page.locator.assert_called_once_with("div[id^='processflexpanelap_']")
-        self.page.locator.return_value.filter.assert_called_once_with(has_text="待办任务")
-        todo_trigger.wait_for.assert_called_once_with(state="visible", timeout=2000)
+        mocked_find_trigger.assert_called_once_with()
         todo_trigger.click.assert_called_once_with(force=True)
         self.flow.collector._wait_for_todo_list_ready.assert_called_once_with(page_size_timeout_ms=None)
+
+    def test_find_visible_todo_trigger_skips_hidden_candidates(self) -> None:
+        hidden_trigger = MagicMock()
+        hidden_trigger.is_visible.return_value = False
+        visible_trigger = MagicMock()
+        visible_trigger.is_visible.return_value = True
+        todo_triggers = MagicMock()
+        todo_triggers.count.return_value = 2
+        todo_triggers.nth.side_effect = lambda index: hidden_trigger if index == 0 else visible_trigger
+        self.page.locator.return_value.filter.return_value = todo_triggers
+
+        with patch.object(self.flow, "_todo_grid_is_visible", return_value=False):
+            result = self.flow._find_visible_todo_trigger()
+
+        self.assertIs(result, visible_trigger)
+        self.page.locator.assert_called_once_with("div[id^='processflexpanelap_']")
+        self.page.locator.return_value.filter.assert_called_once_with(has_text="待办任务")
 
     def test_wait_for_submission_confirmation_returns_todo_disappeared_success(self) -> None:
         with (
@@ -148,6 +163,57 @@ class DocumentApprovalFlowTest(unittest.TestCase):
 
         self.assertEqual(result["status"], "submitted_pending_confirmation")
         self.assertEqual(result["confirmationType"], "submitted_pending_confirmation")
+
+    def test_wait_for_submission_confirmation_returns_pending_when_todo_disappears_without_strong_confirmation(self) -> None:
+        with (
+            patch("automation.flows.document_approval_flow.time.monotonic", side_effect=[0.0, 1.0, 9.0, 10.0, 26.0]),
+            patch.object(self.flow, "visible_feedback_message", return_value=""),
+            patch.object(self.flow, "capture_approval_records", side_effect=RuntimeError("approval tab hidden")),
+            patch.object(
+                self.flow,
+                "_inspect_submission_state",
+                return_value={
+                    "submitButtonVisible": False,
+                    "taskTabVisible": False,
+                    "approvalTabVisible": False,
+                    "todoListVisible": True,
+                    "documentDetailVisible": False,
+                },
+            ),
+            patch.object(
+                self.flow,
+                "_probe_todo_document_presence",
+                side_effect=[
+                    {
+                        "todoListVisible": True,
+                        "documentStillInTodo": False,
+                        "probeError": "",
+                        "pageSizeApplied": False,
+                        "todoTotalCount": None,
+                        "scannedUniqueRowCount": 1,
+                        "coveredAllTodoRows": False,
+                    },
+                    {
+                        "todoListVisible": True,
+                        "documentStillInTodo": False,
+                        "probeError": "",
+                        "pageSizeApplied": False,
+                        "todoTotalCount": None,
+                        "scannedUniqueRowCount": 1,
+                        "coveredAllTodoRows": False,
+                    },
+                ],
+            ),
+        ):
+            result = self.flow.wait_for_submission_confirmation(
+                document_no="RA-TEST-001",
+                expected_opinion="同意",
+                approval_count_before=1,
+                wait_timeout_ms=30_000,
+            )
+
+        self.assertEqual(result["status"], "submitted_pending_confirmation")
+        self.assertIn("请先不要重复点击批准", result["confirmationMessage"])
 
     def test_wait_for_submission_confirmation_raises_when_document_still_in_todo(self) -> None:
         with (

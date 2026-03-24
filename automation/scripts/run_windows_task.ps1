@@ -33,6 +33,8 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+. (Join-Path $PSScriptRoot "dev_runtime_helpers.ps1")
+
 if ($Headed -and $Headless) {
     throw "Headed and Headless cannot both be set."
 }

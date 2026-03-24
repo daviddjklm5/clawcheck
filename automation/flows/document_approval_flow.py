@@ -105,12 +105,52 @@ class DocumentApprovalFlow:
         self._todo_page_size_applied = self._todo_page_size_applied or bool(page_size_applied)
         return self._todo_page_size_applied
 
+    def _todo_grid_is_visible(self) -> bool:
+        try:
+            todo_grid = self.page.locator("#gridview").first
+            return todo_grid.count() > 0 and todo_grid.is_visible()
+        except Exception:
+            return False
+
+    def _find_visible_todo_trigger(self, timeout_ms: int | None = None) -> Locator | None:
+        todo_triggers = self.page.locator("div[id^='processflexpanelap_']").filter(has_text="待办任务")
+        deadline = time.monotonic() + ((timeout_ms or self.timeout_ms) / 1000)
+        last_error = ""
+
+        while time.monotonic() < deadline:
+            try:
+                trigger_count = todo_triggers.count()
+            except Exception as exc:  # noqa: BLE001
+                last_error = str(exc)
+                trigger_count = 0
+
+            for index in range(trigger_count):
+                trigger = todo_triggers.nth(index)
+                try:
+                    if trigger.is_visible():
+                        return trigger
+                except Exception as exc:  # noqa: BLE001
+                    last_error = f"trigger[{index}]: {exc}"
+
+            if self._todo_grid_is_visible():
+                return None
+
+            self.page.wait_for_timeout(200)
+
+        if self._todo_grid_is_visible():
+            return None
+
+        raise PlaywrightTimeoutError(
+            "Todo trigger did not become visible."
+            f" selectors=div[id^='processflexpanelap_'][text*='待办任务'] last_error={last_error}"
+        )
+
     def _open_todo_list_ready(self, page_size_timeout_ms: int | None = None) -> bool:
         started_at = time.monotonic()
         self._emit_event("approval_open_todo_started")
-        todo_trigger = self.page.locator("div[id^='processflexpanelap_']").filter(has_text="待办任务").first
-        todo_trigger.wait_for(state="visible", timeout=self.timeout_ms)
-        todo_trigger.click(force=True)
+        todo_trigger = self._find_visible_todo_trigger()
+        if todo_trigger is not None:
+            todo_trigger.click(force=True)
         # Reuse the collect path's todo-list readiness flow so approval can see
         # the full pending set instead of only the current 10-row page.
         page_size_applied = self.collector._wait_for_todo_list_ready(page_size_timeout_ms=page_size_timeout_ms)
@@ -958,7 +998,12 @@ class DocumentApprovalFlow:
                     "confirmationMessage": "提交后目标单据已不在当前账号待办中。",
                 }
             if todo_probe.get("documentStillInTodo") is False:
-                return self._build_pending_confirmation_result(document_no, state_before_todo_probe, todo_probe)
+                return self._build_pending_confirmation_result(
+                    document_no,
+                    state_before_todo_probe,
+                    todo_probe,
+                    submit_action_label=submit_action_label,
+                )
 
         while time.monotonic() < approval_record_deadline:
             error_message = self.visible_feedback_message(self._ERROR_KEYWORDS)

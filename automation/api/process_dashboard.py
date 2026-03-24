@@ -16,6 +16,7 @@ from automation.api.approval_browser_session import (
     release_approval_browser_session,
 )
 from automation.api.config_summary import REPO_ROOT, _load_runtime_settings
+from automation.api.process_todo_sync import run_process_todo_sync_now
 from automation.api.audit_workbench import get_audit_task_overview
 from automation.db.postgres import PostgresPermissionStore, PostgresRiskTrustStore
 from automation.flows.document_approval_flow import DocumentApprovalFlow
@@ -762,6 +763,30 @@ def approve_process_documents_batch(
     page = None
     context = None
     try:
+        add_event(
+            "batch_todo_sync_started",
+            dryRun=dry_run,
+            headed=bool(settings.browser.headed),
+        )
+        try:
+            todo_sync_result = run_process_todo_sync_now(
+                dry_run=dry_run,
+                headed=bool(settings.browser.headed),
+            )
+        except Exception as exc:  # noqa: BLE001
+            add_event("batch_todo_sync_failed", error=str(exc))
+            raise RuntimeError(f"批量审批前同步待办状态失败：{exc}") from exc
+        add_event(
+            "batch_todo_sync_finished",
+            status=todo_sync_result.get("status", ""),
+            pendingCount=todo_sync_result.get("pendingCount", 0),
+            processedCount=todo_sync_result.get("processedCount", 0),
+            changedCount=todo_sync_result.get("changedCount", 0),
+            dumpFile=todo_sync_result.get("dumpFile", ""),
+            logFile=todo_sync_result.get("logFile", ""),
+            resultMessage=todo_sync_result.get("message", ""),
+        )
+
         _, context, page, browser_session_meta = acquire_approval_browser_session(
             settings=settings,
             state_file=state_file,

@@ -424,6 +424,27 @@ powershell.exe -ExecutionPolicy Bypass -File .\automation\scripts\register_api_s
 .\.venv-win\Scripts\python.exe .\automation\scripts\check_text_encoding.py
 ```
 
+PowerShell 中文输出排障：
+
+```powershell
+[Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$OutputEncoding = [Console]::OutputEncoding
+chcp 65001 > $null
+```
+
+读取 `state` / `status.json` 一类 UTF-8 文件时，优先显式指定编码：
+
+```powershell
+Get-Content .\automation\state\windows_task_daemon_state.json -Raw -Encoding UTF8
+```
+
+若当前 PowerShell 5.1 会话仍显示异常，优先用 Python 原样回读确认文件内容：
+
+```powershell
+.\.venv-win\Scripts\python.exe -c "from pathlib import Path; print(Path(r'automation/state/windows_task_daemon_state.json').read_text(encoding='utf-8'))"
+```
+
 仅运行本轮新增的基础测试：
 
 ```powershell
