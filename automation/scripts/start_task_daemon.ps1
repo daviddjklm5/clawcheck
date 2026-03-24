@@ -10,8 +10,6 @@ $ErrorActionPreference = "Stop"
 
 $RepoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\.."))
 $PythonExe = Join-Path $RepoRoot "$VenvDir\Scripts\python.exe"
-$DaemonScript = Join-Path $RepoRoot "automation\scripts\windows_task_daemon.py"
-
 if (-not (Test-Path $PythonExe)) {
     throw "Python venv not found: $PythonExe"
 }
@@ -19,7 +17,8 @@ if (-not (Test-Path $PythonExe)) {
 Push-Location $RepoRoot
 try {
     $Args = @(
-        $DaemonScript,
+        "-m",
+        "automation.scripts.windows_task_daemon",
         "--config",
         $Config,
         "--state-file",
