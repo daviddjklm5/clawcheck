@@ -9,11 +9,13 @@ from automation.api.routers.documents import (
     CollectRunRequest,
     get_collect_workbench_document,
     get_collect_workbench_documents,
+    ProcessBatchApprovalRequest,
     ProcessDocumentApprovalRequest,
     ProcessAuditRunRequest,
     ProcessTodoSyncRequest,
     post_collect_workbench_run,
     get_process_analysis,
+    post_process_workbench_batch_approval,
     get_process_workbench_document,
     get_process_workbench_documents,
     post_process_workbench_audit,
@@ -173,6 +175,33 @@ class DocumentsRouterTest(unittest.TestCase):
             result = post_process_workbench_document_approval("RA-TEST-001", request)
 
         self.assertEqual(result, payload)
+
+    def test_post_process_workbench_batch_approval_returns_payload(self) -> None:
+        payload = {
+            "action": "approve",
+            "status": "partial",
+            "succeededCount": 1,
+            "pendingConfirmationCount": 1,
+            "failedCount": 1,
+            "results": [],
+            "message": "批量批准完成：成功 1，待确认 1，失败 1，共 3 条。",
+        }
+        request = ProcessBatchApprovalRequest(
+            action="approve",
+            documentNos=["RA-TEST-001", "RA-TEST-002", "RA-TEST-003"],
+            dryRun=False,
+        )
+
+        with patch("automation.api.routers.documents.approve_process_documents_batch", return_value=payload) as mocked_batch:
+            result = post_process_workbench_batch_approval(request)
+
+        self.assertEqual(result, payload)
+        mocked_batch.assert_called_once_with(
+            document_nos=["RA-TEST-001", "RA-TEST-002", "RA-TEST-003"],
+            action="approve",
+            dry_run=False,
+            headed=ANY,
+        )
 
     def test_post_process_workbench_todo_sync_returns_payload(self) -> None:
         payload = {

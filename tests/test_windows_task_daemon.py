@@ -4,6 +4,7 @@ from datetime import datetime
 import unittest
 from unittest.mock import patch
 
+from automation.utils.collect_schedule import COLLECT_TASK_RUNNING_MESSAGE
 from automation.scripts.windows_task_daemon import (
     DEFAULT_LOG_DIR,
     TaskConfig,
@@ -166,6 +167,40 @@ class WindowsTaskDaemonTest(unittest.TestCase):
         self.assertEqual(running_tasks, {})
         self.assertIn("lastFinishedAt", state_payload["tasks"]["audit"])
         self.assertEqual(state_payload["tasks"]["audit"]["lastExitCode"], 0)
+
+    def test_run_cycle_repairs_collect_state_when_process_exits_without_finish_write(self) -> None:
+        task = TaskConfig(
+            name="collect",
+            script="automation/scripts/run_collect_task.ps1",
+            args=[],
+            enabled=True,
+            interval_minutes=15,
+            daily_times=[],
+            run_on_startup=False,
+        )
+        state_payload = {
+            "tasks": {
+                "collect": {
+                    "lastStartedAt": "2026-03-20T08:00:00",
+                    "lastMessage": COLLECT_TASK_RUNNING_MESSAGE,
+                }
+            }
+        }
+        running_tasks = {"collect": self._FakeProcess(return_code=1)}
+
+        changed = run_cycle(
+            tasks=[task],
+            state_payload=state_payload,
+            running_tasks=running_tasks,
+            log_dir=DEFAULT_LOG_DIR,
+            now=datetime(2026, 3, 20, 8, 5, 0),
+        )
+
+        self.assertTrue(changed)
+        self.assertEqual(running_tasks, {})
+        self.assertIn("lastFinishedAt", state_payload["tasks"]["collect"])
+        self.assertEqual(state_payload["tasks"]["collect"]["lastExitCode"], 1)
+        self.assertEqual(state_payload["tasks"]["collect"]["lastMessage"], "采集任务异常结束（退出码 1），请查看日志")
 
 
 if __name__ == "__main__":

@@ -19,6 +19,7 @@ from automation.utils.collect_schedule import (
     DEFAULT_TASK_DAEMON_STATE_PATH,
     is_collect_execution_locked,
     load_json as _load_json,
+    reconcile_incomplete_collect_state,
     save_json as _save_json,
 )
 
@@ -206,7 +207,8 @@ def process_completed_tasks(
     log_dir: Path,
 ) -> bool:
     completed_names: list[str] = []
-    now_text = datetime.now().isoformat(timespec="seconds")
+    now = datetime.now()
+    now_text = now.isoformat(timespec="seconds")
     changed = False
 
     for task_name, process in running_tasks.items():
@@ -215,6 +217,8 @@ def process_completed_tasks(
             continue
         task_state = get_task_state(state_payload, task_name)
         _record_non_collect_completion(task_name, task_state, now_text, return_code)
+        if is_collect_task_name(task_name):
+            reconcile_incomplete_collect_state(task_state, is_running=False, exit_code=return_code, now=now)
         close_process_log(process)
         completed_names.append(task_name)
         changed = True

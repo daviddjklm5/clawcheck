@@ -188,22 +188,30 @@ function getApprovalResultSeverity(result: ProcessApprovalResponse): "success" |
   if (result.dryRun) {
     return "info";
   }
-  if (result.status === "submitted_pending_confirmation") {
+  if (isApprovalPendingConfirmation(result)) {
     return "warning";
   }
   return "success";
+}
+
+function isApprovalPendingConfirmation(result: Pick<ProcessApprovalResponse, "status">): boolean {
+  return result.status === "submitted_pending_confirmation";
+}
+
+function isApprovalHardFailure(result: Pick<ProcessApprovalResponse, "status">): boolean {
+  return result.status === "failed";
 }
 
 function getBatchApprovalResultSeverity(
   result: ProcessBatchApprovalResponse,
 ): "success" | "warning" | "error" | "info" {
   if (result.dryRun) {
-    return result.failedCount > 0 ? "warning" : "info";
+    return result.failedCount > 0 || result.pendingConfirmationCount > 0 ? "warning" : "info";
   }
   if (result.status === "failed") {
     return "error";
   }
-  if (result.status === "partial") {
+  if (result.status === "partial" || result.pendingConfirmationCount > 0) {
     return "warning";
   }
   return "success";
@@ -217,7 +225,7 @@ function getApprovalStatusHint(result: ProcessApprovalResponse): string {
   if (result.dryRun) {
     return "当前只做连通性验证，不点击提交。";
   }
-  if (result.status === "submitted_pending_confirmation") {
+  if (isApprovalPendingConfirmation(result)) {
     return `提交动作已发出，但当前仍处于待确认状态；请先不要重复点击${getApprovalActionLabel(result.action)}。`;
   }
   return "已按返回结果完成执行，并已命中成功确认信号。";
@@ -730,7 +738,7 @@ export function ProcessDocumentsPage() {
 
   function updateBatchSelectionFromFailedResults(results: ProcessApprovalResponse[]) {
     const failedDocumentNos = new Set(
-      results.filter((item) => item.status !== "succeeded").map((item) => item.documentNo),
+      results.filter((item) => isApprovalHardFailure(item)).map((item) => item.documentNo),
     );
     if (failedDocumentNos.size === 0) {
       setRowSelectionModel(EMPTY_ROW_SELECTION_MODEL);
@@ -1123,7 +1131,9 @@ export function ProcessDocumentsPage() {
           <Stack spacing={0.5}>
             <Typography variant="body2">{batchApprovalResult.message}</Typography>
             <Typography variant="caption" color="inherit">
-              状态：{formatTaskStatusLabel(batchApprovalResult.status)}；日志：{batchApprovalResult.logFile || "-"}
+              状态：{formatTaskStatusLabel(batchApprovalResult.status)}；成功：{batchApprovalResult.succeededCount}；
+              待确认：{batchApprovalResult.pendingConfirmationCount}；失败：{batchApprovalResult.failedCount}；
+              日志：{batchApprovalResult.logFile || "-"}
             </Typography>
             {batchApprovalFailedResults.slice(0, 5).map((item) => (
               <Typography key={`${item.documentNo}-${item.status}`} variant="caption" color="inherit">

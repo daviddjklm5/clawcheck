@@ -9,6 +9,7 @@ import unittest
 from unittest.mock import patch
 
 from automation.utils.collect_schedule import (
+    COLLECT_TASK_RUNNING_MESSAGE,
     get_collect_lock_info,
     get_collect_schedule_summary,
     update_collect_schedule,
@@ -115,6 +116,70 @@ class CollectScheduleTest(unittest.TestCase):
 
             self.assertTrue(summary.is_running)
             self.assertEqual(summary.next_planned_at, "")
+
+    def test_collect_schedule_summary_repairs_incomplete_collect_state_when_lock_missing(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "windows_task_daemon.local.json"
+            state_path = Path(temp_dir) / "windows_task_daemon_state.json"
+            lock_path = Path(temp_dir) / "collect_task.lock"
+            log_path = Path(temp_dir) / "run_20260323_100000.log"
+            log_path.write_text("partial log", encoding="utf-8")
+            finished_at = datetime(2026, 3, 23, 10, 2, 30).timestamp()
+            os.utime(log_path, (finished_at, finished_at))
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "pollSeconds": 15,
+                        "logDir": "automation/logs/windows_task_daemon",
+                        "tasks": [
+                            {
+                                "name": "collect",
+                                "enabled": True,
+                                "script": "automation/scripts/run_windows_task.ps1",
+                                "args": ["-Action", "collect", "-Headless", "-Limit", "100"],
+                                "intervalMinutes": 15,
+                                "dailyTimes": [],
+                                "runOnStartup": False,
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "tasks": {
+                            "collect": {
+                                "lastStartedAt": "2026-03-23T10:00:00",
+                                "lastMessage": COLLECT_TASK_RUNNING_MESSAGE,
+                                "lastLogPath": str(log_path),
+                            }
+                        }
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+
+            summary = get_collect_schedule_summary(
+                now=datetime(2026, 3, 23, 10, 5, 0),
+                config_path=config_path,
+                state_path=state_path,
+                lock_path=lock_path,
+            )
+
+            repaired_state = json.loads(state_path.read_text(encoding="utf-8"))
+            repaired_collect_state = repaired_state["tasks"]["collect"]
+            self.assertFalse(summary.is_running)
+            self.assertEqual(summary.last_finished_at, "2026-03-23 10:02:30")
+            self.assertEqual(summary.next_planned_at, "2026-03-23 10:17:30")
+            self.assertEqual(summary.last_message, "采集任务已结束，但状态未完整写回，请查看日志")
+            self.assertEqual(repaired_collect_state["lastFinishedAt"], "2026-03-23T10:02:30")
+            self.assertEqual(repaired_collect_state["lastMessage"], "采集任务已结束，但状态未完整写回，请查看日志")
 
     def test_get_collect_lock_info_cleans_stale_lock(self) -> None:
         with TemporaryDirectory() as temp_dir:

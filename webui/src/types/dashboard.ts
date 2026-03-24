@@ -400,6 +400,7 @@ export interface ProcessBatchApprovalResponse {
   documentNos: string[];
   totalCount: number;
   succeededCount: number;
+  pendingConfirmationCount: number;
   failedCount: number;
   results: ProcessApprovalResponse[];
   status: string;

@@ -22,6 +22,7 @@ DEFAULT_TASK_DAEMON_LOG_DIR = REPO_ROOT / "automation" / "logs" / "windows_task_
 COLLECT_TASK_NAME = "collect"
 COLLECT_EXECUTION_CONFLICT_EXIT_CODE = 3
 COLLECT_TASK_DEFAULT_LIMIT = 100
+COLLECT_TASK_RUNNING_MESSAGE = "采集任务运行中"
 
 
 class CollectExecutionLockedError(RuntimeError):
@@ -127,6 +128,14 @@ def format_datetime_text(value: str | datetime | None) -> str:
 
 def now_iso_text(now: datetime | None = None) -> str:
     return (now or datetime.now()).isoformat(timespec="seconds")
+
+
+def _build_collect_incomplete_finish_message(exit_code: int | None) -> str:
+    if exit_code is None:
+        return "采集任务已结束，但状态未完整写回，请查看日志"
+    if exit_code == 0:
+        return "采集任务已结束，但状态未完整写回"
+    return f"采集任务异常结束（退出码 {exit_code}），请查看日志"
 
 
 def _default_collect_task_payload() -> dict[str, Any]:
@@ -269,6 +278,57 @@ def _coerce_int(value: Any) -> int | None:
     return None
 
 
+def _resolve_collect_finish_time(
+    task_state: dict[str, Any],
+    *,
+    now: datetime | None = None,
+) -> datetime | None:
+    last_log_path = str(task_state.get("lastLogPath") or "").strip()
+    if last_log_path:
+        try:
+            log_mtime = datetime.fromtimestamp(resolve_repo_path(last_log_path).stat().st_mtime)
+            started_at = parse_state_datetime(str(task_state.get("lastStartedAt") or ""))
+            if started_at is None or log_mtime >= started_at:
+                return log_mtime
+        except OSError:
+            pass
+    return now
+
+
+def reconcile_incomplete_collect_state(
+    task_state: dict[str, Any],
+    *,
+    is_running: bool,
+    exit_code: int | None = None,
+    now: datetime | None = None,
+) -> bool:
+    if is_running:
+        return False
+
+    started_at = parse_state_datetime(str(task_state.get("lastStartedAt") or ""))
+    if started_at is None:
+        return False
+
+    finished_at = parse_state_datetime(str(task_state.get("lastFinishedAt") or ""))
+    if finished_at is not None and finished_at >= started_at:
+        return False
+
+    last_message = str(task_state.get("lastMessage") or "").strip()
+    if last_message and last_message != COLLECT_TASK_RUNNING_MESSAGE:
+        return False
+
+    resolved_finished_at = _resolve_collect_finish_time(task_state, now=now) or started_at
+    if resolved_finished_at < started_at:
+        resolved_finished_at = started_at
+
+    task_state["lastFinishedAt"] = now_iso_text(resolved_finished_at)
+    task_state["lastMessage"] = _build_collect_incomplete_finish_message(exit_code)
+    if exit_code is not None:
+        task_state["lastExitCode"] = int(exit_code)
+    task_state.pop("scheduleAnchorAt", None)
+    return True
+
+
 def _is_process_running(pid: int) -> bool:
     if pid <= 0:
         return False
@@ -395,7 +455,7 @@ def record_collect_task_started(
     task_state["lastStartedAt"] = now_iso_text(now)
     if log_path:
         task_state["lastLogPath"] = to_repo_relative(log_path)
-    task_state["lastMessage"] = "采集任务运行中"
+    task_state["lastMessage"] = COLLECT_TASK_RUNNING_MESSAGE
     task_state.pop("scheduleAnchorAt", None)
     save_task_daemon_state(payload, state_path)
 
@@ -488,6 +548,8 @@ def get_collect_schedule_summary(
     collect_task = get_collect_task_config(config_payload)
     task_state = get_task_state(state_payload, COLLECT_TASK_NAME)
     lock_info = get_collect_lock_info(resolved_lock_path)
+    if reconcile_incomplete_collect_state(task_state, is_running=lock_info is not None, now=now):
+        save_task_daemon_state(state_payload, resolved_state_path)
     next_planned_at = compute_collect_next_planned_at(
         enabled=bool(collect_task.get("enabled")),
         interval_minutes=int(collect_task.get("intervalMinutes") or 0),
@@ -507,7 +569,7 @@ def get_collect_schedule_summary(
         last_finished_at=format_datetime_text(str(task_state.get("lastFinishedAt") or "")),
         next_planned_at=format_datetime_text(next_planned_at),
         last_exit_code=last_exit_code,
-        last_message=str(task_state.get("lastMessage") or ("采集任务运行中" if lock_info is not None else "")),
+        last_message=str(task_state.get("lastMessage") or (COLLECT_TASK_RUNNING_MESSAGE if lock_info is not None else "")),
         last_log_path=to_repo_relative(str(task_state.get("lastLogPath") or "")),
         config_file=to_repo_relative(resolved_config_path),
         state_file=to_repo_relative(resolved_state_path),

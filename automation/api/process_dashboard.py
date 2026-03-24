@@ -719,6 +719,7 @@ def approve_process_documents_batch(
         "documentNos": normalized_document_nos,
         "totalCount": len(normalized_document_nos),
         "succeededCount": 0,
+        "pendingConfirmationCount": 0,
         "failedCount": 0,
         "results": [],
         "status": "running",
@@ -834,7 +835,7 @@ def approve_process_documents_batch(
                 documentNo=document_no,
                 status=result.get("status", ""),
                 logFile=result.get("logFile", ""),
-                message=result.get("message", ""),
+                resultMessage=result.get("message", ""),
             )
     except Exception as exc:  # noqa: BLE001
         add_event("batch_request_failed", error=str(exc))
@@ -860,16 +861,20 @@ def approve_process_documents_batch(
             )
 
     succeeded_count = sum(1 for item in batch_results if item.get("status") == "succeeded")
-    failed_count = len(batch_results) - succeeded_count
+    pending_confirmation_count = sum(
+        1 for item in batch_results if item.get("status") == "submitted_pending_confirmation"
+    )
+    failed_count = len(batch_results) - succeeded_count - pending_confirmation_count
     response_payload["results"] = batch_results
     response_payload["succeededCount"] = succeeded_count
+    response_payload["pendingConfirmationCount"] = pending_confirmation_count
     response_payload["failedCount"] = failed_count
     response_payload["finishedAt"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     response_payload["durationMs"] = round((time.perf_counter() - started_perf) * 1000, 1)
 
-    if failed_count == 0:
+    if failed_count == 0 and pending_confirmation_count == 0:
         response_payload["status"] = "succeeded"
-    elif succeeded_count == 0:
+    elif succeeded_count == 0 and pending_confirmation_count == 0:
         response_payload["status"] = "failed"
     else:
         response_payload["status"] = "partial"
@@ -877,8 +882,10 @@ def approve_process_documents_batch(
     action_label = "批量批准" if normalized_action == "approve" else "批量驳回"
     if dry_run:
         action_label = f"{action_label}连通性验证"
-    response_payload["message"] = (
-        f"{action_label}完成：成功 {succeeded_count}，失败 {failed_count}，共 {len(batch_results)} 条。"
-    )
+    status_summary_parts = [f"成功 {succeeded_count}"]
+    if pending_confirmation_count > 0:
+        status_summary_parts.append(f"待确认 {pending_confirmation_count}")
+    status_summary_parts.append(f"失败 {failed_count}")
+    response_payload["message"] = f"{action_label}完成：{'，'.join(status_summary_parts)}，共 {len(batch_results)} 条。"
     flush_execution_log()
     return response_payload
