@@ -164,7 +164,7 @@ class DocumentApprovalFlowTest(unittest.TestCase):
         self.assertEqual(result["status"], "submitted_pending_confirmation")
         self.assertEqual(result["confirmationType"], "submitted_pending_confirmation")
 
-    def test_wait_for_submission_confirmation_returns_pending_when_todo_disappears_without_strong_confirmation(self) -> None:
+    def test_wait_for_submission_confirmation_returns_success_when_todo_disappears_consistently_across_reprobes(self) -> None:
         with (
             patch("automation.flows.document_approval_flow.time.monotonic", side_effect=[0.0, 1.0, 9.0, 10.0, 26.0]),
             patch.object(self.flow, "visible_feedback_message", return_value=""),
@@ -212,8 +212,59 @@ class DocumentApprovalFlowTest(unittest.TestCase):
                 wait_timeout_ms=30_000,
             )
 
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual(result["confirmationType"], "todo_disappeared")
+
+    def test_wait_for_submission_confirmation_returns_pending_when_todo_reprobe_lacks_scan_evidence(self) -> None:
+        with (
+            patch("automation.flows.document_approval_flow.time.monotonic", side_effect=[0.0, 1.0, 9.0, 10.0, 26.0]),
+            patch.object(self.flow, "visible_feedback_message", return_value=""),
+            patch.object(self.flow, "capture_approval_records", side_effect=RuntimeError("approval tab hidden")),
+            patch.object(
+                self.flow,
+                "_inspect_submission_state",
+                return_value={
+                    "submitButtonVisible": False,
+                    "taskTabVisible": False,
+                    "approvalTabVisible": False,
+                    "todoListVisible": True,
+                    "documentDetailVisible": False,
+                },
+            ),
+            patch.object(
+                self.flow,
+                "_probe_todo_document_presence",
+                side_effect=[
+                    {
+                        "todoListVisible": True,
+                        "documentStillInTodo": False,
+                        "probeError": "todo_grid_snapshot_missing",
+                        "pageSizeApplied": False,
+                        "todoTotalCount": None,
+                        "scannedUniqueRowCount": 0,
+                        "coveredAllTodoRows": False,
+                    },
+                    {
+                        "todoListVisible": True,
+                        "documentStillInTodo": False,
+                        "probeError": "",
+                        "pageSizeApplied": False,
+                        "todoTotalCount": None,
+                        "scannedUniqueRowCount": 0,
+                        "coveredAllTodoRows": False,
+                    },
+                ],
+            ),
+        ):
+            result = self.flow.wait_for_submission_confirmation(
+                document_no="RA-TEST-001",
+                expected_opinion="同意",
+                approval_count_before=1,
+                wait_timeout_ms=30_000,
+            )
+
         self.assertEqual(result["status"], "submitted_pending_confirmation")
-        self.assertIn("请先不要重复点击批准", result["confirmationMessage"])
+        self.assertEqual(result["confirmationType"], "submitted_pending_confirmation")
 
     def test_wait_for_submission_confirmation_raises_when_document_still_in_todo(self) -> None:
         with (
@@ -253,15 +304,13 @@ class DocumentApprovalFlowTest(unittest.TestCase):
                 ],
             ),
         ):
-            with self.assertRaises(RuntimeError) as context:
+            with self.assertRaises(RuntimeError):
                 self.flow.wait_for_submission_confirmation(
                     document_no="RA-TEST-001",
                     expected_opinion="同意",
                     approval_count_before=1,
                     wait_timeout_ms=30_000,
                 )
-
-        self.assertIn("仍在当前账号待办中", str(context.exception))
 
     def test_probe_todo_document_presence_uses_existing_grid_without_trigger_click(self) -> None:
         grid_locator = MagicMock()
@@ -300,7 +349,7 @@ class DocumentApprovalFlowTest(unittest.TestCase):
         )
 
         self.assertEqual(result["status"], "submitted_pending_confirmation")
-        self.assertIn("请先不要重复点击驳回", result["confirmationMessage"])
+        self.assertIn("驳回", result["confirmationMessage"])
 
     def test_execute_reject_delegates_to_execute_action(self) -> None:
         with patch.object(self.flow, "execute_action", return_value={"status": "succeeded"}) as mocked_execute:

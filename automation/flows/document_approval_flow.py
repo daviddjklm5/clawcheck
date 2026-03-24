@@ -813,6 +813,30 @@ class DocumentApprovalFlow:
         return bool(todo_probe.get("coveredAllTodoRows", False))
 
     @staticmethod
+    def _has_todo_probe_scan_evidence(todo_probe: dict[str, Any]) -> bool:
+        if todo_probe.get("todoListVisible") is not True:
+            return False
+        if todo_probe.get("documentStillInTodo") is not False:
+            return False
+        if todo_probe.get("probeError"):
+            return False
+        if todo_probe.get("coveredAllTodoRows", False):
+            return True
+        if todo_probe.get("todoTotalCount") == 0:
+            return True
+        return int(todo_probe.get("scannedUniqueRowCount", 0) or 0) > 0
+
+    @classmethod
+    def _is_todo_probe_stably_absent(
+        cls,
+        initial_probe: dict[str, Any],
+        repeated_probe: dict[str, Any],
+    ) -> bool:
+        if cls._is_todo_probe_strong_success(initial_probe) or cls._is_todo_probe_strong_success(repeated_probe):
+            return True
+        return cls._has_todo_probe_scan_evidence(initial_probe) and cls._has_todo_probe_scan_evidence(repeated_probe)
+
+    @staticmethod
     def _should_return_pending_confirmation(
         state_before_todo_probe: dict[str, Any],
         todo_probe: dict[str, Any],
@@ -971,6 +995,7 @@ class DocumentApprovalFlow:
                 documentNo=document_no,
                 reason="page_size_not_confirmed",
             )
+            first_todo_probe = todo_probe
             todo_probe = self._probe_todo_document_presence(
                 document_no=document_no,
                 timeout_ms=8000,
@@ -991,7 +1016,7 @@ class DocumentApprovalFlow:
                 approvalTabVisible=state_before_todo_probe.get("approvalTabVisible", False),
                 probeError=todo_probe.get("probeError", ""),
             )
-            if self._is_todo_probe_strong_success(todo_probe):
+            if self._is_todo_probe_stably_absent(first_todo_probe, todo_probe):
                 return {
                     "status": "succeeded",
                     "confirmationType": "todo_disappeared",
@@ -1118,6 +1143,7 @@ class DocumentApprovalFlow:
                 documentNo=document_no,
                 reason="page_size_not_confirmed",
             )
+            first_todo_probe = todo_probe
             todo_probe = self._probe_todo_document_presence(
                 document_no=document_no,
                 timeout_ms=8000,
@@ -1138,7 +1164,7 @@ class DocumentApprovalFlow:
                 approvalTabVisible=state_before_todo_probe.get("approvalTabVisible", False),
                 probeError=todo_probe.get("probeError", ""),
             )
-            if self._is_todo_probe_strong_success(todo_probe):
+            if self._is_todo_probe_stably_absent(first_todo_probe, todo_probe):
                 return {
                     "status": "succeeded",
                     "confirmationType": "todo_disappeared",

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
@@ -9,6 +10,19 @@ from typing import Any, Iterable
 from openpyxl import Workbook
 from openpyxl.styles import Font
 from openpyxl.utils import get_column_letter
+
+from automation.reporting.low_score_feedback import display_summary_conclusion
+
+
+@dataclass(frozen=True)
+class AuditDistributionWorkbookData:
+    batch_no: str
+    assessment_version: str
+    summary_rows: list[dict[str, Any]]
+    detail_rows: list[dict[str, Any]]
+    approval_rows: list[dict[str, Any]]
+    ignored_node_names: list[str]
+    document_feedback_rows: list[dict[str, Any]]
 
 
 def _score_text(value: Any) -> str:
@@ -203,6 +217,270 @@ def build_approval_node_stats(
         )
     result.sort(key=lambda item: (-item["记录数"], item["节点名称"]))
     return result
+
+
+def build_document_feedback_rows(
+    summary_rows: Iterable[dict[str, Any]],
+    feedback_overviews: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    document_feedback_rows: list[dict[str, Any]] = []
+    for row in summary_rows:
+        document_no = _text(row.get("document_no"))
+        if document_no == "<NULL>":
+            continue
+        feedback_overview = feedback_overviews.get(document_no, {})
+        feedback_stats = {
+            str(item.get("label") or ""): str(item.get("value") or "")
+            for item in feedback_overview.get("feedbackStats", [])
+            if isinstance(item, dict)
+        }
+        feedback_lines = [
+            str(item.get("summary") or "").strip()
+            for item in feedback_overview.get("feedbackGroups", [])
+            if isinstance(item, dict) and str(item.get("summary") or "").strip()
+        ]
+        document_feedback_rows.append(
+            {
+                "document_no": document_no,
+                "summary_conclusion_label": feedback_overview.get("summaryConclusionLabel"),
+                "risk_type_count": feedback_stats.get("风险类型数", "0"),
+                "affected_org_unit_count": feedback_stats.get("影响组织单位数", "0"),
+                "affected_org_count": feedback_stats.get("影响组织数", "0"),
+                "affected_role_count": feedback_stats.get("影响角色数", "0"),
+                "raw_low_score_detail_count": feedback_stats.get("原始低分明细数", "0"),
+                "feedback_summary": "\n".join(feedback_lines),
+            }
+        )
+    return document_feedback_rows
+
+
+def build_audit_distribution_workbook_data(
+    *,
+    batch_no: str,
+    ignored_node_names: Iterable[str],
+    summary_rows: Iterable[dict[str, Any]],
+    detail_rows: Iterable[dict[str, Any]],
+    approval_rows: Iterable[dict[str, Any]],
+    feedback_overviews: dict[str, dict[str, Any]] | None = None,
+) -> AuditDistributionWorkbookData:
+    normalized_summary_rows = [dict(row) for row in summary_rows]
+    normalized_detail_rows = [dict(row) for row in detail_rows]
+    normalized_approval_rows = [dict(row) for row in approval_rows]
+    normalized_ignored_node_names = [str(name).strip() for name in ignored_node_names if str(name).strip()]
+
+    if not normalized_summary_rows:
+        raise ValueError(f"No summary rows found for batch {batch_no}")
+
+    for row in normalized_summary_rows:
+        row["summary_conclusion_label"] = display_summary_conclusion(
+            str(row.get("summary_conclusion") or "").strip() or None
+        )
+
+    assessment_version = str(normalized_summary_rows[0].get("assessment_version") or "").strip()
+    if not assessment_version:
+        raise ValueError(f"Missing assessment version for batch {batch_no}")
+
+    document_feedback_rows = build_document_feedback_rows(
+        normalized_summary_rows,
+        feedback_overviews or {},
+    )
+
+    return AuditDistributionWorkbookData(
+        batch_no=batch_no,
+        assessment_version=assessment_version,
+        summary_rows=normalized_summary_rows,
+        detail_rows=normalized_detail_rows,
+        approval_rows=normalized_approval_rows,
+        ignored_node_names=normalized_ignored_node_names,
+        document_feedback_rows=document_feedback_rows,
+    )
+
+
+def _fetch_latest_batch_no(cursor) -> str | None:
+    cursor.execute(
+        '''
+        SELECT "评估批次号"
+        FROM "申请单风险信任评估"
+        ORDER BY "评估时间" DESC, "评估ID" DESC
+        LIMIT 1
+        '''
+    )
+    row = cursor.fetchone()
+    if not row or not row[0]:
+        return None
+    return str(row[0]).strip() or None
+
+
+def _fetch_summary_rows(cursor, batch_no: str) -> list[dict[str, object]]:
+    cursor.execute(
+        '''
+        SELECT
+            "单据编号",
+            "评估版本",
+            "最终信任分",
+            "总结论",
+            "建议动作",
+            "最低命中维度",
+            "最低命中角色编码",
+            "最低命中组织编码",
+            "是否命中人工干预",
+            "是否存在低分明细",
+            "低分明细条数",
+            "低分明细结论"
+        FROM "申请单风险信任评估"
+        WHERE "评估批次号" = %s
+        ORDER BY "最终信任分", "单据编号"
+        ''',
+        (batch_no,),
+    )
+    rows = cursor.fetchall()
+    return [
+        {
+            "document_no": row[0],
+            "assessment_version": row[1],
+            "final_score": row[2],
+            "summary_conclusion": row[3],
+            "suggested_action": row[4],
+            "lowest_hit_dimension": row[5],
+            "lowest_hit_role_code": row[6],
+            "lowest_hit_org_code": row[7],
+            "hit_manual_review": row[8],
+            "has_low_score_details": row[9],
+            "low_score_detail_count": row[10],
+            "low_score_detail_conclusion": row[11],
+        }
+        for row in rows
+    ]
+
+
+def _fetch_detail_rows(cursor, batch_no: str) -> list[dict[str, object]]:
+    cursor.execute(
+        '''
+        SELECT
+            "单据编号",
+            "角色编码",
+            "组织编码",
+            "维度名称",
+            "命中规则编码",
+            "命中规则说明",
+            "维度得分",
+            "明细结论",
+            "是否低分明细",
+            "建议干预动作"
+        FROM "申请单风险信任评估明细"
+        WHERE "评估批次号" = %s
+        ORDER BY "维度得分", "单据编号", "维度名称", "命中规则编码"
+        ''',
+        (batch_no,),
+    )
+    rows = cursor.fetchall()
+    return [
+        {
+            "document_no": row[0],
+            "role_code": row[1],
+            "org_code": row[2],
+            "dimension_name": row[3],
+            "rule_id": row[4],
+            "rule_summary": row[5],
+            "score": row[6],
+            "detail_conclusion": row[7],
+            "is_low_score": row[8],
+            "intervention_action": row[9],
+        }
+        for row in rows
+    ]
+
+
+def _fetch_approval_rows(cursor, document_nos: list[str]) -> list[dict[str, object]]:
+    if not document_nos:
+        return []
+    cursor.execute(
+        '''
+        SELECT
+            "单据编号",
+            "节点名称",
+            "审批动作",
+            "工号"
+        FROM "申请单审批记录"
+        WHERE "单据编号" = ANY(%s)
+        ORDER BY "单据编号", "审批记录顺序号"
+        ''',
+        (document_nos,),
+    )
+    rows = cursor.fetchall()
+    return [
+        {
+            "document_no": row[0],
+            "node_name": row[1],
+            "approval_action": row[2],
+            "approver_employee_no": row[3],
+        }
+        for row in rows
+    ]
+
+
+def load_audit_distribution_workbook_data(
+    *,
+    store: Any,
+    batch_no: str,
+    ignored_node_names: Iterable[str],
+) -> AuditDistributionWorkbookData:
+    normalized_batch_no = str(batch_no or "").strip()
+    with store.connect() as connection:
+        with connection.cursor() as cursor:
+            resolved_batch_no = normalized_batch_no or _fetch_latest_batch_no(cursor)
+            if not resolved_batch_no:
+                raise ValueError("No assessment batch found in 申请单风险信任评估")
+            summary_rows = _fetch_summary_rows(cursor, resolved_batch_no)
+            detail_rows = _fetch_detail_rows(cursor, resolved_batch_no)
+            document_nos = [
+                str(row.get("document_no") or "").strip()
+                for row in summary_rows
+                if str(row.get("document_no") or "").strip()
+            ]
+            approval_rows = _fetch_approval_rows(cursor, document_nos)
+
+    feedback_overviews = store.fetch_document_feedback_overviews(
+        assessment_batch_no=resolved_batch_no,
+        document_nos=[
+            str(row.get("document_no") or "").strip()
+            for row in summary_rows
+            if str(row.get("document_no") or "").strip()
+        ],
+    )
+    return build_audit_distribution_workbook_data(
+        batch_no=resolved_batch_no,
+        ignored_node_names=ignored_node_names,
+        summary_rows=summary_rows,
+        detail_rows=detail_rows,
+        approval_rows=approval_rows,
+        feedback_overviews=feedback_overviews,
+    )
+
+
+def export_audit_distribution_workbook(
+    *,
+    store: Any,
+    batch_no: str,
+    ignored_node_names: Iterable[str],
+    output_path: Path,
+) -> AuditDistributionWorkbookData:
+    workbook_data = load_audit_distribution_workbook_data(
+        store=store,
+        batch_no=batch_no,
+        ignored_node_names=ignored_node_names,
+    )
+    render_audit_distribution_workbook(
+        batch_no=workbook_data.batch_no,
+        assessment_version=workbook_data.assessment_version,
+        summary_rows=workbook_data.summary_rows,
+        detail_rows=workbook_data.detail_rows,
+        approval_rows=workbook_data.approval_rows,
+        ignored_node_names=workbook_data.ignored_node_names,
+        document_feedback_rows=workbook_data.document_feedback_rows,
+        output_path=output_path,
+    )
+    return workbook_data
 
 
 def render_audit_distribution_workbook(
