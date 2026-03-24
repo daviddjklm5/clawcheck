@@ -10,6 +10,7 @@
         "-Action",
         "collect",
         "-Headless",
+        "-AutoAudit",
         "-Limit",
         "100"
       ],

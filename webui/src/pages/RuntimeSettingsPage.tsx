@@ -29,9 +29,16 @@ function buildCollectScheduleFields(data: RuntimeSettingsSummary | null): Detail
       hint: "定时采集固定后台无头执行，不显示浏览器。",
     },
     {
+      label: "采集后自动评估",
+      value: schedule.autoAudit ? "已启用" : "已关闭",
+      hint: "启用后，定时采集成功落库的单据会立即执行增量评估，再进入处理单据工作台。",
+    },
+    {
       label: "当前状态",
       value: schedule.isRunning ? "运行中" : schedule.enabled ? "已启用" : "未启用",
-      hint: schedule.isRunning ? "当前批次运行中，下一次计划时间待本批次结束后重算。" : "由 task daemon 负责轮询调度。",
+      hint: schedule.isRunning
+        ? "当前批次运行中，下一次计划时间待本批次结束后重算。"
+        : "由 task daemon 负责轮询调度。",
     },
     {
       label: "最近开始时间",
@@ -98,6 +105,7 @@ export function RuntimeSettingsPage() {
   const [refreshVersion, setRefreshVersion] = useState(0);
   const [scheduleEnabled, setScheduleEnabled] = useState(false);
   const [scheduleInterval, setScheduleInterval] = useState("15");
+  const [scheduleAutoAudit, setScheduleAutoAudit] = useState(true);
   const [saveSubmitting, setSaveSubmitting] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveNotice, setSaveNotice] = useState<string | null>(null);
@@ -137,6 +145,7 @@ export function RuntimeSettingsPage() {
     }
     setScheduleEnabled(data.collectSchedule.enabled);
     setScheduleInterval(String(data.collectSchedule.intervalMinutes || 15));
+    setScheduleAutoAudit(data.collectSchedule.autoAudit);
   }, [data]);
 
   useEffect(() => {
@@ -158,6 +167,7 @@ export function RuntimeSettingsPage() {
       const response = await dashboardApi.updateCollectSchedule({
         enabled: scheduleEnabled,
         intervalMinutes: parsedInterval,
+        autoAudit: scheduleAutoAudit,
       });
       setData(response);
       setSaveNotice(scheduleEnabled ? "定时采集配置已保存。" : "已关闭定时采集。");
@@ -227,6 +237,16 @@ export function RuntimeSettingsPage() {
                 />
               }
               label="启用定时采集"
+              sx={{ ml: 0 }}
+            />
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={scheduleAutoAudit}
+                  onChange={(event) => setScheduleAutoAudit(event.target.checked)}
+                />
+              }
+              label="采集后自动评估"
               sx={{ ml: 0 }}
             />
             <TextField

@@ -33,6 +33,7 @@ class CollectExecutionLockedError(RuntimeError):
 class CollectScheduleSummary:
     enabled: bool
     interval_minutes: int
+    auto_audit: bool
     poll_seconds: int
     mode: str
     is_running: bool
@@ -50,6 +51,7 @@ class CollectScheduleSummary:
         return {
             "enabled": self.enabled,
             "intervalMinutes": self.interval_minutes,
+            "autoAudit": self.auto_audit,
             "pollSeconds": self.poll_seconds,
             "mode": self.mode,
             "isRunning": self.is_running,
@@ -147,6 +149,7 @@ def _default_collect_task_payload() -> dict[str, Any]:
             "-Action",
             COLLECT_TASK_NAME,
             "-Headless",
+            "-AutoAudit",
             "-Limit",
             str(COLLECT_TASK_DEFAULT_LIMIT),
         ],
@@ -164,12 +167,33 @@ def _ensure_collect_task_headless_args(args: list[str]) -> list[str]:
     return filtered
 
 
+def _is_collect_task_auto_audit_enabled(args: list[str]) -> bool:
+    auto_audit_flags = {"-AutoAudit", "-AutoAudit:$true", "-AutoAudit:true"}
+    return any(str(item) in auto_audit_flags for item in args)
+
+
+def _ensure_collect_task_auto_audit_args(args: list[str], *, auto_audit: bool) -> list[str]:
+    normalized = [str(item) for item in args]
+    filtered = [
+        item
+        for item in normalized
+        if item not in {"-AutoAudit", "-AutoAudit:$true", "-AutoAudit:$false", "-AutoAudit:true", "-AutoAudit:false"}
+    ]
+    if auto_audit:
+        filtered.append("-AutoAudit")
+    return filtered
+
+
 def _ensure_collect_task_payload(raw_task: dict[str, Any]) -> dict[str, Any]:
     task = deepcopy(raw_task)
     task.setdefault("name", COLLECT_TASK_NAME)
     task.setdefault("enabled", False)
     task.setdefault("script", "automation/scripts/run_windows_task.ps1")
-    task["args"] = _ensure_collect_task_headless_args([str(item) for item in task.get("args", [])])
+    auto_audit = bool(task.get("autoAudit")) if "autoAudit" in task else _is_collect_task_auto_audit_enabled(
+        [str(item) for item in task.get("args", [])]
+    )
+    args = _ensure_collect_task_headless_args([str(item) for item in task.get("args", [])])
+    task["args"] = _ensure_collect_task_auto_audit_args(args, auto_audit=auto_audit)
     task["intervalMinutes"] = int(task.get("intervalMinutes", 15) or 0)
     task["dailyTimes"] = [str(item) for item in task.get("dailyTimes", [])]
     task["runOnStartup"] = bool(task.get("runOnStartup", False))
@@ -483,6 +507,7 @@ def update_collect_schedule(
     *,
     enabled: bool,
     interval_minutes: int,
+    auto_audit: bool,
     config_path: Path | None = None,
     state_path: Path | None = None,
     now: datetime | None = None,
@@ -496,7 +521,10 @@ def update_collect_schedule(
     collect_task = get_collect_task_config(config_payload)
     collect_task["enabled"] = normalized_enabled
     collect_task["intervalMinutes"] = normalized_interval
-    collect_task["args"] = _ensure_collect_task_headless_args([str(item) for item in collect_task.get("args", [])])
+    collect_task["args"] = _ensure_collect_task_auto_audit_args(
+        _ensure_collect_task_headless_args([str(item) for item in collect_task.get("args", [])]),
+        auto_audit=bool(auto_audit),
+    )
 
     updated_tasks: list[dict[str, Any]] = []
     collect_updated = False
@@ -562,6 +590,7 @@ def get_collect_schedule_summary(
     return CollectScheduleSummary(
         enabled=bool(collect_task.get("enabled")),
         interval_minutes=int(collect_task.get("intervalMinutes") or 0),
+        auto_audit=_is_collect_task_auto_audit_enabled([str(item) for item in collect_task.get("args", [])]),
         poll_seconds=int(config_payload.get("pollSeconds", 30) or 30),
         mode="headless",
         is_running=lock_info is not None,

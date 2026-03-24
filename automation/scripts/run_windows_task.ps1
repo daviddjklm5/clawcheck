@@ -24,6 +24,7 @@ param(
     [switch]$Headless,
     [switch]$DryRun,
     [switch]$ForceRecollect,
+    [switch]$AutoAudit,
     [switch]$SkipExport,
     [switch]$SkipImport,
     [Parameter(ValueFromRemainingArguments = $true)]
@@ -49,6 +50,7 @@ switch ($Action) {
         if ($DocumentNos) { $RunnerExtraArgs += @("--document-nos", $DocumentNos) }
         if ($DownloadsDir) { $RunnerExtraArgs += @("--downloads-dir", $DownloadsDir) }
         if ($ForceRecollect) { $RunnerExtraArgs += "--force-recollect" }
+        if ($AutoAudit) { $RunnerExtraArgs += "--auto-audit" }
     }
     "audit" {
         $RunnerExtraArgs += @("--limit", [string]$Limit)

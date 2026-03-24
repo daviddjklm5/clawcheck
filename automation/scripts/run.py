@@ -70,6 +70,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--limit", type=int, default=100, help="Maximum number of permission documents to collect")
     parser.add_argument("--dry-run", action="store_true", help="Collect data without writing PostgreSQL")
     parser.add_argument(
+        "--auto-audit",
+        action="store_true",
+        help="Run incremental risk-trust assessment after collect writes succeed",
+    )
+    parser.add_argument(
         "--force-recollect",
         action="store_true",
         help="Force recollect documents even when approval snapshot is unchanged",
@@ -276,6 +281,101 @@ def _build_collect_state_message(
         f"采集执行完成：成功 {success_count} 张，跳过 {skipped_count} 张，失败 {failed_count} 张"
         + ("（dry-run，未写入 PostgreSQL）" if dry_run else "")
     )
+
+
+def _run_incremental_collect_audit(
+    *,
+    settings,
+    logs_dir: Path,
+    document_nos: list[str],
+    logger,
+) -> dict[str, object]:
+    from automation.db.postgres import PostgresRiskTrustStore
+    from automation.rules import RiskTrustEvaluator, load_risk_trust_package
+
+    normalized_document_nos: list[str] = []
+    seen_document_nos: set[str] = set()
+    for value in document_nos:
+        normalized = str(value or "").strip()
+        if not normalized or normalized in seen_document_nos:
+            continue
+        seen_document_nos.add(normalized)
+        normalized_document_nos.append(normalized)
+
+    if not normalized_document_nos:
+        return {
+            "status": "skipped",
+            "message": "未找到可自动评估的单据编号。",
+            "assessment_batch_no": "",
+            "assessment_version": "",
+            "document_count": 0,
+            "detail_count": 0,
+            "failed_document_count": 0,
+            "failed_documents": [],
+            "dump_file": "",
+        }
+
+    store = PostgresRiskTrustStore(settings.db)
+    bundles = store.fetch_document_bundles(
+        document_nos=normalized_document_nos,
+        limit=len(normalized_document_nos),
+    )
+    if not bundles:
+        raise RuntimeError("Collected documents were persisted, but no document bundles were available for auto audit.")
+
+    package = load_risk_trust_package(REPO_ROOT / "automation" / "config" / "rules")
+    assessment_batch_no = f"audit_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    evaluator = RiskTrustEvaluator(package)
+    summary_rows, detail_rows, failed_documents = evaluator.evaluate_documents_resilient(
+        bundles=bundles,
+        assessment_batch_no=assessment_batch_no,
+    )
+    store.write_assessment_results(summary_rows, detail_rows)
+
+    payload = {
+        "assessment_batch_no": assessment_batch_no,
+        "assessment_version": package.version,
+        "document_count": len(summary_rows),
+        "detail_count": len(detail_rows),
+        "failed_document_count": len(failed_documents),
+        "failed_documents": failed_documents,
+        "documents": summary_rows,
+    }
+    dump_path = logs_dir / f"audit_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    dump_path.parent.mkdir(parents=True, exist_ok=True)
+    dump_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    logger.info("Incremental collect audit completed. JSON dump: %s", dump_path)
+
+    if failed_documents:
+        failed_preview = ", ".join(item["document_no"] or "<UNKNOWN>" for item in failed_documents[:10])
+        logger.warning(
+            "Incremental collect audit skipped %s document(s): %s",
+            len(failed_documents),
+            failed_preview,
+        )
+        return {
+            "status": "partial",
+            "message": f"增量评估部分失败：成功 {len(summary_rows)} 单，失败 {len(failed_documents)} 单，批次 {assessment_batch_no}",
+            "assessment_batch_no": assessment_batch_no,
+            "assessment_version": package.version,
+            "document_count": len(summary_rows),
+            "detail_count": len(detail_rows),
+            "failed_document_count": len(failed_documents),
+            "failed_documents": failed_documents,
+            "dump_file": str(dump_path),
+        }
+
+    return {
+        "status": "succeeded",
+        "message": f"已完成增量评估，批次 {assessment_batch_no}",
+        "assessment_batch_no": assessment_batch_no,
+        "assessment_version": package.version,
+        "document_count": len(summary_rows),
+        "detail_count": len(detail_rows),
+        "failed_document_count": 0,
+        "failed_documents": [],
+        "dump_file": str(dump_path),
+    }
 
 
 def main() -> int:
@@ -971,6 +1071,21 @@ def main() -> int:
                         dry_run=bool(args.dry_run),
                         no_pending=not target_document_nos,
                     )
+                    if args.auto_audit and not args.dry_run and documents:
+                        collected_document_nos = [
+                            str(document.get("basic_info", {}).get("document_no") or "").strip()
+                            for document in documents
+                            if isinstance(document.get("basic_info"), dict)
+                        ]
+                        audit_result = _run_incremental_collect_audit(
+                            settings=settings,
+                            logs_dir=logs_dir,
+                            document_nos=collected_document_nos,
+                            logger=logger,
+                        )
+                        collect_state_message = f"{collect_state_message}；{audit_result['message']}"
+                        if audit_result["status"] != "succeeded":
+                            result_code = 1
 
                     if skipped_documents:
                         logger.info("Skipped document count: %s", len(skipped_documents))

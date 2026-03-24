@@ -37,6 +37,7 @@ class CollectScheduleTest(unittest.TestCase):
             summary = update_collect_schedule(
                 enabled=True,
                 interval_minutes=20,
+                auto_audit=True,
                 config_path=config_path,
                 state_path=state_path,
                 now=datetime(2026, 3, 23, 10, 0, 0),
@@ -49,8 +50,10 @@ class CollectScheduleTest(unittest.TestCase):
             self.assertTrue(collect_task["enabled"])
             self.assertEqual(collect_task["intervalMinutes"], 20)
             self.assertIn("-Headless", collect_task["args"])
+            self.assertIn("-AutoAudit", collect_task["args"])
             self.assertEqual(saved_state["tasks"]["collect"]["scheduleAnchorAt"], "2026-03-23T10:00:00")
             self.assertEqual(summary.next_planned_at, "2026-03-23 10:20:00")
+            self.assertTrue(summary.auto_audit)
 
     def test_collect_schedule_summary_hides_next_plan_while_running(self) -> None:
         with TemporaryDirectory() as temp_dir:
@@ -116,6 +119,47 @@ class CollectScheduleTest(unittest.TestCase):
 
             self.assertTrue(summary.is_running)
             self.assertEqual(summary.next_planned_at, "")
+
+    def test_update_collect_schedule_can_disable_auto_audit_flag(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "windows_task_daemon.local.json"
+            state_path = Path(temp_dir) / "windows_task_daemon_state.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "pollSeconds": 30,
+                        "logDir": "automation/logs/windows_task_daemon",
+                        "tasks": [
+                            {
+                                "name": "collect",
+                                "enabled": True,
+                                "script": "automation/scripts/run_windows_task.ps1",
+                                "args": ["-Action", "collect", "-Headless", "-AutoAudit", "-Limit", "100"],
+                                "intervalMinutes": 15,
+                                "dailyTimes": [],
+                                "runOnStartup": False,
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+
+            summary = update_collect_schedule(
+                enabled=True,
+                interval_minutes=15,
+                auto_audit=False,
+                config_path=config_path,
+                state_path=state_path,
+                now=datetime(2026, 3, 23, 10, 0, 0),
+            )
+
+            saved_config = json.loads(config_path.read_text(encoding="utf-8"))
+            collect_task = next(task for task in saved_config["tasks"] if task["name"] == "collect")
+            self.assertNotIn("-AutoAudit", collect_task["args"])
+            self.assertFalse(summary.auto_audit)
 
     def test_collect_schedule_summary_repairs_incomplete_collect_state_when_lock_missing(self) -> None:
         with TemporaryDirectory() as temp_dir:

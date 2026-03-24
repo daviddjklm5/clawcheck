@@ -493,6 +493,7 @@ export interface ProcessDashboard {
 export interface CollectScheduleSummary {
   enabled: boolean;
   intervalMinutes: number;
+  autoAudit: boolean;
   pollSeconds: number;
   mode: string;
   isRunning: boolean;
@@ -510,6 +511,7 @@ export interface CollectScheduleSummary {
 export interface CollectScheduleUpdateRequest {
   enabled: boolean;
   intervalMinutes: number;
+  autoAudit: boolean;
 }
 
 export interface RuntimeSettingsSummary {
