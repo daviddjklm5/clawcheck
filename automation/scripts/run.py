@@ -5,6 +5,7 @@ import argparse
 import getpass
 import json
 import os
+import subprocess
 import sys
 import time
 from datetime import date, datetime
@@ -464,8 +465,6 @@ def _run_collect_auto_batch_approve(
     document_nos: list[str],
     logger,
 ) -> dict[str, object]:
-    from automation.api.process_dashboard import approve_process_documents_batch
-
     candidate_result = _resolve_collect_auto_batch_approve_candidates(
         settings=settings,
         document_nos=document_nos,
@@ -482,12 +481,48 @@ def _run_collect_auto_batch_approve(
             "log_file": "",
         }
 
-    batch_result = approve_process_documents_batch(
-        document_nos=candidate_document_nos,
-        action="approve",
-        dry_run=False,
-        headed=bool(settings.browser.headed),
+    batch_payload = {
+        "documentNos": candidate_document_nos,
+        "action": "approve",
+        "dryRun": False,
+        "headed": bool(settings.browser.headed),
+    }
+    runner_script = (
+        "import json, os; "
+        "from automation.api.process_dashboard import approve_process_documents_batch; "
+        "payload = json.loads(os.environ['CLAWCHECK_BATCH_APPROVE_PAYLOAD']); "
+        "result = approve_process_documents_batch("
+        "document_nos=payload.get('documentNos', []), "
+        "action=str(payload.get('action', 'approve')), "
+        "dry_run=bool(payload.get('dryRun', False)), "
+        "headed=bool(payload.get('headed', False)),"
+        "); "
+        "print(json.dumps(result, ensure_ascii=False))"
     )
+    env = os.environ.copy()
+    env["CLAWCHECK_BATCH_APPROVE_PAYLOAD"] = json.dumps(batch_payload, ensure_ascii=False)
+    process = subprocess.run(
+        [sys.executable, "-c", runner_script],
+        cwd=str(REPO_ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+
+    stdout_lines = [line.strip() for line in (process.stdout or "").splitlines() if line.strip()]
+    stderr_tail = (process.stderr or "").strip()[-1200:]
+    if process.returncode != 0:
+        error_message = stderr_tail or (process.stdout or "").strip()[-1200:] or "subprocess failed"
+        raise RuntimeError(f"Auto batch approve subprocess failed: {error_message}")
+    if not stdout_lines:
+        raise RuntimeError("Auto batch approve subprocess returned empty output")
+
+    try:
+        batch_result = json.loads(stdout_lines[-1])
+    except json.JSONDecodeError as exc:
+        raw_tail = (process.stdout or "").strip()[-1200:]
+        raise RuntimeError(f"Auto batch approve subprocess returned invalid JSON: {raw_tail}") from exc
     status = str(batch_result.get("status") or "failed").strip() or "failed"
     message = str(batch_result.get("message") or "").strip() or "自动批量批准执行失败。"
     return {

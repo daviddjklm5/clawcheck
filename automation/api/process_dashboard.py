@@ -659,7 +659,10 @@ def approve_process_document(
     except Exception as exc:  # noqa: BLE001
         if response_payload is not None:
             raise RuntimeError(response_payload["message"]) from exc
-        raise RuntimeError(f"审批执行失败：{exc}") from exc
+        message = str(exc)
+        if message.startswith(("Approval execution failed:", "审批执行失败：")):
+            raise RuntimeError(message) from exc
+        raise RuntimeError(f"Approval execution failed: {message}") from exc
     finally:
         if browser_session_acquired:
             release_approval_browser_session(

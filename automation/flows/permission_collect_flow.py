@@ -597,33 +597,65 @@ class PermissionCollectFlow:
         headers = list(grid.get("headers") or [])
         if not grid_selector or not headers:
             raise RuntimeError(f"Todo grid not ready for document lookup: {document_no}")
-
         self._set_grid_vertical_position(grid_selector, 0)
         effective_timeout_ms = max(int(timeout_ms or self.timeout_ms), 1)
         deadline = time.monotonic() + (effective_timeout_ms / 1000)
         stagnant_rounds = 0
+        empty_rows_rounds = 0
+        refresh_attempted = False
+        search_attempted = False
+        not_found_rounds = 0
         last_error = ""
-        subject_text = f"单据编号：{document_no}"
-
         while time.monotonic() < deadline:
             if self._focus_todo_row(grid_selector, document_no):
+                not_found_rounds = 0
                 row_locator = self._get_target_todo_row_locator(grid_selector)
                 try:
                     row_locator.wait_for(state="visible", timeout=1000)
                 except PlaywrightTimeoutError:
                     last_error = "target_todo_row_not_visible"
                 else:
-                    cell_link = row_locator.locator("span.link-cell-content").filter(has_text=subject_text).first
+                    cell_link = row_locator.locator("span.link-cell-content").filter(has_text=document_no).first
                     if cell_link.count() > 0:
                         return cell_link
                     last_error = "target_todo_link_not_rendered"
-
+            else:
+                last_error = "target_todo_row_not_found"
+                not_found_rounds += 1
+                if not search_attempted and not_found_rounds >= 3:
+                    search_attempted = self._try_search_todo_document(document_no)
+                    if search_attempted:
+                        self.logger.info(
+                            "Todo document %s not found in current rows, search filter applied and retrying",
+                            document_no,
+                        )
+                        self._set_grid_vertical_position(grid_selector, 0)
+                        stagnant_rounds = 0
+                        empty_rows_rounds = 0
+                        self.page.wait_for_timeout(600)
+                        continue
             snapshot = self._get_grid_virtual_snapshot(grid_selector, headers)
             if not snapshot:
                 last_error = "todo_grid_snapshot_missing"
                 self.page.wait_for_timeout(200)
                 continue
-
+            rows = list(snapshot.get("rows") or [])
+            if rows:
+                empty_rows_rounds = 0
+            else:
+                empty_rows_rounds += 1
+                last_error = "todo_grid_rows_empty"
+                if not refresh_attempted and empty_rows_rounds >= 3:
+                    refresh_attempted = self._try_refresh_todo_grid()
+                    if refresh_attempted:
+                        self.logger.info(
+                            "Todo grid empty while locating document %s, refresh clicked and retrying",
+                            document_no,
+                        )
+                        self._set_grid_vertical_position(grid_selector, 0)
+                        stagnant_rounds = 0
+                        self.page.wait_for_timeout(600)
+                        continue
             scroll_height = int(snapshot.get("scrollHeight", 0) or 0)
             client_height = int(snapshot.get("clientHeight", 0) or 0)
             current_top = int(snapshot.get("scrollTop", 0) or 0)
@@ -633,12 +665,126 @@ class PermissionCollectFlow:
             else:
                 stagnant_rounds = 0
                 self._set_grid_vertical_position(grid_selector, next_top)
-
             if stagnant_rounds >= 3:
-                break
-
+                # Virtualized rows can keep scrollTop unchanged while still loading.
+                # Keep polling until timeout instead of failing fast.
+                stagnant_rounds = 0
+                self._set_grid_vertical_position(grid_selector, 0)
+                if not last_error:
+                    last_error = "todo_grid_stagnant_waiting_rows"
+                self.page.wait_for_timeout(250)
+                continue
+            self.page.wait_for_timeout(120)
+        todo_total_count = self._extract_todo_total_count()
+        todo_tab_count = self._extract_todo_tab_count()
+        if todo_tab_count == 0:
+            raise PlaywrightTimeoutError(
+                f"Todo document not found in current account todo list. document_no={document_no!r}, todo_tab_count=0"
+            )
+        total_count_text = f", todo_total_count={todo_total_count}" if todo_total_count is not None else ""
+        tab_count_text = f", todo_tab_count={todo_tab_count}" if todo_tab_count is not None else ""
         raise PlaywrightTimeoutError(
-            f"Todo document link not ready. document_no={document_no!r}, last_error={last_error}"
+            f"Todo document link not ready. document_no={document_no!r}, last_error={last_error}{total_count_text}{tab_count_text}"
+        )
+
+    def _try_search_todo_document(self, document_no: str) -> bool:
+        keyword = str(document_no or "").strip()
+        if not keyword:
+            return False
+        return bool(
+            self.page.evaluate(
+                r"""(payload) => {
+                    const { keyword } = payload;
+                    const visible = (el) => {
+                        if (!el) return false;
+                        const style = window.getComputedStyle(el);
+                        if (style.display === 'none' || style.visibility === 'hidden') return false;
+                        const rect = el.getBoundingClientRect();
+                        return rect.width > 0 && rect.height > 0;
+                    };
+                    const normalize = (value) => (value || '').replace(/\s+/g, ' ').trim();
+                    const hintPattern = /(\u641c\u7d22|search)/i;
+                    const inputs = [...document.querySelectorAll('input[type="text"], input:not([type])')]
+                        .filter((el) => visible(el));
+                    for (const input of inputs) {
+                        const hint = normalize(
+                            `${input.getAttribute('placeholder') || ''} ${input.getAttribute('aria-label') || ''} ${input.getAttribute('title') || ''}`
+                        );
+                        if (!hintPattern.test(hint)) continue;
+                        input.focus();
+                        input.value = keyword;
+                        input.dispatchEvent(new Event('input', { bubbles: true }));
+                        input.dispatchEvent(new Event('change', { bubbles: true }));
+                        input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true }));
+                        input.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', bubbles: true }));
+                        return true;
+                    }
+                    return false;
+                }""",
+                {"keyword": keyword},
+            )
+        )
+
+    def _extract_todo_tab_count(self) -> int | None:
+        tab_count = self.page.evaluate(
+            r"""() => {
+                const visible = (el) => {
+                    if (!el) return false;
+                    const style = window.getComputedStyle(el);
+                    if (style.display === 'none' || style.visibility === 'hidden') return false;
+                    const rect = el.getBoundingClientRect();
+                    return rect.width > 0 && rect.height > 0;
+                };
+                const normalize = (value) => (value || '').replace(/\s+/g, ' ').trim();
+                const parseCount = (text) => {
+                    const match = normalize(text).match(/\((\d+)\)/);
+                    return match ? Number(match[1]) : null;
+                };
+                const tabs = [...document.querySelectorAll('#tabap .kd-cq-tabs-tab, [id^="tabap"] .kd-cq-tabs-tab, div[id^="processflexpanelap_"]')]
+                    .filter((el) => visible(el));
+                const score = (el) => {
+                    let value = 0;
+                    if (el.getAttribute('aria-selected') === 'true') value += 100;
+                    if ((el.className || '').toLowerCase().includes('active')) value += 50;
+                    return value;
+                };
+                tabs.sort((left, right) => score(right) - score(left));
+                for (const tab of tabs) {
+                    const count = parseCount(tab.innerText || tab.textContent || '');
+                    if (count !== null) return count;
+                }
+                return null;
+            }"""
+        )
+        if tab_count is None:
+            return None
+        return int(tab_count)
+
+    def _try_refresh_todo_grid(self) -> bool:
+        return bool(
+            self.page.evaluate(
+                r"""() => {
+                    const visible = (el) => {
+                        if (!el) return false;
+                        const style = window.getComputedStyle(el);
+                        if (style.display === 'none' || style.visibility === 'hidden') return false;
+                        const rect = el.getBoundingClientRect();
+                        return rect.width > 0 && rect.height > 0;
+                    };
+                    const normalize = (value) => (value || '').replace(/\s+/g, ' ').trim();
+                    const candidates = [...document.querySelectorAll('button, [role=\"button\"], .kd-btn')]
+                        .filter((el) => visible(el));
+                    const refreshPattern = /(\u5237\u65b0|Refresh)/i;
+                    for (const element of candidates) {
+                        const text = normalize(element.innerText || element.textContent || '');
+                        const title = normalize(element.getAttribute('title') || '');
+                        if (!refreshPattern.test(text + ' ' + title)) continue;
+                        element.click();
+                        return true;
+                    }
+                    return false;
+                }"""
+            )
         )
 
     def _wait_for_detail_link_ready(
