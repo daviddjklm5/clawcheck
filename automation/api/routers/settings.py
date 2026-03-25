@@ -15,6 +15,7 @@ class CollectScheduleUpdateRequest(BaseModel):
     enabled: bool = False
     intervalMinutes: int = Field(default=0, ge=0)
     autoAudit: bool = True
+    autoBatchApprove: bool = False
 
 
 @router.get("/runtime")
@@ -29,6 +30,7 @@ def put_runtime_collect_schedule(payload: CollectScheduleUpdateRequest) -> dict[
             enabled=payload.enabled,
             interval_minutes=payload.intervalMinutes,
             auto_audit=payload.autoAudit,
+            auto_batch_approve=payload.autoBatchApprove,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

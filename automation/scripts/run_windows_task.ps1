@@ -25,6 +25,7 @@ param(
     [switch]$DryRun,
     [switch]$ForceRecollect,
     [switch]$AutoAudit,
+    [switch]$AutoBatchApprove,
     [switch]$SkipExport,
     [switch]$SkipImport,
     [Parameter(ValueFromRemainingArguments = $true)]
@@ -51,6 +52,7 @@ switch ($Action) {
         if ($DownloadsDir) { $RunnerExtraArgs += @("--downloads-dir", $DownloadsDir) }
         if ($ForceRecollect) { $RunnerExtraArgs += "--force-recollect" }
         if ($AutoAudit) { $RunnerExtraArgs += "--auto-audit" }
+        if ($AutoBatchApprove) { $RunnerExtraArgs += "--auto-batch-approve" }
     }
     "audit" {
         $RunnerExtraArgs += @("--limit", [string]$Limit)

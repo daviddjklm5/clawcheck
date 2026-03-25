@@ -75,6 +75,11 @@ def parse_args() -> argparse.Namespace:
         help="Run incremental risk-trust assessment after collect writes succeed",
     )
     parser.add_argument(
+        "--auto-batch-approve",
+        action="store_true",
+        help="Auto approve pending documents scored 2.0/2.5 after collect completes",
+    )
+    parser.add_argument(
         "--force-recollect",
         action="store_true",
         help="Force recollect documents even when approval snapshot is unchanged",
@@ -375,6 +380,122 @@ def _run_incremental_collect_audit(
         "failed_document_count": 0,
         "failed_documents": [],
         "dump_file": str(dump_path),
+    }
+
+
+def _parse_score_value(raw_value: object) -> float | None:
+    if raw_value is None:
+        return None
+    try:
+        return round(float(raw_value), 1)
+    except (TypeError, ValueError):
+        return None
+
+
+def _resolve_collect_auto_batch_approve_candidates(
+    *,
+    settings,
+    document_nos: list[str],
+    logger,
+) -> dict[str, object]:
+    from automation.db.postgres import PostgresRiskTrustStore
+
+    normalized_document_nos: list[str] = []
+    seen_document_nos: set[str] = set()
+    for value in document_nos:
+        normalized = str(value or "").strip()
+        if not normalized or normalized in seen_document_nos:
+            continue
+        seen_document_nos.add(normalized)
+        normalized_document_nos.append(normalized)
+
+    if not normalized_document_nos:
+        return {
+            "candidates": [],
+            "target_scores": [2.0, 2.5],
+        }
+
+    target_document_no_set = set(normalized_document_nos)
+    target_score_set = {2.0, 2.5}
+    workbench_rows = PostgresRiskTrustStore(settings.db).fetch_process_workbench().get("documents", [])
+    row_by_document_no: dict[str, dict[str, object]] = {}
+    for row in workbench_rows:
+        if not isinstance(row, dict):
+            continue
+        document_no = str(row.get("documentNo") or "").strip()
+        if not document_no or document_no not in target_document_no_set:
+            continue
+        if document_no not in row_by_document_no:
+            row_by_document_no[document_no] = row
+
+    candidates: list[str] = []
+    for document_no in normalized_document_nos:
+        row = row_by_document_no.get(document_no)
+        if row is None:
+            logger.info("Auto batch approve skipped %s: no process row", document_no)
+            continue
+        todo_process_status = str(row.get("todoProcessStatus") or "").strip() or "待处理"
+        if todo_process_status != "待处理":
+            logger.info(
+                "Auto batch approve skipped %s: todo_process_status=%s",
+                document_no,
+                todo_process_status,
+            )
+            continue
+        final_score = _parse_score_value(row.get("finalScore"))
+        if final_score is None or final_score not in target_score_set:
+            logger.info(
+                "Auto batch approve skipped %s: final_score=%s",
+                document_no,
+                row.get("finalScore"),
+            )
+            continue
+        candidates.append(document_no)
+
+    return {
+        "candidates": candidates,
+        "target_scores": sorted(target_score_set),
+    }
+
+
+def _run_collect_auto_batch_approve(
+    *,
+    settings,
+    document_nos: list[str],
+    logger,
+) -> dict[str, object]:
+    from automation.api.process_dashboard import approve_process_documents_batch
+
+    candidate_result = _resolve_collect_auto_batch_approve_candidates(
+        settings=settings,
+        document_nos=document_nos,
+        logger=logger,
+    )
+    candidate_document_nos = [str(item).strip() for item in candidate_result.get("candidates", []) if str(item).strip()]
+    target_scores = [float(item) for item in candidate_result.get("target_scores", [2.0, 2.5])]
+    if not candidate_document_nos:
+        return {
+            "status": "skipped",
+            "message": f"自动批量批准已跳过：本轮未命中待处理且分值为 {target_scores} 的单据。",
+            "candidate_document_nos": [],
+            "target_scores": target_scores,
+            "log_file": "",
+        }
+
+    batch_result = approve_process_documents_batch(
+        document_nos=candidate_document_nos,
+        action="approve",
+        dry_run=False,
+        headed=bool(settings.browser.headed),
+    )
+    status = str(batch_result.get("status") or "failed").strip() or "failed"
+    message = str(batch_result.get("message") or "").strip() or "自动批量批准执行失败。"
+    return {
+        "status": status,
+        "message": message,
+        "candidate_document_nos": candidate_document_nos,
+        "target_scores": target_scores,
+        "log_file": str(batch_result.get("logFile") or ""),
     }
 
 
@@ -1071,12 +1192,13 @@ def main() -> int:
                         dry_run=bool(args.dry_run),
                         no_pending=not target_document_nos,
                     )
+                    collected_document_nos = [
+                        str(document.get("basic_info", {}).get("document_no") or "").strip()
+                        for document in documents
+                        if isinstance(document.get("basic_info"), dict)
+                    ]
+                    auto_audit_status = ""
                     if args.auto_audit and not args.dry_run and documents:
-                        collected_document_nos = [
-                            str(document.get("basic_info", {}).get("document_no") or "").strip()
-                            for document in documents
-                            if isinstance(document.get("basic_info"), dict)
-                        ]
                         audit_result = _run_incremental_collect_audit(
                             settings=settings,
                             logs_dir=logs_dir,
@@ -1084,7 +1206,24 @@ def main() -> int:
                             logger=logger,
                         )
                         collect_state_message = f"{collect_state_message}；{audit_result['message']}"
-                        if audit_result["status"] != "succeeded":
+                        auto_audit_status = str(audit_result.get("status") or "")
+                        if auto_audit_status != "succeeded":
+                            result_code = 1
+
+                    if args.auto_batch_approve and not args.dry_run and documents:
+                        if args.auto_audit and auto_audit_status != "succeeded":
+                            auto_batch_approve_result = {
+                                "status": "skipped",
+                                "message": "自动批量批准已跳过：本轮自动评估未成功。",
+                            }
+                        else:
+                            auto_batch_approve_result = _run_collect_auto_batch_approve(
+                                settings=settings,
+                                document_nos=collected_document_nos,
+                                logger=logger,
+                            )
+                        collect_state_message = f"{collect_state_message}；{auto_batch_approve_result['message']}"
+                        if auto_batch_approve_result.get("status") not in {"succeeded", "skipped"}:
                             result_code = 1
 
                     if skipped_documents:

@@ -494,6 +494,7 @@ export interface CollectScheduleSummary {
   enabled: boolean;
   intervalMinutes: number;
   autoAudit: boolean;
+  autoBatchApprove: boolean;
   pollSeconds: number;
   mode: string;
   isRunning: boolean;
@@ -512,6 +513,7 @@ export interface CollectScheduleUpdateRequest {
   enabled: boolean;
   intervalMinutes: number;
   autoAudit: boolean;
+  autoBatchApprove: boolean;
 }
 
 export interface RuntimeSettingsSummary {

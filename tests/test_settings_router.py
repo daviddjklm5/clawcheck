@@ -22,8 +22,22 @@ class SettingsRouterTest(unittest.TestCase):
         self.assertEqual(result, payload)
 
     def test_put_runtime_collect_schedule_updates_and_returns_summary(self) -> None:
-        payload = {"stats": [], "runtime": [], "collectSchedule": {"enabled": True, "intervalMinutes": 15, "autoAudit": True}}
-        request = CollectScheduleUpdateRequest(enabled=True, intervalMinutes=15, autoAudit=True)
+        payload = {
+            "stats": [],
+            "runtime": [],
+            "collectSchedule": {
+                "enabled": True,
+                "intervalMinutes": 15,
+                "autoAudit": True,
+                "autoBatchApprove": True,
+            },
+        }
+        request = CollectScheduleUpdateRequest(
+            enabled=True,
+            intervalMinutes=15,
+            autoAudit=True,
+            autoBatchApprove=True,
+        )
 
         with (
             patch("automation.api.routers.settings.update_collect_schedule") as mocked_update,
@@ -32,10 +46,20 @@ class SettingsRouterTest(unittest.TestCase):
             result = put_runtime_collect_schedule(request)
 
         self.assertEqual(result, payload)
-        mocked_update.assert_called_once_with(enabled=True, interval_minutes=15, auto_audit=True)
+        mocked_update.assert_called_once_with(
+            enabled=True,
+            interval_minutes=15,
+            auto_audit=True,
+            auto_batch_approve=True,
+        )
 
     def test_put_runtime_collect_schedule_raises_400_for_invalid_interval(self) -> None:
-        request = CollectScheduleUpdateRequest(enabled=True, intervalMinutes=0, autoAudit=True)
+        request = CollectScheduleUpdateRequest(
+            enabled=True,
+            intervalMinutes=0,
+            autoAudit=True,
+            autoBatchApprove=False,
+        )
 
         with patch(
             "automation.api.routers.settings.update_collect_schedule",

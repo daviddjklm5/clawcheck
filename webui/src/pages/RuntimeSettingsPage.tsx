@@ -22,7 +22,7 @@ function buildCollectScheduleFields(data: RuntimeSettingsSummary | null): Detail
     return [];
   }
 
-  return [
+  const fields: DetailField[] = [
     {
       label: "执行模式",
       value: schedule.mode === "headless" ? "无头浏览器" : schedule.mode || "-",
@@ -96,6 +96,12 @@ function buildCollectScheduleFields(data: RuntimeSettingsSummary | null): Detail
       columnSpan: 2,
     },
   ];
+  fields.splice(2, 0, {
+    label: "采集后自动批量批准",
+    value: schedule.autoBatchApprove ? "已启用" : "已关闭",
+    hint: "启用后，采集完成会自动批准最终分为 2.0/2.5 的待处理单据。",
+  });
+  return fields;
 }
 
 export function RuntimeSettingsPage() {
@@ -106,6 +112,7 @@ export function RuntimeSettingsPage() {
   const [scheduleEnabled, setScheduleEnabled] = useState(false);
   const [scheduleInterval, setScheduleInterval] = useState("15");
   const [scheduleAutoAudit, setScheduleAutoAudit] = useState(true);
+  const [scheduleAutoBatchApprove, setScheduleAutoBatchApprove] = useState(false);
   const [saveSubmitting, setSaveSubmitting] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveNotice, setSaveNotice] = useState<string | null>(null);
@@ -146,6 +153,7 @@ export function RuntimeSettingsPage() {
     setScheduleEnabled(data.collectSchedule.enabled);
     setScheduleInterval(String(data.collectSchedule.intervalMinutes || 15));
     setScheduleAutoAudit(data.collectSchedule.autoAudit);
+    setScheduleAutoBatchApprove(data.collectSchedule.autoBatchApprove);
   }, [data]);
 
   useEffect(() => {
@@ -168,6 +176,7 @@ export function RuntimeSettingsPage() {
         enabled: scheduleEnabled,
         intervalMinutes: parsedInterval,
         autoAudit: scheduleAutoAudit,
+        autoBatchApprove: scheduleAutoBatchApprove,
       });
       setData(response);
       setSaveNotice(scheduleEnabled ? "定时采集配置已保存。" : "已关闭定时采集。");
@@ -247,6 +256,16 @@ export function RuntimeSettingsPage() {
                 />
               }
               label="采集后自动评估"
+              sx={{ ml: 0 }}
+            />
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={scheduleAutoBatchApprove}
+                  onChange={(event) => setScheduleAutoBatchApprove(event.target.checked)}
+                />
+              }
+              label="采集后自动批量批准"
               sx={{ ml: 0 }}
             />
             <TextField

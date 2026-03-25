@@ -34,6 +34,7 @@ class CollectScheduleSummary:
     enabled: bool
     interval_minutes: int
     auto_audit: bool
+    auto_batch_approve: bool
     poll_seconds: int
     mode: str
     is_running: bool
@@ -52,6 +53,7 @@ class CollectScheduleSummary:
             "enabled": self.enabled,
             "intervalMinutes": self.interval_minutes,
             "autoAudit": self.auto_audit,
+            "autoBatchApprove": self.auto_batch_approve,
             "pollSeconds": self.poll_seconds,
             "mode": self.mode,
             "isRunning": self.is_running,
@@ -172,6 +174,15 @@ def _is_collect_task_auto_audit_enabled(args: list[str]) -> bool:
     return any(str(item) in auto_audit_flags for item in args)
 
 
+def _is_collect_task_auto_batch_approve_enabled(args: list[str]) -> bool:
+    auto_batch_approve_flags = {
+        "-AutoBatchApprove",
+        "-AutoBatchApprove:$true",
+        "-AutoBatchApprove:true",
+    }
+    return any(str(item) in auto_batch_approve_flags for item in args)
+
+
 def _ensure_collect_task_auto_audit_args(args: list[str], *, auto_audit: bool) -> list[str]:
     normalized = [str(item) for item in args]
     filtered = [
@@ -184,6 +195,25 @@ def _ensure_collect_task_auto_audit_args(args: list[str], *, auto_audit: bool) -
     return filtered
 
 
+def _ensure_collect_task_auto_batch_approve_args(args: list[str], *, auto_batch_approve: bool) -> list[str]:
+    normalized = [str(item) for item in args]
+    filtered = [
+        item
+        for item in normalized
+        if item
+        not in {
+            "-AutoBatchApprove",
+            "-AutoBatchApprove:$true",
+            "-AutoBatchApprove:$false",
+            "-AutoBatchApprove:true",
+            "-AutoBatchApprove:false",
+        }
+    ]
+    if auto_batch_approve:
+        filtered.append("-AutoBatchApprove")
+    return filtered
+
+
 def _ensure_collect_task_payload(raw_task: dict[str, Any]) -> dict[str, Any]:
     task = deepcopy(raw_task)
     task.setdefault("name", COLLECT_TASK_NAME)
@@ -192,8 +222,17 @@ def _ensure_collect_task_payload(raw_task: dict[str, Any]) -> dict[str, Any]:
     auto_audit = bool(task.get("autoAudit")) if "autoAudit" in task else _is_collect_task_auto_audit_enabled(
         [str(item) for item in task.get("args", [])]
     )
+    auto_batch_approve = (
+        bool(task.get("autoBatchApprove"))
+        if "autoBatchApprove" in task
+        else _is_collect_task_auto_batch_approve_enabled([str(item) for item in task.get("args", [])])
+    )
     args = _ensure_collect_task_headless_args([str(item) for item in task.get("args", [])])
-    task["args"] = _ensure_collect_task_auto_audit_args(args, auto_audit=auto_audit)
+    args = _ensure_collect_task_auto_audit_args(args, auto_audit=auto_audit)
+    task["args"] = _ensure_collect_task_auto_batch_approve_args(
+        args,
+        auto_batch_approve=auto_batch_approve,
+    )
     task["intervalMinutes"] = int(task.get("intervalMinutes", 15) or 0)
     task["dailyTimes"] = [str(item) for item in task.get("dailyTimes", [])]
     task["runOnStartup"] = bool(task.get("runOnStartup", False))
@@ -508,6 +547,7 @@ def update_collect_schedule(
     enabled: bool,
     interval_minutes: int,
     auto_audit: bool,
+    auto_batch_approve: bool = False,
     config_path: Path | None = None,
     state_path: Path | None = None,
     now: datetime | None = None,
@@ -521,9 +561,13 @@ def update_collect_schedule(
     collect_task = get_collect_task_config(config_payload)
     collect_task["enabled"] = normalized_enabled
     collect_task["intervalMinutes"] = normalized_interval
-    collect_task["args"] = _ensure_collect_task_auto_audit_args(
+    collect_task_args = _ensure_collect_task_auto_audit_args(
         _ensure_collect_task_headless_args([str(item) for item in collect_task.get("args", [])]),
         auto_audit=bool(auto_audit),
+    )
+    collect_task["args"] = _ensure_collect_task_auto_batch_approve_args(
+        collect_task_args,
+        auto_batch_approve=bool(auto_batch_approve),
     )
 
     updated_tasks: list[dict[str, Any]] = []
@@ -591,6 +635,9 @@ def get_collect_schedule_summary(
         enabled=bool(collect_task.get("enabled")),
         interval_minutes=int(collect_task.get("intervalMinutes") or 0),
         auto_audit=_is_collect_task_auto_audit_enabled([str(item) for item in collect_task.get("args", [])]),
+        auto_batch_approve=_is_collect_task_auto_batch_approve_enabled(
+            [str(item) for item in collect_task.get("args", [])]
+        ),
         poll_seconds=int(config_payload.get("pollSeconds", 30) or 30),
         mode="headless",
         is_running=lock_info is not None,

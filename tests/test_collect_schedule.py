@@ -161,6 +161,48 @@ class CollectScheduleTest(unittest.TestCase):
             self.assertNotIn("-AutoAudit", collect_task["args"])
             self.assertFalse(summary.auto_audit)
 
+    def test_update_collect_schedule_can_enable_auto_batch_approve_flag(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "windows_task_daemon.local.json"
+            state_path = Path(temp_dir) / "windows_task_daemon_state.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "pollSeconds": 30,
+                        "logDir": "automation/logs/windows_task_daemon",
+                        "tasks": [
+                            {
+                                "name": "collect",
+                                "enabled": True,
+                                "script": "automation/scripts/run_windows_task.ps1",
+                                "args": ["-Action", "collect", "-Headless", "-Limit", "100"],
+                                "intervalMinutes": 15,
+                                "dailyTimes": [],
+                                "runOnStartup": False,
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+
+            summary = update_collect_schedule(
+                enabled=True,
+                interval_minutes=15,
+                auto_audit=False,
+                auto_batch_approve=True,
+                config_path=config_path,
+                state_path=state_path,
+                now=datetime(2026, 3, 23, 10, 0, 0),
+            )
+
+            saved_config = json.loads(config_path.read_text(encoding="utf-8"))
+            collect_task = next(task for task in saved_config["tasks"] if task["name"] == "collect")
+            self.assertIn("-AutoBatchApprove", collect_task["args"])
+            self.assertTrue(summary.auto_batch_approve)
+
     def test_collect_schedule_summary_repairs_incomplete_collect_state_when_lock_missing(self) -> None:
         with TemporaryDirectory() as temp_dir:
             config_path = Path(temp_dir) / "windows_task_daemon.local.json"
