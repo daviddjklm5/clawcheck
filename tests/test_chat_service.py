@@ -279,6 +279,38 @@ def _build_process_workbench_payload(
     }
 
 
+def test_get_session_detail_returns_last_event_seq(tmp_path: Path) -> None:
+    fake_store = _FakeChatStore()
+    fake_store.create_session(
+        session_id="s1",
+        title="Test",
+        workspace_dir=str(Path.cwd()),
+        model_provider="openai_compatible",
+        model_name="gpt-test",
+    )
+    fake_store.create_message(
+        message_id="u1",
+        session_id="s1",
+        role="user",
+        content="hello",
+        token_count=1,
+    )
+    service = ChatService(
+        _build_settings(),
+        store=fake_store,  # type: ignore[arg-type]
+        provider_config=_build_provider_config(),
+        skill_loader=_build_skill_loader(tmp_path),
+    )
+
+    service._publish_event("s1", "message_created", {"messageId": "u1"})
+    service._publish_event("s1", "token", {"messageId": "a1", "delta": "world"})
+
+    detail = service.get_session_detail("s1")
+
+    assert detail is not None
+    assert detail["lastEventSeq"] == 2
+
+
 def test_execute_turn_uses_fast_path_for_pending_document_list_without_model_calls(tmp_path: Path) -> None:
     fake_store = _FakeChatStore()
     fake_store.create_session(

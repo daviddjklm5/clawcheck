@@ -32,6 +32,7 @@ class _FakeChatService:
             "session": self._session,
             "messages": [],
             "running": False,
+            "lastEventSeq": 2,
         }
         self.stream_after_seq_calls: list[int] = []
 
@@ -110,6 +111,13 @@ class ChatRouterTest(unittest.TestCase):
         with _patched_chat_service(self.service):
             response = self.client.get("/api/chat/sessions/not-found")
         self.assertEqual(response.status_code, 404)
+
+    def test_get_session_detail_includes_last_event_seq(self) -> None:
+        with _patched_chat_service(self.service):
+            response = self.client.get("/api/chat/sessions/s1")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["lastEventSeq"], 2)
 
     def test_submit_message_maps_exceptions(self) -> None:
         with _patched_chat_service(self.service):

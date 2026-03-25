@@ -284,6 +284,16 @@ class ChatService:
             self._event_condition.notify_all()
         return event
 
+    def _latest_event_seq(self, session_id: str) -> int:
+        with self._event_condition:
+            session_events = self._events_by_session.get(session_id)
+            if session_events:
+                return int(session_events[-1].get("seq") or 0)
+            next_seq = self._next_event_seq_by_session.get(session_id)
+            if next_seq is None:
+                return 0
+            return max(int(next_seq) - 1, 0)
+
     def _append_execution_log(
         self,
         *,
@@ -432,6 +442,7 @@ class ChatService:
             "session": session,
             "messages": messages,
             "running": running,
+            "lastEventSeq": self._latest_event_seq(session_id),
         }
 
     def _is_session_running(self, session_id: str) -> bool:

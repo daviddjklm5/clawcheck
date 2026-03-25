@@ -22,6 +22,7 @@ export interface ChatSessionDetail {
   session: ChatSession;
   messages: ChatMessage[];
   running: boolean;
+  lastEventSeq: number;
 }
 
 export interface ChatSubmitMessageResponse {
