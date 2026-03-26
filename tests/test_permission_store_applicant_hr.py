@@ -177,6 +177,25 @@ class PersonAttributesStoreApplicantHrTest(unittest.TestCase):
         self.assertEqual(tags["hr_primary_value"], "深圳城市营业部")
         self.assertEqual(tags["hr_judgement_reason"], "wanyu_city_sales_department_position_hit")
 
+    def test_build_person_attribute_payload_carries_employee_group_fields(self) -> None:
+        payload = self.store._build_person_attribute_payload(
+            {
+                "employee_no": "05026859",
+                "employee_name": "张三",
+                "department_id": "50900001",
+                "employee_group": "正式员工",
+                "employee_subgroup": "管理岗",
+                "level1_function_name": "人力资源",
+                "level2_function_name": "人事运营",
+                "position_name": "运营支持经理",
+            }
+        )
+
+        self.assertEqual(payload["employee_group"], "正式员工")
+        self.assertEqual(payload["employee_subgroup"], "管理岗")
+        self.assertEqual(payload["employee_name"], "张三")
+        self.assertEqual(payload["hr_type"], "H1")
+
 
 if __name__ == "__main__":
     unittest.main()

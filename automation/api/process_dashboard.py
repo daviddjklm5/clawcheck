@@ -31,9 +31,17 @@ _DOCUMENT_COUNT_PATTERN = re.compile(r'"document_count"\s*:\s*(\d+)')
 _DETAIL_COUNT_PATTERN = re.compile(r'"detail_count"\s*:\s*(\d+)')
 _DOCUMENT_NO_PATTERN = re.compile(r'"document_no"\s*:\s*"([^"]+)"')
 _AUDIT_LOG_FILENAME_PATTERN = re.compile(r"audit_(\d{8})_(\d{6})$")
+_TODO_SYNC_LOG_FILENAME_PATTERN = re.compile(r"todo_sync_\d{8}_\d{6}(?:_[0-9a-fA-F]+)?\.json$")
+_TODO_SYNC_LOG_LOOKBACK = 20
 DEFAULT_CREDENTIALS_PATH = REPO_ROOT / "automation/config/credentials.local.yaml"
 PROD_CREDENTIALS_PATH = REPO_ROOT / "automation/config/credentials.prod.local.yaml"
 SELECTORS_PATH = REPO_ROOT / "automation/config/selectors.yaml"
+_TODO_PENDING_STATUS = "\u5f85\u5904\u7406"
+_PENDING_COLLECTION_STATUS = "\u5f85\u91c7\u96c6\u4e2d"
+_PENDING_COLLECTION_STATUS_HINT = (
+    "\u8be5\u5355\u636e\u5df2\u5728 EHR \u5f85\u529e\u547d\u4e2d\uff0c"
+    "\u4f46\u5c1a\u672a\u5b8c\u6210\u91c7\u96c6\u5165\u5e93\uff1b\u8bf7\u5148\u6267\u884c\u91c7\u96c6\u4efb\u52a1\u3002"
+)
 _APPROVAL_ACTION_CONFIG: dict[str, dict[str, str]] = {
     "approve": {
         "ehrDecision": "同意",
@@ -116,6 +124,171 @@ def _extract_audit_log_summary(path: Path) -> dict[str, Any] | None:
     }
 
 
+def _safe_load_json_dict(path: Path) -> dict[str, Any] | None:
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            payload = json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return payload
+
+
+def _normalize_document_no_list(raw_value: Any) -> list[str]:
+    if not isinstance(raw_value, list):
+        return []
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in raw_value:
+        document_no = str(item or "").strip()
+        if not document_no or document_no in seen:
+            continue
+        normalized.append(document_no)
+        seen.add(document_no)
+    return normalized
+
+
+def _latest_pending_collection_candidates(
+    *,
+    logs_dir: Path,
+    existing_document_nos: set[str],
+) -> dict[str, dict[str, str]]:
+    todo_sync_paths = sorted(logs_dir.glob("todo_sync_*.json"), key=lambda item: item.stat().st_mtime, reverse=True)
+    for path in todo_sync_paths[:_TODO_SYNC_LOG_LOOKBACK]:
+        if _TODO_SYNC_LOG_FILENAME_PATTERN.fullmatch(path.name) is None:
+            continue
+        payload = _safe_load_json_dict(path)
+        if not payload or str(payload.get("status") or "").strip().lower() != "succeeded":
+            continue
+        ehr_todo_document_nos = set(_normalize_document_no_list(payload.get("ehr_todo_document_nos")))
+        project_document_nos = set(_normalize_document_no_list(payload.get("project_document_nos")))
+        pending_collection_nos = sorted(ehr_todo_document_nos.difference(project_document_nos).difference(existing_document_nos))
+        updated_at = str(payload.get("finished_at") or payload.get("started_at") or "").strip()
+        source_file = _to_repo_relative(path)
+        return {
+            document_no: {
+                "todoStatusUpdatedAt": updated_at,
+                "sourceFile": source_file,
+            }
+            for document_no in pending_collection_nos
+        }
+    return {}
+
+
+def _build_pending_collection_document_rows(
+    candidates: dict[str, dict[str, str]],
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for document_no in sorted(candidates.keys()):
+        candidate = candidates.get(document_no, {})
+        source_file = str(candidate.get("sourceFile") or "").strip()
+        hint = _PENDING_COLLECTION_STATUS_HINT
+        if source_file:
+            hint = f"{_PENDING_COLLECTION_STATUS_HINT} \u6765\u6e90\uff1a{source_file}"
+        rows.append(
+            {
+                "id": document_no,
+                "documentNo": document_no,
+                "applicantName": "-",
+                "applicantNo": "-",
+                "permissionTarget": "-",
+                "department": "-",
+                "documentStatus": _PENDING_COLLECTION_STATUS,
+                "todoProcessStatus": _TODO_PENDING_STATUS,
+                "todoStatusUpdatedAt": str(candidate.get("todoStatusUpdatedAt") or "-"),
+                "orgUnitName": "-",
+                "warZone": "-",
+                "processLevelCategory": "-",
+                "positionName": "-",
+                "level1FunctionName": "-",
+                "orgPathName": "-",
+                "workbenchStatus": _PENDING_COLLECTION_STATUS,
+                "workbenchStatusHint": hint,
+                "hasAssessment": False,
+                "finalScore": None,
+                "summaryConclusion": "",
+                "summaryConclusionLabel": "-",
+                "suggestedAction": "",
+                "suggestedActionLabel": "-",
+                "lowScoreDetailCount": 0,
+                "assessedAt": "-",
+                "latestBatchNo": "-",
+            }
+        )
+    return rows
+
+
+def _merge_pending_collection_stats(
+    stats: list[dict[str, Any]],
+    pending_collection_count: int,
+) -> list[dict[str, Any]]:
+    if pending_collection_count <= 0:
+        return stats
+    merged_stats = [dict(item) for item in stats]
+    if merged_stats:
+        try:
+            current_pending = int(str(merged_stats[0].get("value") or "0").strip())
+        except ValueError:
+            current_pending = 0
+        merged_stats[0]["value"] = str(current_pending + pending_collection_count)
+        merged_stats[0]["tone"] = "warning"
+        merged_stats[0]["hint"] = (
+            "\u5f53\u524d\u5728 EHR \u5f85\u529e\u4e2d\u7684\u5355\u636e\u603b\u6570\uff08\u542b\u5f85\u91c7\u96c6\u4e2d\u5360\u4f4d\u5355\u636e\uff09\u3002"
+        )
+    merged_stats.insert(
+        1,
+        {
+            "label": "\u5f85\u91c7\u96c6\u4e2d\u5355\u636e",
+            "value": str(pending_collection_count),
+            "hint": "\u6700\u8fd1\u4e00\u6b21\u5f85\u529e\u540c\u6b65\u5728 EHR \u547d\u4e2d\uff0c\u4f46\u5c1a\u672a\u5165\u5e93\u7684\u5355\u636e\u6570\u3002",
+            "tone": "warning",
+        },
+    )
+    return merged_stats
+
+
+def _build_pending_collection_detail(
+    *,
+    document_no: str,
+    candidate: dict[str, str],
+) -> dict[str, Any]:
+    source_file = str(candidate.get("sourceFile") or "").strip()
+    todo_status_updated_at = str(candidate.get("todoStatusUpdatedAt") or "-")
+    notes = [
+        _PENDING_COLLECTION_STATUS_HINT,
+        "\u8bf7\u6267\u884c\u91c7\u96c6\u4efb\u52a1\u6216\u7b49\u5f85\u81ea\u52a8\u4efb\u52a1\u4e0b\u4e00\u8f6e\u5165\u5e93\u540e\u518d\u67e5\u770b\u8be6\u60c5\u3002",
+    ]
+    if source_file:
+        notes.append(f"\u6700\u8fd1\u547d\u4e2d\u6765\u6e90\uff1a{source_file}")
+    return {
+        "documentNo": document_no,
+        "applyReason": "-",
+        "overviewFields": [
+            {"label": "\u5355\u636e\u7f16\u53f7", "value": document_no, "hint": "\u6765\u81ea EHR \u5f85\u529e\u540c\u6b65\u7ed3\u679c\u3002"},
+            {"label": "\u5de5\u4f5c\u53f0\u72b6\u6001", "value": _PENDING_COLLECTION_STATUS, "hint": _PENDING_COLLECTION_STATUS_HINT},
+            {"label": "\u5f85\u529e\u5904\u7406\u72b6\u6001", "value": _TODO_PENDING_STATUS, "hint": "\u5f53\u524d\u5728 EHR \u5f85\u529e\u547d\u4e2d\u3002"},
+            {
+                "label": "\u5f85\u529e\u72b6\u6001\u66f4\u65b0\u65f6\u95f4",
+                "value": todo_status_updated_at,
+                "hint": "\u6765\u81ea\u6700\u8fd1\u4e00\u6b21 todo-sync \u8f93\u51fa\u3002",
+            },
+        ],
+        "roles": [],
+        "approvals": [],
+        "orgScopes": [],
+        "riskDetails": [],
+        "scoreBasisDetails": [],
+        "feedbackOverview": {
+            "summaryConclusionLabel": "-",
+            "feedbackStats": [],
+            "feedbackGroups": [],
+            "feedbackLines": [],
+        },
+        "notes": notes,
+    }
+
+
 def _load_execution_logs(store: PostgresRiskTrustStore, logs_dir: Path, limit: int = 6) -> list[dict[str, Any]]:
     audit_log_paths = sorted(logs_dir.glob("audit_*.json"), key=lambda item: item.stat().st_mtime, reverse=True)
     summaries = [summary for path in audit_log_paths[:limit] if (summary := _extract_audit_log_summary(path)) is not None]
@@ -135,6 +308,24 @@ def get_process_workbench() -> dict[str, Any]:
     _, settings = _load_runtime_settings()
     store = PostgresRiskTrustStore(settings.db)
     dashboard = store.fetch_process_workbench()
+    logs_dir = _resolve_runtime_path(settings.runtime.logs_dir)
+    dashboard_documents = dashboard.get("documents")
+    if isinstance(dashboard_documents, list):
+        existing_document_nos = {
+            str(item.get("documentNo") or "").strip()
+            for item in dashboard_documents
+            if isinstance(item, dict) and str(item.get("documentNo") or "").strip()
+        }
+        pending_collection_candidates = _latest_pending_collection_candidates(
+            logs_dir=logs_dir,
+            existing_document_nos=existing_document_nos,
+        )
+        if pending_collection_candidates:
+            pending_rows = _build_pending_collection_document_rows(pending_collection_candidates)
+            dashboard["documents"] = [*pending_rows, *dashboard_documents]
+            dashboard_stats = dashboard.get("stats")
+            if isinstance(dashboard_stats, list):
+                dashboard["stats"] = _merge_pending_collection_stats(dashboard_stats, len(pending_rows))
     dashboard.update(get_audit_task_overview())
     return dashboard
 
@@ -162,10 +353,24 @@ def get_process_dashboard() -> dict[str, Any]:
 def get_process_document_detail(document_no: str, assessment_batch_no: str | None = None) -> dict[str, Any] | None:
     _, settings = _load_runtime_settings()
     store = PostgresRiskTrustStore(settings.db)
-    return store.fetch_process_document_detail(
+    detail = store.fetch_process_document_detail(
         document_no=document_no,
         assessment_batch_no=assessment_batch_no,
     )
+    if detail is not None:
+        return detail
+    normalized_document_no = str(document_no or "").strip()
+    if not normalized_document_no:
+        return None
+    logs_dir = _resolve_runtime_path(settings.runtime.logs_dir)
+    pending_collection_candidates = _latest_pending_collection_candidates(
+        logs_dir=logs_dir,
+        existing_document_nos=set(),
+    )
+    candidate = pending_collection_candidates.get(normalized_document_no)
+    if candidate is None:
+        return None
+    return _build_pending_collection_detail(document_no=normalized_document_no, candidate=candidate)
 
 
 def _capture_failure_screenshot(

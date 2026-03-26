@@ -80,6 +80,7 @@ const conclusionTone: Record<string, Tone> = {
 };
 
 const workbenchStatusTone: Record<string, Tone> = {
+  "\u5f85\u91c7\u96c6\u4e2d": "warning",
   待评估: "warning",
   成功: "success",
   阻塞: "warning",

@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import {
   AppBar,
   Box,
+  Collapse,
   Drawer,
   IconButton,
   List,
@@ -21,42 +22,85 @@ import FactCheckOutlinedIcon from "@mui/icons-material/FactCheckOutlined";
 import InsightsOutlinedIcon from "@mui/icons-material/InsightsOutlined";
 import GridViewOutlinedIcon from "@mui/icons-material/GridViewOutlined";
 import SmartToyOutlinedIcon from "@mui/icons-material/SmartToyOutlined";
+import AccountTreeOutlinedIcon from "@mui/icons-material/AccountTreeOutlined";
+import ExpandLessIcon from "@mui/icons-material/ExpandLess";
+import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 
 const drawerWidth = 264;
 
-const navItems = [
+type NavLeafItem = {
+  kind: "item";
+  path: string;
+  label: string;
+  description: string;
+  icon: ReactNode;
+  parentLabel?: string;
+};
+
+type NavGroupItem = {
+  kind: "group";
+  id: string;
+  label: string;
+  description: string;
+  icon: ReactNode;
+  children: NavLeafItem[];
+};
+
+type NavEntry = NavLeafItem | NavGroupItem;
+
+const EHR_APPROVAL_LABEL = "EHR权限审批";
+
+const navItems: NavEntry[] = [
   {
+    kind: "item",
     path: "/master-data",
     label: "同步主数据",
     description: "花名册、组织列表与权限主数据",
     icon: <SyncAltOutlinedIcon />,
   },
   {
-    path: "/collect-documents",
-    label: "采集单据",
-    description: "采集四张申请单表的字段与状态",
-    icon: <DescriptionOutlinedIcon />,
+    kind: "group",
+    id: "ehrApproval",
+    label: EHR_APPROVAL_LABEL,
+    description: "采集、处理与评估分析能力分组",
+    icon: <AccountTreeOutlinedIcon />,
+    children: [
+      {
+        kind: "item",
+        path: "/collect-documents",
+        label: "采集单据",
+        description: "采集四张申请单表的字段与状态",
+        icon: <DescriptionOutlinedIcon />,
+        parentLabel: EHR_APPROVAL_LABEL,
+      },
+      {
+        kind: "item",
+        path: "/process-documents",
+        label: "处理单据",
+        description: "待处理列表与抽屉化单据详情",
+        icon: <FactCheckOutlinedIcon />,
+        parentLabel: EHR_APPROVAL_LABEL,
+      },
+      {
+        kind: "item",
+        path: "/process-analysis",
+        label: "评估分析",
+        description: "批次分布、规则热点与执行日志",
+        icon: <InsightsOutlinedIcon />,
+        parentLabel: EHR_APPROVAL_LABEL,
+      },
+    ],
   },
   {
-    path: "/process-documents",
-    label: "处理单据",
-    description: "待处理列表与抽屉化单据详情",
-    icon: <FactCheckOutlinedIcon />,
-  },
-  {
-    path: "/process-analysis",
-    label: "评估分析",
-    description: "批次分布、规则热点与执行日志",
-    icon: <InsightsOutlinedIcon />,
-  },
-  {
+    kind: "item",
     path: "/runtime-settings",
     label: "常规配置",
     description: "浏览器运行参数、路径与数据库摘要",
     icon: <SettingsSuggestOutlinedIcon />,
   },
   {
+    kind: "item",
     path: "/chat-workspace",
     label: "对话工作台",
     description: "Web 对话入口，基于 Codex CLI 与外部模型 Key",
@@ -64,12 +108,22 @@ const navItems = [
   },
 ];
 
+function isNavGroup(item: NavEntry): item is NavGroupItem {
+  return item.kind === "group";
+}
+
+const allNavItems: NavLeafItem[] = navItems.flatMap((item) => (isNavGroup(item) ? item.children : [item]));
+
 export function AppShell() {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({
+    ehrApproval: false,
+  });
   const location = useLocation();
   const navigate = useNavigate();
 
-  const currentItem = navItems.find((item) => location.pathname.startsWith(item.path)) ?? navItems[0];
+  const currentItem = allNavItems.find((item) => location.pathname.startsWith(item.path)) ?? allNavItems[0];
+  const currentItemLabel = currentItem.parentLabel ? `${currentItem.parentLabel} / ${currentItem.label}` : currentItem.label;
 
   const drawerContent = (
     <Box
@@ -108,6 +162,99 @@ export function AppShell() {
 
       <List sx={{ mt: 2, px: 0 }}>
         {navItems.map((item) => {
+          if (isNavGroup(item)) {
+            const groupSelected = item.children.some((child) => location.pathname.startsWith(child.path));
+            const groupOpen = groupSelected || (expandedGroups[item.id] ?? false);
+
+            return (
+              <Box key={item.id}>
+                <ListItemButton
+                  selected={groupSelected}
+                  onClick={() => {
+                    setExpandedGroups((prev) => ({
+                      ...prev,
+                      [item.id]: !groupOpen,
+                    }));
+                  }}
+                  sx={{
+                    mb: 1,
+                    alignItems: "flex-start",
+                    border: "1px solid",
+                    borderColor: groupSelected ? "rgba(125, 211, 252, 0.6)" : "rgba(148, 163, 184, 0.12)",
+                    backgroundColor: groupSelected ? "rgba(23, 92, 211, 0.16)" : "rgba(255, 255, 255, 0.02)",
+                    "&.Mui-selected": {
+                      backgroundColor: "rgba(23, 92, 211, 0.16)",
+                    },
+                    "&.Mui-selected:hover": {
+                      backgroundColor: "rgba(23, 92, 211, 0.22)",
+                    },
+                    "&:hover": {
+                      backgroundColor: "rgba(255, 255, 255, 0.06)",
+                    },
+                  }}
+                >
+                  <ListItemIcon sx={{ minWidth: 36, color: "inherit", mt: 0.3 }}>{item.icon}</ListItemIcon>
+                  <ListItemText
+                    primary={item.label}
+                    secondary={item.description}
+                    primaryTypographyProps={{ fontWeight: 600 }}
+                    secondaryTypographyProps={{ color: "rgba(226, 232, 240, 0.72)", sx: { mt: 0.4 } }}
+                  />
+                  <Box sx={{ color: "rgba(226, 232, 240, 0.88)", mt: 0.35 }}>
+                    {groupOpen ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
+                  </Box>
+                </ListItemButton>
+
+                <Collapse in={groupOpen} timeout="auto" unmountOnExit>
+                  <List component="div" disablePadding sx={{ pl: 2.25, pr: 0.25, mt: 0.2 }}>
+                    {item.children.map((child) => {
+                      const childSelected = location.pathname.startsWith(child.path);
+
+                      return (
+                        <ListItemButton
+                          key={child.path}
+                          selected={childSelected}
+                          onClick={() => {
+                            navigate(child.path);
+                            setMobileOpen(false);
+                          }}
+                          sx={{
+                            mb: 0.75,
+                            alignItems: "flex-start",
+                            border: "1px solid",
+                            borderColor: childSelected ? "rgba(125, 211, 252, 0.6)" : "rgba(148, 163, 184, 0.12)",
+                            backgroundColor: childSelected ? "rgba(23, 92, 211, 0.16)" : "rgba(255, 255, 255, 0.02)",
+                            "&.Mui-selected": {
+                              backgroundColor: "rgba(23, 92, 211, 0.16)",
+                            },
+                            "&.Mui-selected:hover": {
+                              backgroundColor: "rgba(23, 92, 211, 0.22)",
+                            },
+                            "&:hover": {
+                              backgroundColor: "rgba(255, 255, 255, 0.06)",
+                            },
+                          }}
+                        >
+                          <ListItemIcon sx={{ minWidth: 32, color: "inherit", mt: 0.3 }}>{child.icon}</ListItemIcon>
+                          <ListItemText
+                            primary={child.label}
+                            secondary={child.description}
+                            primaryTypographyProps={{ fontWeight: 600, variant: "body2" }}
+                            secondaryTypographyProps={{
+                              color: "rgba(226, 232, 240, 0.72)",
+                              variant: "caption",
+                              sx: { mt: 0.3 },
+                            }}
+                          />
+                        </ListItemButton>
+                      );
+                    })}
+                  </List>
+                </Collapse>
+              </Box>
+            );
+          }
+
           const selected = location.pathname.startsWith(item.path);
 
           return (
@@ -185,7 +332,7 @@ export function AppShell() {
             <MenuIcon />
           </IconButton>
           <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
-            {currentItem.label}
+            {currentItemLabel}
           </Typography>
         </Toolbar>
       </AppBar>
@@ -254,7 +401,7 @@ export function AppShell() {
                 当前模块
               </Typography>
               <Typography variant="h4" sx={{ mt: 0.5 }}>
-                {currentItem.label}
+                {currentItemLabel}
               </Typography>
             </Box>
             <Stack direction={{ xs: "column", sm: "row" }} spacing={1.25}>

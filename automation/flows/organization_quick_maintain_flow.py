@@ -280,9 +280,54 @@ class OrganizationQuickMaintainFlow:
             return False
 
     def _click_background_button(self) -> bool:
-        for text in ["转入后台", "转后台执行", "转后台运行"]:
-            if self._try_click_text(text, exact=True, force=True, scope="#dialogShow"):
+        deadline = time.monotonic() + min(max(self.timeout_ms / 1000, 2), 8)
+        while time.monotonic() < deadline:
+            for text in ["转入后台", "转后台执行", "转后台运行"]:
+                for exact in (True, False):
+                    if self._try_click_text(text, exact=exact, force=True, scope="#dialogShow"):
+                        return True
+            clicked = self.page.evaluate(
+                """() => {
+                    const candidates = Array.from(document.querySelectorAll('*'))
+                        .map((el) => {
+                            const text = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
+                            const rect = el.getBoundingClientRect();
+                            return {
+                                el,
+                                text,
+                                tag: el.tagName || '',
+                                width: rect.width,
+                                height: rect.height,
+                                top: rect.top,
+                                left: rect.left,
+                            };
+                        })
+                        .filter((item) => item.text.includes('后台执行') || item.text.includes('后台运行') || item.text.includes('转入后台'))
+                        .filter((item) => item.width > 0 && item.height > 0);
+                    if (!candidates.length) {
+                        return '';
+                    }
+                    candidates.sort((a, b) => {
+                        const aButton = /^(BUTTON|A)$/.test(a.tag) ? 1 : 0;
+                        const bButton = /^(BUTTON|A)$/.test(b.tag) ? 1 : 0;
+                        if (aButton !== bButton) {
+                            return bButton - aButton;
+                        }
+                        const areaDelta = (b.width * b.height) - (a.width * a.height);
+                        if (areaDelta !== 0) {
+                            return areaDelta;
+                        }
+                        return b.top - a.top || b.left - a.left;
+                    });
+                    const winner = candidates[0];
+                    const clickable = winner.el.closest('button, a, [role="button"], [data-btn-key]') || winner.el;
+                    clickable.click();
+                    return winner.text;
+                }"""
+            )
+            if str(clicked or "").strip():
                 return True
+            self.page.wait_for_timeout(300)
         return False
 
     def _is_include_children_enabled(self) -> bool:
