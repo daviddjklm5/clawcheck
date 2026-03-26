@@ -415,7 +415,15 @@ H1 显式关键词口径采用保守规则，优先识别以下显式文本：
 ### 5.2 建议的 HR 子域标签
 对已判定为 `H1` 或 `H2` 的人员，建议进一步输出 `hr_subdomain`：
 
-- 映射顺序建议为：先按 `职位名称` 是否包含 `总裁 / 总经理` 映射到 `hr_management`；若未命中，再按 `二级职能名称` 映射；若仍未命中，再按 `一级职能名称` 补充映射；最后回落到 `other_hr_domain`
+- 映射顺序建议为：先按专项组织路径 / 岗位规则命中新增中文子域；若未命中，再按历史 `职位名称 / 二级职能名称 / 一级职能名称` 规则回落
+- `组织路径名称` 以 `万物云_祥盈企服_公共服务中心` 开头 -> `企服属地公服`
+- `组织路径名称` 以 `万物云_祥盈企服_远程交付中心_人事远程交付中心_BP` 开头 -> `企服远程外服`
+- `组织路径名称` 以 `万物云_祥盈企服_远程交付中心_人事远程交付中心` 开头，且不属于 `_BP` 分支 -> `企服人事远程交付中心`
+- `标准岗位名称 = HRBP` -> `HRBP`
+- `组织路径名称` 以 `万物云_万物云本部_人力资源与行政服务中心` 开头，且包含 `人事交付服务组` -> `属地服务站`
+- `组织路径名称` 以 `万物云_万物云本部_人力资源与行政服务中心` 开头，且不包含 `BG人力资源行政服务中心` -> `战区人行`
+- `二级职能名称` / `职位名称` / `标准岗位名称` 包含 `招聘` -> `招聘岗位`
+- 若以上新增规则均未命中，则按历史 fallback 规则继续映射
 - `职位名称` 包含 `总裁` / `总经理` -> `hr_management`
 - `人力资源` -> `hr_general`
 - `人事运营` -> `hr_operations`
@@ -761,6 +769,20 @@ joined AS (
         c.*,
         CASE
             WHEN c.hr_type NOT IN ('H1', 'H2') THEN NULL
+            WHEN COALESCE(c.org_path_name, '') LIKE '万物云_祥盈企服_公共服务中心%' THEN '企服属地公服'
+            WHEN COALESCE(c.org_path_name, '') LIKE '万物云_祥盈企服_远程交付中心_人事远程交付中心_BP%' THEN '企服远程外服'
+            WHEN COALESCE(c.org_path_name, '') LIKE '万物云_祥盈企服_远程交付中心_人事远程交付中心%' THEN '企服人事远程交付中心'
+            WHEN COALESCE(c.standard_position_name, '') = 'HRBP' THEN 'HRBP'
+            WHEN COALESCE(c.org_path_name, '') LIKE '万物云_万物云本部_人力资源与行政服务中心%'
+             AND COALESCE(c.org_path_name, '') LIKE '%人事交付服务组%'
+              THEN '属地服务站'
+            WHEN COALESCE(c.org_path_name, '') LIKE '万物云_万物云本部_人力资源与行政服务中心%'
+             AND COALESCE(c.org_path_name, '') NOT LIKE '%BG人力资源行政服务中心%'
+              THEN '战区人行'
+            WHEN COALESCE(c.level2_function_name, '') LIKE '%招聘%'
+              OR COALESCE(c.position_name, '') LIKE '%招聘%'
+              OR COALESCE(c.standard_position_name, '') LIKE '%招聘%'
+              THEN '招聘岗位'
             WHEN COALESCE(c.position_name, '') ~ '(总裁|总经理)' THEN 'hr_management'
             WHEN COALESCE(c.level2_function_name, '') = '人力资源' THEN 'hr_general'
             WHEN COALESCE(c.level2_function_name, '') = '人事运营' THEN 'hr_operations'

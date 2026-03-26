@@ -240,6 +240,14 @@ APPLICANT_HR_H1_WANYU_POSITION_WHITELIST = {
 }
 APPLICANT_HR_EXCLUDED_POSITION_NAMES = {"残疾人"}
 APPLICANT_HR_EXCLUDED_POSITION_KEYWORD_PATTERN = re.compile(r"采集人")
+APPLICANT_HR_SUBDOMAIN_PUBLIC_SERVICE_CENTER_PREFIX = "万物云_祥盈企服_公共服务中心"
+APPLICANT_HR_SUBDOMAIN_REMOTE_BP_PREFIX = "万物云_祥盈企服_远程交付中心_人事远程交付中心_BP"
+APPLICANT_HR_SUBDOMAIN_REMOTE_DELIVERY_PREFIX = "万物云_祥盈企服_远程交付中心_人事远程交付中心"
+APPLICANT_HR_SUBDOMAIN_HR_ADMIN_CENTER_PREFIX = "万物云_万物云本部_人力资源与行政服务中心"
+APPLICANT_HR_SUBDOMAIN_LOCAL_SERVICE_STATION_KEYWORD = "人事交付服务组"
+APPLICANT_HR_SUBDOMAIN_BG_HR_ADMIN_CENTER_KEYWORD = "BG人力资源行政服务中心"
+APPLICANT_HR_SUBDOMAIN_HRBP_STANDARD_POSITION = "HRBP"
+APPLICANT_HR_SUBDOMAIN_RECRUITING_KEYWORD = "招聘"
 
 
 class _PostgresStoreBase:
@@ -549,6 +557,66 @@ class PostgresPermissionStore(_PostgresStoreBase):
         return any(keyword in org_path_name for keyword in APPLICANT_HR_PATH_KEYWORDS)
 
     @classmethod
+    def _build_hr_subdomain(
+        cls,
+        *,
+        hr_type: str,
+        level1_function_name: str | None,
+        level2_function_name: str | None,
+        position_name: str | None,
+        standard_position_name: str | None,
+        org_path_name: str | None,
+    ) -> str | None:
+        if hr_type not in {"H1", "H2"}:
+            return None
+
+        if org_path_name is not None and org_path_name.startswith(APPLICANT_HR_SUBDOMAIN_PUBLIC_SERVICE_CENTER_PREFIX):
+            return "企服属地公服"
+        if org_path_name is not None and org_path_name.startswith(APPLICANT_HR_SUBDOMAIN_REMOTE_BP_PREFIX):
+            return "企服远程外服"
+        if org_path_name is not None and org_path_name.startswith(APPLICANT_HR_SUBDOMAIN_REMOTE_DELIVERY_PREFIX):
+            return "企服人事远程交付中心"
+        if standard_position_name == APPLICANT_HR_SUBDOMAIN_HRBP_STANDARD_POSITION:
+            return "HRBP"
+        if (
+            org_path_name is not None
+            and org_path_name.startswith(APPLICANT_HR_SUBDOMAIN_HR_ADMIN_CENTER_PREFIX)
+            and APPLICANT_HR_SUBDOMAIN_LOCAL_SERVICE_STATION_KEYWORD in org_path_name
+        ):
+            return "属地服务站"
+        if (
+            org_path_name is not None
+            and org_path_name.startswith(APPLICANT_HR_SUBDOMAIN_HR_ADMIN_CENTER_PREFIX)
+            and APPLICANT_HR_SUBDOMAIN_BG_HR_ADMIN_CENTER_KEYWORD not in org_path_name
+        ):
+            return "战区人行"
+        if any(
+            field is not None and APPLICANT_HR_SUBDOMAIN_RECRUITING_KEYWORD in field
+            for field in (level2_function_name, position_name, standard_position_name)
+        ):
+            return "招聘岗位"
+
+        if position_name is not None and APPLICANT_HR_H2_MANAGEMENT_POSITION_PATTERN.search(position_name):
+            return "hr_management"
+        if level2_function_name == "人力资源":
+            return "hr_general"
+        if level2_function_name == "人事运营":
+            return "hr_operations"
+        if level2_function_name in {"招聘", "招聘外包服务"}:
+            return "recruiting"
+        if level2_function_name == "薪酬绩效":
+            return "compensation_performance"
+        if level2_function_name == "员工关系":
+            return "employee_relations"
+        if level2_function_name in {"人才发展", "组织发展"}:
+            return "org_talent_development"
+        if level2_function_name == "人力业务支持":
+            return "hr_business_support"
+        if level1_function_name in {"管理", "职能综合管理"}:
+            return "hr_management"
+        return "other_hr_domain"
+
+    @classmethod
     def _build_applicant_hr_tags(cls, applicant_profile: dict[str, Any]) -> dict[str, Any]:
         employee_no = cls._strip_text(applicant_profile.get("employee_no"))
         level1_function_name = cls._strip_text(applicant_profile.get("level1_function_name"))
@@ -656,28 +724,14 @@ class PostgresPermissionStore(_PostgresStoreBase):
             hr_primary_value = None
             hr_judgement_reason = "no_hr_signal"
 
-        hr_subdomain = None
-        if hr_type in {"H1", "H2"}:
-            if position_name is not None and APPLICANT_HR_H2_MANAGEMENT_POSITION_PATTERN.search(position_name):
-                hr_subdomain = "hr_management"
-            elif level2_function_name == "人力资源":
-                hr_subdomain = "hr_general"
-            elif level2_function_name == "人事运营":
-                hr_subdomain = "hr_operations"
-            elif level2_function_name in {"招聘", "招聘外包服务"}:
-                hr_subdomain = "recruiting"
-            elif level2_function_name == "薪酬绩效":
-                hr_subdomain = "compensation_performance"
-            elif level2_function_name == "员工关系":
-                hr_subdomain = "employee_relations"
-            elif level2_function_name in {"人才发展", "组织发展"}:
-                hr_subdomain = "org_talent_development"
-            elif level2_function_name == "人力业务支持":
-                hr_subdomain = "hr_business_support"
-            elif level1_function_name in {"管理", "职能综合管理"}:
-                hr_subdomain = "hr_management"
-            else:
-                hr_subdomain = "other_hr_domain"
+        hr_subdomain = cls._build_hr_subdomain(
+            hr_type=hr_type,
+            level1_function_name=level1_function_name,
+            level2_function_name=level2_function_name,
+            position_name=position_name,
+            standard_position_name=standard_position_name,
+            org_path_name=org_path_name,
+        )
 
         result.update(
             {

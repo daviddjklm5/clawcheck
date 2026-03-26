@@ -177,6 +177,96 @@ class PersonAttributesStoreApplicantHrTest(unittest.TestCase):
         self.assertEqual(tags["hr_primary_value"], "深圳城市营业部")
         self.assertEqual(tags["hr_judgement_reason"], "wanyu_city_sales_department_position_hit")
 
+    def test_public_service_center_org_path_maps_to_qifu_local_public_service(self) -> None:
+        tags = self.store._build_applicant_hr_tags(
+            {
+                "employee_no": "05026859",
+                "employee_name": "张三",
+                "level1_function_name": "人力资源",
+                "org_path_name": "万物云_祥盈企服_公共服务中心_深圳片区_深圳公共服务中心_A万科集团HR-SSC",
+            }
+        )
+
+        self.assertEqual(tags["hr_type"], "H1")
+        self.assertEqual(tags["hr_subdomain"], "企服属地公服")
+
+    def test_remote_bp_org_path_maps_to_qifu_remote_bp(self) -> None:
+        tags = self.store._build_applicant_hr_tags(
+            {
+                "employee_no": "05026859",
+                "employee_name": "张三",
+                "level1_function_name": "人力资源",
+                "org_path_name": "万物云_祥盈企服_远程交付中心_人事远程交付中心_BP_华南区",
+            }
+        )
+
+        self.assertEqual(tags["hr_type"], "H1")
+        self.assertEqual(tags["hr_subdomain"], "企服远程外服")
+
+    def test_remote_delivery_org_path_maps_to_qifu_remote_delivery_center(self) -> None:
+        tags = self.store._build_applicant_hr_tags(
+            {
+                "employee_no": "05026859",
+                "employee_name": "张三",
+                "level1_function_name": "人力资源",
+                "org_path_name": "万物云_祥盈企服_远程交付中心_人事远程交付中心_数据服务组",
+            }
+        )
+
+        self.assertEqual(tags["hr_type"], "H1")
+        self.assertEqual(tags["hr_subdomain"], "企服人事远程交付中心")
+
+    def test_standard_position_hrbp_maps_to_hrbp_subdomain(self) -> None:
+        tags = self.store._build_applicant_hr_tags(
+            {
+                "employee_no": "05026859",
+                "employee_name": "张三",
+                "standard_position_name": "HRBP",
+            }
+        )
+
+        self.assertEqual(tags["hr_type"], "H1")
+        self.assertEqual(tags["hr_subdomain"], "HRBP")
+
+    def test_hr_admin_center_local_service_station_maps_to_local_station(self) -> None:
+        tags = self.store._build_applicant_hr_tags(
+            {
+                "employee_no": "05026859",
+                "employee_name": "张三",
+                "level1_function_name": "人力资源",
+                "org_path_name": "万物云_万物云本部_人力资源与行政服务中心_人事交付服务组_深圳",
+            }
+        )
+
+        self.assertEqual(tags["hr_type"], "H1")
+        self.assertEqual(tags["hr_subdomain"], "属地服务站")
+
+    def test_hr_admin_center_without_bg_maps_to_warzone_hr(self) -> None:
+        tags = self.store._build_applicant_hr_tags(
+            {
+                "employee_no": "05026859",
+                "employee_name": "张三",
+                "level1_function_name": "人力资源",
+                "org_path_name": "万物云_万物云本部_人力资源与行政服务中心_战区人力行政服务组",
+            }
+        )
+
+        self.assertEqual(tags["hr_type"], "H1")
+        self.assertEqual(tags["hr_subdomain"], "战区人行")
+
+    def test_recruiting_keyword_maps_to_recruiting_subdomain(self) -> None:
+        tags = self.store._build_applicant_hr_tags(
+            {
+                "employee_no": "05026859",
+                "employee_name": "张三",
+                "level1_function_name": "人力资源",
+                "level2_function_name": "招聘运营",
+            }
+        )
+
+        self.assertEqual(tags["hr_type"], "H1")
+        self.assertEqual(tags["hr_subdomain"], "招聘岗位")
+
     def test_build_person_attribute_payload_carries_employee_group_fields(self) -> None:
         payload = self.store._build_person_attribute_payload(
             {
