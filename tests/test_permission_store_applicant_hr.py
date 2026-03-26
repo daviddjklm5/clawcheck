@@ -183,6 +183,7 @@ class PersonAttributesStoreApplicantHrTest(unittest.TestCase):
                 "employee_no": "05026859",
                 "employee_name": "张三",
                 "department_id": "50900001",
+                "org_unit_name": "人力资源与行政服务中心",
                 "employee_group": "正式员工",
                 "employee_subgroup": "管理岗",
                 "level1_function_name": "人力资源",
@@ -191,6 +192,7 @@ class PersonAttributesStoreApplicantHrTest(unittest.TestCase):
             }
         )
 
+        self.assertEqual(payload["org_unit_name"], "人力资源与行政服务中心")
         self.assertEqual(payload["employee_group"], "正式员工")
         self.assertEqual(payload["employee_subgroup"], "管理岗")
         self.assertEqual(payload["employee_name"], "张三")

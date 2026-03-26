@@ -489,6 +489,7 @@ H1 显式关键词口径采用保守规则，优先识别以下显式文本：
 | `employee_no` | `工号` |
 | `employee_name` | `姓名` |
 | `department_id` | `部门ID` |
+| `org_unit_name` | `组织单位` |
 | `employee_group` | `员工组` |
 | `employee_subgroup` | `员工子组` |
 | `level1_function_name` | `一级职能名称` |
@@ -578,6 +579,7 @@ base_joined AS (
         r.employee_no,
         r.employee_name,
         r.department_id,
+        o.org_unit_name,
         r.employee_group,
         r.employee_subgroup,
         r.roster_query_date,
@@ -776,6 +778,7 @@ INSERT INTO "人员属性查询" (
     "工号",
     "姓名",
     "部门ID",
+    "组织单位",
     "员工组",
     "员工子组",
     "一级职能名称",
@@ -804,6 +807,7 @@ SELECT
     employee_no,
     employee_name,
     department_id,
+    org_unit_name,
     employee_group,
     employee_subgroup,
     level1_function_name,
