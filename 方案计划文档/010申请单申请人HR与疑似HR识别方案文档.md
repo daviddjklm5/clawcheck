@@ -349,7 +349,7 @@ H1 显式关键词口径采用保守规则，优先识别以下显式文本：
 - 当前 H2 由“职位白名单”与“组织范围限定的专项岗位”共同组成
 - `总裁 / 总经理` 类职位只在其所在组织命中 `HR 组织路径` 时进入 `H2`
 - `员工体验与行政` 相关岗位仅在 `组织单位 = 人力资源与行政服务中心` 时进入 `H2`
-- `总裁 / 总经理` 类职位进入 `H2` 后，其 `hr_subdomain` 统一归入 `hr_management`
+- `总裁 / 总经理 / 总监 / 负责人` 类管理岗位进入 `H1/H2` 后，其 `hr_subdomain` 统一归入 `人行负责人(管理岗)`
 - 后续若发现更多应提升岗位，可继续追加到 H2 白名单
 
 ### 4.4 H3：责任 HR
@@ -419,20 +419,25 @@ H1 显式关键词口径采用保守规则，优先识别以下显式文本：
 - `组织路径名称` 以 `万物云_祥盈企服_公共服务中心` 开头 -> `企服属地公服`
 - `组织路径名称` 以 `万物云_祥盈企服_远程交付中心_人事远程交付中心_BP` 开头 -> `企服远程外服`
 - `组织路径名称` 以 `万物云_祥盈企服_远程交付中心_人事远程交付中心` 开头，且不属于 `_BP` 分支 -> `企服人事远程交付中心`
-- `标准岗位名称 = HRBP` -> `HRBP`
+- `职位名称` 或 `标准岗位名称` 包含 `HRBP` -> `HRBP`
 - `组织路径名称` 以 `万物云_万物云本部_人力资源与行政服务中心` 开头，且包含 `人事交付服务组` -> `属地服务站`
-- `组织路径名称` 以 `万物云_万物云本部_人力资源与行政服务中心` 开头，且不包含 `BG人力资源行政服务中心` -> `战区人行`
-- `二级职能名称` / `职位名称` / `标准岗位名称` 包含 `招聘` -> `招聘岗位`
+- `二级职能名称 = 人才发展` -> `培训认证与人才发展`
+- `二级职能名称 = 人力资源` 且 `职位名称 in ('服务站总站长', '服务站站长')` 或包含 `培训` / `认证` / `招训` -> `培训认证与人才发展`
+- `二级职能名称` / `职位名称` / `标准岗位名称` 包含 `招聘` -> `招聘岗`
 - 若以上新增规则均未命中，则按历史 fallback 规则继续映射
-- `职位名称` 包含 `总裁` / `总经理` -> `hr_management`
-- `人力资源` -> `hr_general`
-- `人事运营` -> `hr_operations`
-- `招聘` / `招聘外包服务` -> `recruiting`
-- `薪酬绩效` -> `compensation_performance`
-- `员工关系` -> `employee_relations`
-- `人才发展` / `组织发展` -> `org_talent_development`
-- `人力业务支持` -> `hr_business_support`
-- `一级职能名称 in ('管理', '职能综合管理')` -> `hr_management`
+- `职位名称` 包含 `总裁` / `总经理` / `总监` / `负责人`，或 `标准岗位名称` 包含 `负责人` -> `人行负责人(管理岗)`
+- `二级职能名称 = 人力资源` 且 `职位名称` 或 `标准岗位名称` 包含 `行政` -> `人力行政岗`
+- `二级职能名称 = 人力资源` 且未命中上述 `行政` 条件 -> `人力资源岗`
+- `招聘` / `招聘外包服务` -> `招聘`
+- `员工关系` -> `员工关系`
+- `组织发展` -> `组织发展`
+- `人力业务支持` -> `人事运营`
+- `人事运营` / `薪酬绩效` -> `人事运营`（fallback 靠后）
+- `一级职能名称 in ('管理', '职能综合管理')` -> `人行负责人(管理岗)`
+- `职位名称` / `标准岗位名称` 包含 `员工体验与行政` -> `人力行政岗`（兜底）
+- `职位名称` / `标准岗位名称` 包含 `行政` -> `人力行政岗`（兜底）
+- `职位名称` / `标准岗位名称` 包含 `薪酬` / `绩效` / `运营` / `数据分析` -> `人事运营`（兜底）
+- `职位名称` / `标准岗位名称` 包含 `人事` -> `人力资源岗`（兜底）
 - 其他 -> `other_hr_domain`
 
 对 `H3` 人员：
@@ -772,26 +777,54 @@ joined AS (
             WHEN COALESCE(c.org_path_name, '') LIKE '万物云_祥盈企服_公共服务中心%' THEN '企服属地公服'
             WHEN COALESCE(c.org_path_name, '') LIKE '万物云_祥盈企服_远程交付中心_人事远程交付中心_BP%' THEN '企服远程外服'
             WHEN COALESCE(c.org_path_name, '') LIKE '万物云_祥盈企服_远程交付中心_人事远程交付中心%' THEN '企服人事远程交付中心'
-            WHEN COALESCE(c.standard_position_name, '') = 'HRBP' THEN 'HRBP'
+            WHEN COALESCE(c.position_name, '') ILIKE '%HRBP%'
+              OR COALESCE(c.standard_position_name, '') ILIKE '%HRBP%'
+              THEN 'HRBP'
             WHEN COALESCE(c.org_path_name, '') LIKE '万物云_万物云本部_人力资源与行政服务中心%'
              AND COALESCE(c.org_path_name, '') LIKE '%人事交付服务组%'
               THEN '属地服务站'
-            WHEN COALESCE(c.org_path_name, '') LIKE '万物云_万物云本部_人力资源与行政服务中心%'
-             AND COALESCE(c.org_path_name, '') NOT LIKE '%BG人力资源行政服务中心%'
-              THEN '战区人行'
+            WHEN COALESCE(c.level2_function_name, '') = '人才发展'
+              THEN '培训认证与人才发展'
+            WHEN COALESCE(c.level2_function_name, '') = '人力资源'
+             AND (
+                 COALESCE(c.position_name, '') IN ('服务站总站长', '服务站站长')
+                 OR COALESCE(c.position_name, '') LIKE '%培训%'
+                 OR COALESCE(c.position_name, '') LIKE '%认证%'
+                 OR COALESCE(c.position_name, '') LIKE '%招训%'
+             )
+              THEN '培训认证与人才发展'
             WHEN COALESCE(c.level2_function_name, '') LIKE '%招聘%'
               OR COALESCE(c.position_name, '') LIKE '%招聘%'
               OR COALESCE(c.standard_position_name, '') LIKE '%招聘%'
-              THEN '招聘岗位'
-            WHEN COALESCE(c.position_name, '') ~ '(总裁|总经理)' THEN 'hr_management'
-            WHEN COALESCE(c.level2_function_name, '') = '人力资源' THEN 'hr_general'
-            WHEN COALESCE(c.level2_function_name, '') = '人事运营' THEN 'hr_operations'
-            WHEN COALESCE(c.level2_function_name, '') IN ('招聘', '招聘外包服务') THEN 'recruiting'
-            WHEN COALESCE(c.level2_function_name, '') = '薪酬绩效' THEN 'compensation_performance'
-            WHEN COALESCE(c.level2_function_name, '') = '员工关系' THEN 'employee_relations'
-            WHEN COALESCE(c.level2_function_name, '') IN ('人才发展', '组织发展') THEN 'org_talent_development'
-            WHEN COALESCE(c.level2_function_name, '') = '人力业务支持' THEN 'hr_business_support'
-            WHEN COALESCE(c.level1_function_name, '') IN ('管理', '职能综合管理') THEN 'hr_management'
+              THEN '招聘岗'
+            WHEN COALESCE(c.position_name, '') ~ '(总裁|总经理|总监|负责人)'
+              OR COALESCE(c.standard_position_name, '') LIKE '%负责人%'
+              THEN '人行负责人(管理岗)'
+            WHEN COALESCE(c.level2_function_name, '') = '人力资源'
+              THEN CASE
+                     WHEN COALESCE(c.position_name, '') LIKE '%行政%'
+                       OR COALESCE(c.standard_position_name, '') LIKE '%行政%'
+                       THEN '人力行政岗'
+                     ELSE '人力资源岗'
+                   END
+            WHEN COALESCE(c.level2_function_name, '') IN ('招聘', '招聘外包服务') THEN '招聘'
+            WHEN COALESCE(c.level2_function_name, '') = '员工关系' THEN '员工关系'
+            WHEN COALESCE(c.level2_function_name, '') = '组织发展' THEN '组织发展'
+            WHEN COALESCE(c.level2_function_name, '') = '人力业务支持' THEN '人事运营'
+            WHEN COALESCE(c.level2_function_name, '') IN ('人事运营', '薪酬绩效') THEN '人事运营'
+            WHEN COALESCE(c.level1_function_name, '') IN ('管理', '职能综合管理') THEN '人行负责人(管理岗)'
+            WHEN COALESCE(c.position_name, '') LIKE '%员工体验与行政%'
+              OR COALESCE(c.standard_position_name, '') LIKE '%员工体验与行政%'
+              THEN '人力行政岗'
+            WHEN COALESCE(c.position_name, '') LIKE '%行政%'
+              OR COALESCE(c.standard_position_name, '') LIKE '%行政%'
+              THEN '人力行政岗'
+            WHEN COALESCE(c.position_name, '') ~ '(薪酬|绩效|运营|数据分析)'
+              OR COALESCE(c.standard_position_name, '') ~ '(薪酬|绩效|运营|数据分析)'
+              THEN '人事运营'
+            WHEN COALESCE(c.position_name, '') LIKE '%人事%'
+              OR COALESCE(c.standard_position_name, '') LIKE '%人事%'
+              THEN '人力资源岗'
             ELSE 'other_hr_domain'
         END AS hr_subdomain
     FROM classified c
@@ -951,3 +984,4 @@ FROM joined;
  - 建表与升级：`automation/sql/001_permission_apply_collect.sql`、`automation/sql/019_person_attributes.sql`、`automation/sql/021_drop_applicant_hr_columns_from_basic_info.sql`
 - 验收 SQL：`automation/sql/020_person_attributes_acceptance.sql`
 - 写库实现：`automation/db/postgres.py`
+
