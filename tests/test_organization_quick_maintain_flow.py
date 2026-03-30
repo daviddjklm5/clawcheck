@@ -24,26 +24,32 @@ class OrganizationQuickMaintainFlowTest(unittest.TestCase):
 
         self.assertTrue(clicked)
         self.assertEqual(
-            [call.kwargs for call in try_click_text.call_args_list],
+            [(call.args, call.kwargs) for call in try_click_text.call_args_list],
             [
-                {
-                    "text": "转入后台",
-                    "exact": True,
-                    "force": True,
-                    "scope": "#dialogShow",
-                },
-                {
-                    "text": "转入后台",
-                    "exact": False,
-                    "force": True,
-                    "scope": "#dialogShow",
-                },
-                {
-                    "text": "转后台执行",
-                    "exact": True,
-                    "force": True,
-                    "scope": "#dialogShow",
-                },
+                (
+                    ("转入后台",),
+                    {
+                        "exact": True,
+                        "force": True,
+                        "scope": "#dialogShow",
+                    },
+                ),
+                (
+                    ("转入后台",),
+                    {
+                        "exact": False,
+                        "force": True,
+                        "scope": "#dialogShow",
+                    },
+                ),
+                (
+                    ("转后台执行",),
+                    {
+                        "exact": True,
+                        "force": True,
+                        "scope": "#dialogShow",
+                    },
+                ),
             ],
         )
 

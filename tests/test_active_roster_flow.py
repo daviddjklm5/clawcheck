@@ -19,6 +19,7 @@ class ActiveRosterFlowTest(unittest.TestCase):
         hidden_locator = MagicMock()
         hidden_locator.count.return_value = 0
         self.page.locator.return_value.first = hidden_locator
+        self.page.locator.return_value.last = hidden_locator
 
     def test_click_background_export_button_falls_back_to_partial_text_match(self) -> None:
         with patch.object(
@@ -30,20 +31,24 @@ class ActiveRosterFlowTest(unittest.TestCase):
 
         self.assertTrue(clicked)
         self.assertEqual(
-            [call.kwargs for call in try_click_text.call_args_list],
+            [(call.args, call.kwargs) for call in try_click_text.call_args_list],
             [
-                {
-                    "text": "转后台执行",
-                    "exact": True,
-                    "force": True,
-                    "scope": "#dialogShow",
-                },
-                {
-                    "text": "转后台执行",
-                    "exact": False,
-                    "force": True,
-                    "scope": "#dialogShow",
-                },
+                (
+                    ("转后台执行",),
+                    {
+                        "exact": True,
+                        "force": True,
+                        "scope": "#dialogShow",
+                    },
+                ),
+                (
+                    ("转后台执行",),
+                    {
+                        "exact": False,
+                        "force": True,
+                        "scope": "#dialogShow",
+                    },
+                ),
             ],
         )
         self.logger.info.assert_called_with(
