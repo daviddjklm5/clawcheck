@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import sys
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
@@ -42,7 +44,7 @@ class RunCollectAutoBatchApproveTest(unittest.TestCase):
                 "automation.scripts.run._resolve_collect_auto_batch_approve_candidates",
                 return_value={"candidates": [], "target_scores": [2.0, 2.5]},
             ),
-            patch("automation.api.process_dashboard.approve_process_documents_batch") as mocked_batch_approve,
+            patch("automation.scripts.run.subprocess.run") as mocked_subprocess_run,
         ):
             result = _run_collect_auto_batch_approve(
                 settings=settings,
@@ -51,7 +53,7 @@ class RunCollectAutoBatchApproveTest(unittest.TestCase):
             )
 
         self.assertEqual(result["status"], "skipped")
-        mocked_batch_approve.assert_not_called()
+        mocked_subprocess_run.assert_not_called()
 
     def test_run_collect_auto_batch_approve_calls_batch_approve(self) -> None:
         logger = Mock()
@@ -63,9 +65,13 @@ class RunCollectAutoBatchApproveTest(unittest.TestCase):
                 return_value={"candidates": ["RA-001", "RA-002"], "target_scores": [2.0, 2.5]},
             ),
             patch(
-                "automation.api.process_dashboard.approve_process_documents_batch",
-                return_value={"status": "succeeded", "message": "ok", "logFile": "automation/logs/batch.json"},
-            ) as mocked_batch_approve,
+                "automation.scripts.run.subprocess.run",
+                return_value=SimpleNamespace(
+                    returncode=0,
+                    stdout='{"status": "succeeded", "message": "ok", "logFile": "automation/logs/batch.json"}\n',
+                    stderr="",
+                ),
+            ) as mocked_subprocess_run,
         ):
             result = _run_collect_auto_batch_approve(
                 settings=settings,
@@ -75,11 +81,21 @@ class RunCollectAutoBatchApproveTest(unittest.TestCase):
 
         self.assertEqual(result["status"], "succeeded")
         self.assertEqual(result["log_file"], "automation/logs/batch.json")
-        mocked_batch_approve.assert_called_once_with(
-            document_nos=["RA-001", "RA-002"],
-            action="approve",
-            dry_run=False,
-            headed=True,
+        mocked_subprocess_run.assert_called_once()
+        command = mocked_subprocess_run.call_args.args[0]
+        self.assertEqual(command[0], sys.executable)
+        self.assertEqual(command[1], "-c")
+        self.assertIn("approve_process_documents_batch", command[2])
+
+        env_payload = json.loads(mocked_subprocess_run.call_args.kwargs["env"]["CLAWCHECK_BATCH_APPROVE_PAYLOAD"])
+        self.assertEqual(
+            env_payload,
+            {
+                "documentNos": ["RA-001", "RA-002"],
+                "action": "approve",
+                "dryRun": False,
+                "headed": True,
+            },
         )
 
 
