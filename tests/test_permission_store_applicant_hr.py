@@ -47,7 +47,7 @@ class PersonAttributesStoreApplicantHrTest(unittest.TestCase):
         self.assertEqual(tags["hr_subdomain"], "人事运营")
         self.assertEqual(tags["hr_judgement_reason"], "level1_is_hr")
 
-    def test_comp_perf_is_merged_into_ren_shi_yun_ying_subdomain(self) -> None:
+    def test_comp_perf_maps_to_comp_perf_subdomain(self) -> None:
         tags = self.store._build_applicant_hr_tags(
             {
                 "employee_no": "05026859",
@@ -59,7 +59,7 @@ class PersonAttributesStoreApplicantHrTest(unittest.TestCase):
         )
 
         self.assertEqual(tags["hr_type"], "H1")
-        self.assertEqual(tags["hr_subdomain"], "人事运营")
+        self.assertEqual(tags["hr_subdomain"], "薪酬绩效岗")
 
     def test_hr_business_support_is_merged_into_ren_shi_yun_ying_subdomain(self) -> None:
         tags = self.store._build_applicant_hr_tags(
@@ -101,7 +101,7 @@ class PersonAttributesStoreApplicantHrTest(unittest.TestCase):
         )
 
         self.assertEqual(tags["hr_type"], "H1")
-        self.assertEqual(tags["hr_subdomain"], "组织发展")
+        self.assertEqual(tags["hr_subdomain"], "组织发展岗")
 
     def test_management_position_maps_to_chinese_management_subdomain(self) -> None:
         tags = self.store._build_applicant_hr_tags(
@@ -183,7 +183,7 @@ class PersonAttributesStoreApplicantHrTest(unittest.TestCase):
         )
 
         self.assertEqual(tags["hr_type"], "H1")
-        self.assertEqual(tags["hr_subdomain"], "人力行政岗")
+        self.assertEqual(tags["hr_subdomain"], "人事行政岗")
 
     def test_hrbp_keyword_in_position_maps_to_hrbp_subdomain(self) -> None:
         tags = self.store._build_applicant_hr_tags(
@@ -196,7 +196,7 @@ class PersonAttributesStoreApplicantHrTest(unittest.TestCase):
         )
 
         self.assertEqual(tags["hr_type"], "H1")
-        self.assertEqual(tags["hr_subdomain"], "HRBP")
+        self.assertEqual(tags["hr_subdomain"], "HRBP/业务支持")
 
     def test_personnel_keyword_fallback_maps_to_hr_resource_post(self) -> None:
         tags = self.store._build_applicant_hr_tags(
@@ -287,7 +287,7 @@ class PersonAttributesStoreApplicantHrTest(unittest.TestCase):
         self.assertFalse(tags["is_suspected_hr_staff"])
         self.assertEqual(tags["hr_primary_evidence"], "org_unit_name+position_name")
         self.assertEqual(tags["hr_primary_value"], "人力资源与行政服务中心|员工体验与行政专业经理")
-        self.assertEqual(tags["hr_subdomain"], "人力行政岗")
+        self.assertEqual(tags["hr_subdomain"], "人事行政岗")
         self.assertEqual(tags["hr_judgement_reason"], "org_unit_employee_experience_position_promoted_to_h2")
 
     def test_responsible_hr_without_other_signal_is_h3(self) -> None:
@@ -404,7 +404,7 @@ class PersonAttributesStoreApplicantHrTest(unittest.TestCase):
         )
 
         self.assertEqual(tags["hr_type"], "H1")
-        self.assertEqual(tags["hr_subdomain"], "HRBP")
+        self.assertEqual(tags["hr_subdomain"], "HRBP/业务支持")
 
     def test_position_name_hrbp_maps_to_hrbp_subdomain_before_hr_general(self) -> None:
         tags = self.store._build_applicant_hr_tags(
@@ -418,7 +418,7 @@ class PersonAttributesStoreApplicantHrTest(unittest.TestCase):
         )
 
         self.assertEqual(tags["hr_type"], "H1")
-        self.assertEqual(tags["hr_subdomain"], "HRBP")
+        self.assertEqual(tags["hr_subdomain"], "HRBP/业务支持")
 
     def test_hr_admin_center_local_service_station_maps_to_local_station(self) -> None:
         tags = self.store._build_applicant_hr_tags(
@@ -431,7 +431,7 @@ class PersonAttributesStoreApplicantHrTest(unittest.TestCase):
         )
 
         self.assertEqual(tags["hr_type"], "H1")
-        self.assertEqual(tags["hr_subdomain"], "属地服务站")
+        self.assertEqual(tags["hr_subdomain"], "服务站-人事运营")
 
     def test_hr_admin_center_without_bg_falls_back_when_warzone_rule_removed(self) -> None:
         tags = self.store._build_applicant_hr_tags(
@@ -457,7 +457,7 @@ class PersonAttributesStoreApplicantHrTest(unittest.TestCase):
         )
 
         self.assertEqual(tags["hr_type"], "H1")
-        self.assertEqual(tags["hr_subdomain"], "招聘岗")
+        self.assertEqual(tags["hr_subdomain"], "招聘配置岗")
 
     def test_talent_development_maps_to_training_cert_talent_subdomain(self) -> None:
         tags = self.store._build_applicant_hr_tags(
@@ -471,7 +471,7 @@ class PersonAttributesStoreApplicantHrTest(unittest.TestCase):
         )
 
         self.assertEqual(tags["hr_type"], "H1")
-        self.assertEqual(tags["hr_subdomain"], "培训认证与人才发展")
+        self.assertEqual(tags["hr_subdomain"], "人才发展（含培训认证）")
 
     def test_hr_level2_station_positions_map_to_training_cert_talent_subdomain(self) -> None:
         tags = self.store._build_applicant_hr_tags(
@@ -485,7 +485,7 @@ class PersonAttributesStoreApplicantHrTest(unittest.TestCase):
         )
 
         self.assertEqual(tags["hr_type"], "H1")
-        self.assertEqual(tags["hr_subdomain"], "培训认证与人才发展")
+        self.assertEqual(tags["hr_subdomain"], "人才发展（含培训认证）")
 
     def test_hr_level2_training_cert_keyword_maps_to_training_cert_talent_subdomain(self) -> None:
         tags = self.store._build_applicant_hr_tags(
@@ -499,7 +499,160 @@ class PersonAttributesStoreApplicantHrTest(unittest.TestCase):
         )
 
         self.assertEqual(tags["hr_type"], "H1")
-        self.assertEqual(tags["hr_subdomain"], "培训认证与人才发展")
+        self.assertEqual(tags["hr_subdomain"], "人才发展（含培训认证）")
+
+    def test_perf_expert_with_hrbp_standard_position_maps_to_comp_perf_post(self) -> None:
+        tags = self.store._build_applicant_hr_tags(
+            {
+                "employee_no": "05026859",
+                "employee_name": "张三",
+                "level1_function_name": "人力资源",
+                "position_name": "绩效专家",
+                "standard_position_name": "HRBP",
+            }
+        )
+
+        self.assertEqual(tags["hr_type"], "H1")
+        self.assertEqual(tags["hr_subdomain"], "薪酬绩效岗")
+
+    def test_project_responsible_position_is_not_management_subdomain(self) -> None:
+        tags = self.store._build_applicant_hr_tags(
+            {
+                "employee_no": "05026859",
+                "employee_name": "张三",
+                "level1_function_name": "人力资源",
+                "position_name": "项目人力资源及行政副经理(负责人)",
+            }
+        )
+
+        self.assertEqual(tags["hr_type"], "H1")
+        self.assertEqual(tags["hr_subdomain"], "人力资源岗")
+
+    def test_weak_signal_ops_manager_without_hr_level1_is_demoted_to_hx(self) -> None:
+        tags = self.store._build_applicant_hr_tags(
+            {
+                "employee_no": "05026859",
+                "employee_name": "张三",
+                "level1_function_name": "项目管理",
+                "position_name": "运营经理",
+                "org_path_name": "万物云_万物云城_高投城资_C人力资源与行政服务部",
+            }
+        )
+
+        self.assertEqual(tags["hr_type"], "HX")
+        self.assertEqual(tags["hr_judgement_reason"], "weak_signal_position_demoted_to_hx")
+        self.assertIsNone(tags["hr_subdomain"])
+
+    def test_station_recruiting_level2_maps_to_station_recruiting_subdomain(self) -> None:
+        tags = self.store._build_applicant_hr_tags(
+            {
+                "employee_no": "05026859",
+                "employee_name": "张三",
+                "level1_function_name": "人力资源",
+                "level2_function_name": "招聘",
+                "org_path_name": "万物云_万物云本部_人力资源与行政服务中心_人事交付服务组_深圳",
+            }
+        )
+
+        self.assertEqual(tags["hr_type"], "H1")
+        self.assertEqual(tags["hr_subdomain"], "服务站-招聘")
+
+    def test_bg_local_support_group_maps_to_hrbp_support(self) -> None:
+        tags = self.store._build_applicant_hr_tags(
+            {
+                "employee_no": "05026859",
+                "employee_name": "张三",
+                "level1_function_name": "人力资源",
+                "org_path_name": "万物云_万物云本部_人力资源与行政服务中心_BG人力资源行政服务中心_本部人力行政支持组",
+            }
+        )
+
+        self.assertEqual(tags["hr_type"], "H1")
+        self.assertEqual(tags["hr_subdomain"], "HRBP/业务支持")
+
+    def test_bg_platform_ops_group_maps_to_hr_ops(self) -> None:
+        tags = self.store._build_applicant_hr_tags(
+            {
+                "employee_no": "05026859",
+                "employee_name": "张三",
+                "level1_function_name": "人力资源",
+                "org_path_name": "万物云_万物云本部_人力资源与行政服务中心_BG人力资源行政服务中心_平台与运营组",
+            }
+        )
+
+        self.assertEqual(tags["hr_type"], "H1")
+        self.assertEqual(tags["hr_subdomain"], "人事运营")
+
+    def test_bg_talent_leadership_group_maps_to_talent_subdomain(self) -> None:
+        tags = self.store._build_applicant_hr_tags(
+            {
+                "employee_no": "05026859",
+                "employee_name": "张三",
+                "level1_function_name": "人力资源",
+                "org_path_name": "万物云_万物云本部_人力资源与行政服务中心_BG人力资源行政服务中心_人才与领导力组",
+            }
+        )
+
+        self.assertEqual(tags["hr_type"], "H1")
+        self.assertEqual(tags["hr_subdomain"], "人才发展（含培训认证）")
+
+    def test_bg_org_effectiveness_group_maps_to_comp_perf_when_standard_position_is_comp_perf(self) -> None:
+        tags = self.store._build_applicant_hr_tags(
+            {
+                "employee_no": "05026859",
+                "employee_name": "张三",
+                "level1_function_name": "人力资源",
+                "standard_position_name": "薪酬绩效岗",
+                "org_path_name": "万物云_万物云本部_人力资源与行政服务中心_BG人力资源行政服务中心_组织与效能组",
+            }
+        )
+
+        self.assertEqual(tags["hr_type"], "H1")
+        self.assertEqual(tags["hr_subdomain"], "薪酬绩效岗")
+
+    def test_bg_org_effectiveness_group_maps_to_org_development_otherwise(self) -> None:
+        tags = self.store._build_applicant_hr_tags(
+            {
+                "employee_no": "05026859",
+                "employee_name": "张三",
+                "level1_function_name": "人力资源",
+                "standard_position_name": "人力资源岗",
+                "org_path_name": "万物云_万物云本部_人力资源与行政服务中心_BG人力资源行政服务中心_组织与效能组",
+            }
+        )
+
+        self.assertEqual(tags["hr_type"], "H1")
+        self.assertEqual(tags["hr_subdomain"], "组织发展岗")
+
+    def test_bg_employee_experience_group_maps_to_personnel_admin_post(self) -> None:
+        tags = self.store._build_applicant_hr_tags(
+            {
+                "employee_no": "05026859",
+                "employee_name": "张三",
+                "position_name": "员工体验与行政",
+                "org_unit_name": "人力资源与行政服务中心",
+                "org_path_name": "万物云_万物云本部_人力资源与行政服务中心_BG人力资源行政服务中心_员工体验与行政组",
+            }
+        )
+
+        self.assertEqual(tags["hr_type"], "H2")
+        self.assertEqual(tags["hr_subdomain"], "人事行政岗")
+
+    def test_bg_platform_ops_group_takes_priority_over_comp_perf_keyword(self) -> None:
+        tags = self.store._build_applicant_hr_tags(
+            {
+                "employee_no": "05026859",
+                "employee_name": "张三",
+                "level1_function_name": "人力资源",
+                "level2_function_name": "薪酬绩效",
+                "position_name": "薪酬与绩效管理",
+                "standard_position_name": "薪酬绩效岗",
+                "org_path_name": "万物云_万物云本部_人力资源与行政服务中心_BG人力资源行政服务中心_平台与运营组",
+            }
+        )
+
+        self.assertEqual(tags["hr_type"], "H1")
+        self.assertEqual(tags["hr_subdomain"], "人事运营")
 
     def test_build_person_attribute_payload_carries_employee_group_fields(self) -> None:
         payload = self.store._build_person_attribute_payload(

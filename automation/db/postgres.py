@@ -232,6 +232,9 @@ APPLICANT_HR_H2_WEAK_SIGNAL_POSITION_WHITELIST = {
     "运营主管",
     "数据分析",
 }
+APPLICANT_HR_H2_WEAK_SIGNAL_DEMOTE_TO_HX_POSITION_WHITELIST = {
+    "运营经理",
+}
 APPLICANT_HR_H2_SPECIAL_ORG_UNIT = "人力资源与行政服务中心"
 APPLICANT_HR_H2_EMPLOYEE_EXPERIENCE_POSITION_PATTERN = re.compile(r"员工体验与行政")
 APPLICANT_HR_H1_WANYU_POSITION_WHITELIST = {
@@ -245,9 +248,9 @@ APPLICANT_HR_SUBDOMAIN_REMOTE_BP_PREFIX = "万物云_祥盈企服_远程交付�
 APPLICANT_HR_SUBDOMAIN_REMOTE_DELIVERY_PREFIX = "万物云_祥盈企服_远程交付中心_人事远程交付中心"
 APPLICANT_HR_SUBDOMAIN_HR_ADMIN_CENTER_PREFIX = "万物云_万物云本部_人力资源与行政服务中心"
 APPLICANT_HR_SUBDOMAIN_LOCAL_SERVICE_STATION_KEYWORD = "人事交付服务组"
-APPLICANT_HR_SUBDOMAIN_HRBP_STANDARD_POSITION = "HRBP"
 APPLICANT_HR_SUBDOMAIN_RECRUITING_KEYWORD = "招聘"
-APPLICANT_HR_SUBDOMAIN_TRAINING_CERT_TALENT = "培训认证与人才发展"
+APPLICANT_HR_SUBDOMAIN_COMP_PERF_KEYWORD_PATTERN = re.compile(r"(薪酬绩效|薪酬福利)")
+APPLICANT_HR_SUBDOMAIN_TRAINING_CERT_TALENT = "人才发展（含培训认证）"
 APPLICANT_HR_SUBDOMAIN_TRAINING_CERT_POSITION_WHITELIST = {"服务站总站长", "服务站站长"}
 APPLICANT_HR_SUBDOMAIN_TRAINING_CERT_POSITION_KEYWORD_PATTERN = re.compile(r"(培训|认证|招训)")
 APPLICANT_HR_SUBDOMAIN_MANAGEMENT_POSITION_KEYWORD_PATTERN = re.compile(r"(负责人|总监)")
@@ -256,6 +259,34 @@ APPLICANT_HR_SUBDOMAIN_EMPLOYEE_EXPERIENCE_ADMIN_KEYWORD = "员工体验与行�
 APPLICANT_HR_SUBDOMAIN_ADMIN_KEYWORD = "行政"
 APPLICANT_HR_SUBDOMAIN_PERSONNEL_KEYWORD = "人事"
 APPLICANT_HR_SUBDOMAIN_OPERATIONS_KEYWORD_PATTERN = re.compile(r"(薪酬|绩效|运营|数据分析)")
+APPLICANT_HR_SUBDOMAIN_PROJECT_KEYWORD = "项目"
+APPLICANT_HR_SUBDOMAIN_RESPONSIBLE_KEYWORD = "负责人"
+APPLICANT_HR_SUBDOMAIN_PROFESSIONAL_DIRECTOR_KEYWORD = "专业总监"
+APPLICANT_HR_SUBDOMAIN_PROFESSIONAL_DIRECTOR_HRBP_SUPPORT_KEYWORDS = (
+    "人力资源专业总监",
+)
+APPLICANT_HR_SUBDOMAIN_PROFESSIONAL_DIRECTOR_ORG_DEVELOPMENT_KEYWORDS = (
+    "组织效率与员工体验",
+    "组织机制与人才发展",
+)
+APPLICANT_HR_SUBDOMAIN_PROFESSIONAL_DIRECTOR_HR_OPS_KEYWORDS = (
+    "数字化运营",
+    "合规运营",
+)
+APPLICANT_HR_SUBDOMAIN_PERF_EXPERT_POSITION_NAME = "绩效专家"
+APPLICANT_HR_SUBDOMAIN_HRBP_SUPPORT = "HRBP/业务支持"
+APPLICANT_HR_SUBDOMAIN_RECRUITING_CONFIG = "招聘配置岗"
+APPLICANT_HR_SUBDOMAIN_ORG_DEVELOPMENT_POST = "组织发展岗"
+APPLICANT_HR_SUBDOMAIN_PERSONNEL_ADMIN_POST = "人事行政岗"
+APPLICANT_HR_SUBDOMAIN_COMP_PERF_POST = "薪酬绩效岗"
+APPLICANT_HR_SUBDOMAIN_STATION_RECRUITING = "服务站-招聘"
+APPLICANT_HR_SUBDOMAIN_STATION_HR_OPS = "服务站-人事运营"
+APPLICANT_HR_BG_HR_ADMIN_CENTER_PREFIX = "万物云_万物云本部_人力资源与行政服务中心_BG人力资源行政服务中心"
+APPLICANT_HR_BG_LOCAL_SUPPORT_GROUP_KEYWORD = "本部人力行政支持组"
+APPLICANT_HR_BG_PLATFORM_OPERATIONS_GROUP_KEYWORD = "平台与运营组"
+APPLICANT_HR_BG_TALENT_LEADERSHIP_GROUP_KEYWORD = "人才与领导力组"
+APPLICANT_HR_BG_ORG_EFFECTIVENESS_GROUP_KEYWORD = "组织与效能组"
+APPLICANT_HR_BG_EMPLOYEE_EXPERIENCE_GROUP_KEYWORD = "员工体验与行政组"
 
 
 class _PostgresStoreBase:
@@ -578,23 +609,44 @@ class PostgresPermissionStore(_PostgresStoreBase):
         if hr_type not in {"H1", "H2"}:
             return None
 
+        if org_path_name is not None and org_path_name.startswith(APPLICANT_HR_BG_HR_ADMIN_CENTER_PREFIX):
+            if APPLICANT_HR_BG_LOCAL_SUPPORT_GROUP_KEYWORD in org_path_name:
+                return APPLICANT_HR_SUBDOMAIN_HRBP_SUPPORT
+            if APPLICANT_HR_BG_PLATFORM_OPERATIONS_GROUP_KEYWORD in org_path_name:
+                return "人事运营"
+            if APPLICANT_HR_BG_TALENT_LEADERSHIP_GROUP_KEYWORD in org_path_name:
+                return APPLICANT_HR_SUBDOMAIN_TRAINING_CERT_TALENT
+            if APPLICANT_HR_BG_ORG_EFFECTIVENESS_GROUP_KEYWORD in org_path_name:
+                if standard_position_name == APPLICANT_HR_SUBDOMAIN_COMP_PERF_POST:
+                    return APPLICANT_HR_SUBDOMAIN_COMP_PERF_POST
+                return APPLICANT_HR_SUBDOMAIN_ORG_DEVELOPMENT_POST
+            if APPLICANT_HR_BG_EMPLOYEE_EXPERIENCE_GROUP_KEYWORD in org_path_name:
+                return APPLICANT_HR_SUBDOMAIN_PERSONNEL_ADMIN_POST
+
         if org_path_name is not None and org_path_name.startswith(APPLICANT_HR_SUBDOMAIN_PUBLIC_SERVICE_CENTER_PREFIX):
             return "企服属地公服"
         if org_path_name is not None and org_path_name.startswith(APPLICANT_HR_SUBDOMAIN_REMOTE_BP_PREFIX):
             return "企服远程外服"
         if org_path_name is not None and org_path_name.startswith(APPLICANT_HR_SUBDOMAIN_REMOTE_DELIVERY_PREFIX):
             return "企服人事远程交付中心"
-        if any(
-            field is not None and APPLICANT_HR_SUBDOMAIN_HRBP_KEYWORD_PATTERN.search(field)
-            for field in (standard_position_name, position_name)
-        ):
-            return "HRBP"
         if (
             org_path_name is not None
             and org_path_name.startswith(APPLICANT_HR_SUBDOMAIN_HR_ADMIN_CENTER_PREFIX)
             and APPLICANT_HR_SUBDOMAIN_LOCAL_SERVICE_STATION_KEYWORD in org_path_name
         ):
-            return "属地服务站"
+            if level2_function_name is not None and APPLICANT_HR_SUBDOMAIN_RECRUITING_KEYWORD in level2_function_name:
+                return APPLICANT_HR_SUBDOMAIN_STATION_RECRUITING
+            return APPLICANT_HR_SUBDOMAIN_STATION_HR_OPS
+        if (
+            standard_position_name == "HRBP"
+            and position_name == APPLICANT_HR_SUBDOMAIN_PERF_EXPERT_POSITION_NAME
+        ):
+            return APPLICANT_HR_SUBDOMAIN_COMP_PERF_POST
+        if any(
+            field is not None and APPLICANT_HR_SUBDOMAIN_HRBP_KEYWORD_PATTERN.search(field)
+            for field in (standard_position_name, position_name)
+        ):
+            return APPLICANT_HR_SUBDOMAIN_HRBP_SUPPORT
         if level2_function_name == "人才发展":
             return APPLICANT_HR_SUBDOMAIN_TRAINING_CERT_TALENT
         if (
@@ -612,7 +664,25 @@ class PostgresPermissionStore(_PostgresStoreBase):
             field is not None and APPLICANT_HR_SUBDOMAIN_RECRUITING_KEYWORD in field
             for field in (level2_function_name, position_name, standard_position_name)
         ):
-            return "招聘岗"
+            return APPLICANT_HR_SUBDOMAIN_RECRUITING_CONFIG
+        if any(
+            field is not None and APPLICANT_HR_SUBDOMAIN_COMP_PERF_KEYWORD_PATTERN.search(field)
+            for field in (level2_function_name, position_name, standard_position_name)
+        ):
+            return APPLICANT_HR_SUBDOMAIN_COMP_PERF_POST
+        if position_name is not None and APPLICANT_HR_SUBDOMAIN_PROFESSIONAL_DIRECTOR_KEYWORD in position_name:
+            if any(keyword in position_name for keyword in APPLICANT_HR_SUBDOMAIN_PROFESSIONAL_DIRECTOR_HR_OPS_KEYWORDS):
+                return "人事运营"
+            if any(keyword in position_name for keyword in APPLICANT_HR_SUBDOMAIN_PROFESSIONAL_DIRECTOR_HRBP_SUPPORT_KEYWORDS):
+                return APPLICANT_HR_SUBDOMAIN_HRBP_SUPPORT
+            if any(keyword in position_name for keyword in APPLICANT_HR_SUBDOMAIN_PROFESSIONAL_DIRECTOR_ORG_DEVELOPMENT_KEYWORDS):
+                return APPLICANT_HR_SUBDOMAIN_ORG_DEVELOPMENT_POST
+        if (
+            position_name is not None
+            and APPLICANT_HR_SUBDOMAIN_PROJECT_KEYWORD in position_name
+            and APPLICANT_HR_SUBDOMAIN_RESPONSIBLE_KEYWORD in position_name
+        ):
+            return "人力资源岗"
 
         if (
             position_name is not None
@@ -626,14 +696,14 @@ class PostgresPermissionStore(_PostgresStoreBase):
             return "人行负责人(管理岗)"
         if level2_function_name == "人力资源":
             if any(field is not None and "行政" in field for field in (position_name, standard_position_name)):
-                return "人力行政岗"
+                return APPLICANT_HR_SUBDOMAIN_PERSONNEL_ADMIN_POST
             return "人力资源岗"
         if level2_function_name in {"招聘", "招聘外包服务"}:
-            return "招聘"
+            return APPLICANT_HR_SUBDOMAIN_RECRUITING_CONFIG
         if level2_function_name == "员工关系":
             return "员工关系"
         if level2_function_name == "组织发展":
-            return "组织发展"
+            return APPLICANT_HR_SUBDOMAIN_ORG_DEVELOPMENT_POST
         if level2_function_name == "人力业务支持":
             return "人事运营"
         if level2_function_name in {"人事运营", "薪酬绩效"}:
@@ -644,12 +714,12 @@ class PostgresPermissionStore(_PostgresStoreBase):
             field is not None and APPLICANT_HR_SUBDOMAIN_EMPLOYEE_EXPERIENCE_ADMIN_KEYWORD in field
             for field in (position_name, standard_position_name)
         ):
-            return "人力行政岗"
+            return APPLICANT_HR_SUBDOMAIN_PERSONNEL_ADMIN_POST
         if any(
             field is not None and APPLICANT_HR_SUBDOMAIN_ADMIN_KEYWORD in field
             for field in (position_name, standard_position_name)
         ):
-            return "人力行政岗"
+            return APPLICANT_HR_SUBDOMAIN_PERSONNEL_ADMIN_POST
         if any(
             field is not None and APPLICANT_HR_SUBDOMAIN_OPERATIONS_KEYWORD_PATTERN.search(field)
             for field in (position_name, standard_position_name)
@@ -741,10 +811,19 @@ class PostgresPermissionStore(_PostgresStoreBase):
             hr_primary_value = position_name
             hr_judgement_reason = "weak_signal_management_position_promoted_to_h2"
         elif is_hr_org_path and position_name in APPLICANT_HR_H2_WEAK_SIGNAL_POSITION_WHITELIST:
-            hr_type = "H2"
-            hr_primary_evidence = "position_name"
-            hr_primary_value = position_name
-            hr_judgement_reason = "weak_signal_position_promoted_to_h2"
+            if (
+                position_name in APPLICANT_HR_H2_WEAK_SIGNAL_DEMOTE_TO_HX_POSITION_WHITELIST
+                and level1_function_name != "人力资源"
+            ):
+                hr_type = "HX"
+                hr_primary_evidence = "position_name"
+                hr_primary_value = position_name
+                hr_judgement_reason = "weak_signal_position_demoted_to_hx"
+            else:
+                hr_type = "H2"
+                hr_primary_evidence = "position_name"
+                hr_primary_value = position_name
+                hr_judgement_reason = "weak_signal_position_promoted_to_h2"
         elif (
             org_unit_name == APPLICANT_HR_H2_SPECIAL_ORG_UNIT
             and position_name is not None
