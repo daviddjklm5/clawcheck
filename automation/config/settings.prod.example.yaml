@@ -30,12 +30,3 @@ db:
   password: "your_password"
   schema: "public"
   sslmode: "prefer"
-
-ai:
-  provider: "codex"
-  base_url: "https://code.ppchat.vip/v1"
-  model: "gpt-5.2"
-  timeout_seconds: 120
-  max_output_tokens: 4000
-  api_key_env: "sk-TgDOIjfPaWzXFS8x4em6BQH1Bs0DihyLYgEConruND6Ng8gG"
-  api_key: "sk-TgDOIjfPaWzXFS8x4em6BQH1Bs0DihyLYgEConruND6Ng8gG"

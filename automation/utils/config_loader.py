@@ -55,24 +55,12 @@ class DatabaseSettings:
 
 
 @dataclass
-class AISettings:
-    provider: str
-    base_url: str
-    model: str
-    timeout_seconds: int
-    max_output_tokens: int
-    api_key_env: str
-    api_key: str
-
-
-@dataclass
 class Settings:
     app: AppSettings
     auth: AuthSettings
     browser: BrowserSettings
     runtime: RuntimeSettings
     db: DatabaseSettings
-    ai: AISettings
 
 
 def _read_yaml(path: Path) -> dict[str, Any]:
@@ -93,7 +81,6 @@ def load_settings(path: Path) -> Settings:
     browser = raw.get("browser", {})
     runtime = raw.get("runtime", {})
     db = raw.get("db", {})
-    ai = raw.get("ai", {})
 
     return Settings(
         app=AppSettings(
@@ -128,15 +115,6 @@ def load_settings(path: Path) -> Settings:
             password=str(db.get("password", "")).strip(),
             schema=str(db.get("schema", "public")).strip() or "public",
             sslmode=str(db.get("sslmode", "prefer")).strip() or "prefer",
-        ),
-        ai=AISettings(
-            provider=str(ai.get("provider", "openai_compatible")).strip() or "openai_compatible",
-            base_url=str(ai.get("base_url", "https://api.openai.com/v1")).strip() or "https://api.openai.com/v1",
-            model=str(ai.get("model", "gpt-5-mini")).strip() or "gpt-5-mini",
-            timeout_seconds=max(int(ai.get("timeout_seconds", 120)), 10),
-            max_output_tokens=max(int(ai.get("max_output_tokens", 4000)), 256),
-            api_key_env=str(ai.get("api_key_env", "CLAWCHECK_AI_API_KEY")).strip() or "CLAWCHECK_AI_API_KEY",
-            api_key=str(ai.get("api_key", "")).strip(),
         ),
     )
 

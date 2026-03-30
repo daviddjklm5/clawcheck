@@ -20,18 +20,6 @@ try {
     if ($WebuiDistDir) {
         $env:CLAWCHECK_WEBUI_DIST_DIR = $WebuiDistDir
     }
-    if ([string]::IsNullOrWhiteSpace($env:CLAWCHECK_CHAT_APPROVAL_ENABLED)) {
-        $env:CLAWCHECK_CHAT_APPROVAL_ENABLED = "true"
-    }
-    if ([string]::IsNullOrWhiteSpace($env:CLAWCHECK_CHAT_APPROVAL_DRY_RUN_ONLY)) {
-        $env:CLAWCHECK_CHAT_APPROVAL_DRY_RUN_ONLY = "true"
-    }
-    if ([string]::IsNullOrWhiteSpace($env:CLAWCHECK_CHAT_FAST_PATH_ENABLED)) {
-        $env:CLAWCHECK_CHAT_FAST_PATH_ENABLED = "true"
-    }
-    if ([string]::IsNullOrWhiteSpace($env:CLAWCHECK_CHAT_ROUTER_REASONING_EFFORT)) {
-        $env:CLAWCHECK_CHAT_ROUTER_REASONING_EFFORT = "minimal"
-    }
 
     & $PythonExe -m uvicorn automation.api.main:app --host $ListenHost --port $Port --log-level $LogLevel
 }

@@ -30,12 +30,3 @@ db:
   password: "clawcheck123"
   schema: "public"
   sslmode: "prefer"
-
-ai:
-  provider: "codex"
-  base_url: "https://code.ppchat.vip/v1"
-  model: "gpt-5.2"
-  timeout_seconds: 300
-  max_output_tokens: 100000
-  api_key_env: "CLAWCHECK_AI_API_KEY"
-  api_key: "sk-TgDOIjfPaWzXFS8x4em6BQH1Bs0DihyLYgEConruND6Ng8gG"
