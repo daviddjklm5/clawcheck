@@ -35,10 +35,8 @@ try {
     }
 
     if (-not $SkipPytest) {
-        $PytestReportPath = Join-Path ([System.IO.Path]::GetTempPath()) "clawcheck_pytest_junit.xml"
         $PytestStdoutPath = Join-Path ([System.IO.Path]::GetTempPath()) "clawcheck_pytest_stdout.log"
         $PytestStderrPath = Join-Path ([System.IO.Path]::GetTempPath()) "clawcheck_pytest_stderr.log"
-        Remove-Item $PytestReportPath -ErrorAction SilentlyContinue
         Remove-Item $PytestStdoutPath -ErrorAction SilentlyContinue
         Remove-Item $PytestStderrPath -ErrorAction SilentlyContinue
 
@@ -49,9 +47,7 @@ try {
             "-p",
             "no:unraisableexception",
             "-p",
-            "no:threadexception",
-            "--junitxml",
-            $PytestReportPath
+            "no:threadexception"
         )
         $PytestProcess = Start-Process `
             -FilePath $PythonExe `
@@ -69,34 +65,8 @@ try {
         if (Test-Path $PytestStderrPath) {
             Get-Content $PytestStderrPath
         }
-        if (-not (Test-Path $PytestReportPath)) {
-            exit $PytestExitCode
-        }
-
-        [xml]$PytestReport = Get-Content $PytestReportPath -Raw
-        $SuiteNodes = @($PytestReport.testsuites.testsuite)
-        if ($SuiteNodes.Count -eq 0 -and $null -ne $PytestReport.testsuite) {
-            $SuiteNodes = @($PytestReport.testsuite)
-        }
-
-        $FailedCount = 0
-        $ErrorCount = 0
-        $TestCount = 0
-        foreach ($Suite in $SuiteNodes) {
-            $TestCount += [int]$Suite.tests
-            $FailedCount += [int]$Suite.failures
-            $ErrorCount += [int]$Suite.errors
-        }
-        if ($FailedCount -ne 0 -or $ErrorCount -ne 0) {
-            exit $PytestExitCode
-        }
         if ($PytestExitCode -ne 0) {
-            if ($TestCount -gt 0) {
-                Write-Warning "pytest exited with code $PytestExitCode after reporting zero failures/errors; continuing with JUnit result."
-            }
-            else {
-                exit $PytestExitCode
-            }
+            exit $PytestExitCode
         }
     }
 
