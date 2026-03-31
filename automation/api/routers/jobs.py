@@ -23,6 +23,7 @@ class MasterDataRunRequest(BaseModel):
     skipImport: bool = False
     queryTimeoutSeconds: int = Field(default=0, ge=0)
     downloadTimeoutMinutes: int = Field(default=0, ge=0)
+    queryDate: str = ""
     scheme: str = ""
     employmentType: str = ""
     forceRefresh: bool = True
@@ -47,6 +48,7 @@ def post_master_data_run(payload: MasterDataRunRequest) -> dict[str, object]:
             skip_import=payload.skipImport,
             query_timeout_seconds=payload.queryTimeoutSeconds,
             download_timeout_minutes=payload.downloadTimeoutMinutes,
+            query_date=payload.queryDate,
             scheme=payload.scheme,
             employment_type=payload.employmentType,
             force_refresh=payload.forceRefresh,

@@ -62,6 +62,7 @@ class ActiveRosterStoreWriteRowsTest(unittest.TestCase):
             patch.object(self.store, "ensure_table"),
             patch.object(self.store, "connect", self._fake_connect),
             patch("automation.db.postgres.PostgresPersonAttributesStore._refresh_from_roster", return_value=1) as refresh_mock,
+            patch("automation.db.postgres.PostgresPersonAttributesHistoryStore._replace_snapshot_from_current", return_value=1) as history_mock,
         ):
             inserted_count = self.store.write_rows(
                 rows=rows,
@@ -74,6 +75,7 @@ class ActiveRosterStoreWriteRowsTest(unittest.TestCase):
         self.assertTrue(any("TRUNCATE TABLE \"在职花名册表\"" in sql for sql in self.cursor.executed_sql))
         self.assertEqual(len(self.cursor.executemany_calls), 1)
         refresh_mock.assert_called_once_with(self.cursor)
+        history_mock.assert_called_once_with(self.cursor, effective_date=date(2026, 3, 15))
 
 
 if __name__ == "__main__":

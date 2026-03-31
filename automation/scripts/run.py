@@ -93,6 +93,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--scheme", default="在职花名册基础版", help="Roster report scheme name")
     parser.add_argument("--employment-type", default="全职任职", help="Roster employment type value")
+    parser.add_argument(
+        "--query-date",
+        default=date.today().isoformat(),
+        help="Roster query date in YYYY-MM-DD format",
+    )
     parser.add_argument("--input-file", default="", help="Import an existing roster/orglist file instead of downloading it")
     parser.add_argument("--skip-export", action="store_true", help="Stop after query without exporting file")
     parser.add_argument("--skip-import", action="store_true", help="Download file but skip PostgreSQL import")
@@ -130,6 +135,16 @@ def normalize_document_nos(document_no: str, document_nos_arg: str) -> list[str]
         seen.add(normalized)
         ordered.append(normalized)
     return ordered
+
+
+def parse_iso_date(value: str, *, field_name: str) -> date:
+    normalized = str(value or "").strip()
+    if not normalized:
+        raise ValueError(f"Missing {field_name}. Expected YYYY-MM-DD.")
+    try:
+        return date.fromisoformat(normalized)
+    except ValueError as exc:
+        raise ValueError(f"Invalid {field_name}: {normalized}. Expected YYYY-MM-DD.") from exc
 
 
 def resolve_runtime_paths(args: argparse.Namespace) -> tuple[Path, Path, Path]:
@@ -1439,10 +1454,12 @@ def main() -> int:
                         timeout_ms=settings.browser.timeout_ms,
                         home_url=settings.app.home_url,
                     )
+                    query_date_value = parse_iso_date(args.query_date, field_name="query date")
 
                     def _do_roster() -> dict[str, object]:
                         return roster_flow.run(
                             downloads_dir=downloads_dir,
+                            query_date=query_date_value.isoformat(),
                             report_scheme=args.scheme.strip() or "在职花名册基础版",
                             employment_type=args.employment_type.strip() or "全职任职",
                             query_timeout_sec=max(args.query_timeout_seconds, 30),

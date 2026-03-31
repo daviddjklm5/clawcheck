@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 import time
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +22,7 @@ class ActiveRosterFlow:
     def run(
         self,
         downloads_dir: Path,
+        query_date: str,
         report_scheme: str,
         employment_type: str,
         query_timeout_sec: int,
@@ -29,11 +30,13 @@ class ActiveRosterFlow:
         skip_export: bool,
     ) -> dict[str, Any]:
         self.open_roster_page()
+        self.set_query_date(query_date)
         self.select_report_scheme(report_scheme)
         self.select_employment_type(employment_type)
-        query_summary = self.query_report(timeout_sec=query_timeout_sec)
+        query_summary = self.query_report(timeout_sec=query_timeout_sec, expected_query_date=query_date)
 
         result: dict[str, Any] = {
+            "requested_query_date": query_date,
             "report_scheme": report_scheme,
             "employment_type": employment_type,
             "query_summary": query_summary,
@@ -74,7 +77,80 @@ class ActiveRosterFlow:
         self._select_f7_value(field_id="postype", row_text=value, expected_value=value)
         self.logger.info("Selected employment type: %s", value)
 
-    def query_report(self, timeout_sec: int) -> dict[str, Any]:
+    def set_query_date(self, value: str) -> None:
+        normalized_value = value.strip()
+        if not normalized_value:
+            raise ValueError("Roster query date cannot be empty")
+
+        target_date = self._parse_query_date_value(normalized_value)
+        input_locator = self._get_query_date_input_locator()
+        current_date = self._parse_query_date_value(self._get_query_date_input_value())
+        input_locator.click(timeout=self.timeout_ms)
+        self.page.wait_for_timeout(200)
+
+        if current_date != target_date:
+            self._navigate_query_calendar_to_date(
+                input_locator=input_locator,
+                current_date=current_date,
+                target_date=target_date,
+            )
+
+        input_locator.press("Enter", timeout=self.timeout_ms)
+        self.page.wait_for_timeout(300)
+
+        current_value = self._get_query_date_input_value()
+        if current_value != normalized_value:
+            current_value = self._get_query_date_input_value()
+
+        if current_value != normalized_value:
+            raise RuntimeError(
+                f"Roster query date value mismatch. expected={normalized_value}, actual={current_value or '<EMPTY>'}"
+            )
+        self.logger.info("Set roster query date: %s", normalized_value)
+
+    def _navigate_query_calendar_to_date(self, *, input_locator, current_date: date, target_date: date) -> None:
+        active_date = current_date
+        max_steps = 120
+
+        for _ in range(max_steps):
+            if active_date == target_date:
+                return
+
+            if (active_date.year, active_date.month) != (target_date.year, target_date.month):
+                key = "PageUp" if active_date > target_date else "PageDown"
+            else:
+                day_delta = (target_date - active_date).days
+                if day_delta <= -7:
+                    key = "ArrowUp"
+                elif day_delta >= 7:
+                    key = "ArrowDown"
+                elif day_delta < 0:
+                    key = "ArrowLeft"
+                else:
+                    key = "ArrowRight"
+
+            input_locator.press(key, timeout=self.timeout_ms)
+            self.page.wait_for_timeout(120)
+            next_date = self._parse_query_date_value(self._get_query_date_input_value())
+            if next_date == active_date:
+                raise RuntimeError(
+                    f"Roster query calendar did not move after key={key}. current={active_date.isoformat()}"
+                )
+            active_date = next_date
+
+        raise RuntimeError(
+            f"Roster query calendar could not reach target date within {max_steps} steps. "
+            f"current={active_date.isoformat()} target={target_date.isoformat()}"
+        )
+
+    @staticmethod
+    def _parse_query_date_value(value: str) -> date:
+        normalized_value = str(value or "").strip()
+        if not normalized_value:
+            raise ValueError("Roster query date cannot be empty")
+        return date.fromisoformat(normalized_value)
+
+    def query_report(self, timeout_sec: int, expected_query_date: str | None = None) -> dict[str, Any]:
         self.page.locator('#reportfilterap .kd-cq-reportpanel-bottom-item:has-text("查询")').first.click(force=True)
         self.logger.info("Clicked query button")
 
@@ -90,7 +166,11 @@ class ActiveRosterFlow:
             if "在职人员花名册" not in last_body:
                 continue
             row_count = self._extract_row_count(last_body)
-            query_date = self._extract_query_date(last_body)
+            query_date = self._extract_query_date(last_body) or self._get_query_date_input_value()
+            if expected_query_date and query_date and query_date != expected_query_date:
+                raise RuntimeError(
+                    f"Roster query date mismatch after query. expected={expected_query_date}, actual={query_date}"
+                )
             self.logger.info("Roster query completed. row_count=%s query_date=%s", row_count, query_date)
             return {
                 "row_count": row_count,
@@ -421,6 +501,33 @@ class ActiveRosterFlow:
         suggested = download.suggested_filename or "active_roster.xlsx"
         safe_name = re.sub(r"[^0-9A-Za-z._\-\u4e00-\u9fff]+", "_", suggested)
         return f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{safe_name}"
+
+    def _get_query_date_input_locator(self):
+        for selector in ("div#date input", "input#date", 'input[ctrlkey="date"]'):
+            locator = self.page.locator(selector).first
+            try:
+                if locator.count() and locator.is_visible():
+                    return locator
+            except Exception:  # noqa: BLE001
+                continue
+        raise RuntimeError("Query date input not found on active roster page")
+
+    def _get_query_date_input_value(self) -> str:
+        locator = self._get_query_date_input_locator()
+        try:
+            return locator.input_value(timeout=self.timeout_ms).strip()
+        except Exception:  # noqa: BLE001
+            value = self.page.evaluate(
+                """() => {
+                    const input = Array.from(document.querySelectorAll('div#date input, input#date, input[ctrlkey="date"]'))
+                        .find((item) => {
+                            const rect = item.getBoundingClientRect();
+                            return rect.width > 0 && rect.height > 0;
+                        });
+                    return input ? (input.value || '').trim() : '';
+                }"""
+            )
+            return str(value or "").strip()
 
     def _select_f7_value(self, field_id: str, row_text: str, expected_value: str) -> None:
         self.page.locator(f"#{field_id} .sesB9_9m").first.click(timeout=self.timeout_ms)

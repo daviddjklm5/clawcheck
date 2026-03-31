@@ -1,4 +1,5 @@
 {
+  "files.encoding": "utf8",
   "python.defaultInterpreterPath": "C:/Users/Administrator/source/repos/clawcheck/.venv-win/Scripts/python.exe",
   "python.terminal.activateEnvironment": false,
   "python.testing.pytestEnabled": true,

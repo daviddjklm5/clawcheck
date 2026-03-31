@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import date
+from pathlib import Path
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -77,3 +79,77 @@ class ActiveRosterFlowTest(unittest.TestCase):
 
         self.assertTrue(clicked)
         self.assertEqual(self.page.wait_for_timeout.call_count, 2)
+
+    def test_run_sets_query_date_before_query(self) -> None:
+        with (
+            patch.object(self.flow, "open_roster_page"),
+            patch.object(self.flow, "set_query_date") as set_query_date_mock,
+            patch.object(self.flow, "select_report_scheme"),
+            patch.object(self.flow, "select_employment_type"),
+            patch.object(
+                self.flow,
+                "query_report",
+                return_value={"row_count": 12, "query_date": "2026-03-29"},
+            ) as query_report_mock,
+        ):
+            result = self.flow.run(
+                downloads_dir=Path("automation/downloads"),
+                query_date="2026-03-29",
+                report_scheme="scheme",
+                employment_type="employment",
+                query_timeout_sec=60,
+                download_timeout_sec=120,
+                skip_export=True,
+            )
+
+        set_query_date_mock.assert_called_once_with("2026-03-29")
+        query_report_mock.assert_called_once_with(timeout_sec=60, expected_query_date="2026-03-29")
+        self.assertEqual(result["requested_query_date"], "2026-03-29")
+
+    def test_set_query_date_uses_calendar_navigation_and_confirm(self) -> None:
+        input_locator = MagicMock()
+
+        with (
+            patch.object(self.flow, "_get_query_date_input_locator", return_value=input_locator),
+            patch.object(
+                self.flow,
+                "_get_query_date_input_value",
+                side_effect=["2026-03-30", "2026-03-29"],
+            ),
+            patch.object(self.flow, "_navigate_query_calendar_to_date") as navigate_mock,
+        ):
+            self.flow.set_query_date("2026-03-29")
+
+        input_locator.click.assert_called_once_with(timeout=self.flow.timeout_ms)
+        navigate_mock.assert_called_once_with(
+            input_locator=input_locator,
+            current_date=date(2026, 3, 30),
+            target_date=date(2026, 3, 29),
+        )
+        input_locator.press.assert_called_once_with("Enter", timeout=self.flow.timeout_ms)
+
+    def test_navigate_query_calendar_to_date_uses_month_then_day_keys(self) -> None:
+        input_locator = MagicMock()
+
+        with patch.object(
+            self.flow,
+            "_get_query_date_input_value",
+            side_effect=[
+                "2026-02-28",
+                "2026-01-28",
+                "2025-12-28",
+                "2025-12-29",
+                "2025-12-30",
+                "2025-12-31",
+            ],
+        ):
+            self.flow._navigate_query_calendar_to_date(
+                input_locator=input_locator,
+                current_date=date(2026, 3, 30),
+                target_date=date(2025, 12, 31),
+            )
+
+        self.assertEqual(
+            [call.args[0] for call in input_locator.press.call_args_list],
+            ["PageUp", "PageUp", "PageUp", "ArrowRight", "ArrowRight", "ArrowRight"],
+        )

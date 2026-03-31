@@ -38,6 +38,13 @@ const taskStatusTone: Record<string, Tone> = {
   failed: "danger",
 };
 
+function formatLocalDate(value: Date): string {
+  const year = value.getFullYear();
+  const month = `${value.getMonth() + 1}`.padStart(2, "0");
+  const day = `${value.getDate()}`.padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 function formatTaskStatusLabel(value: string): string {
   return (
     {
@@ -64,6 +71,7 @@ const runColumns: GridColDef<MasterDataRunSummary>[] = [
     minWidth: 130,
     renderCell: (params) => taskLabelByType[String(params.value)] ?? String(params.value ?? ""),
   },
+  { field: "queryDate", headerName: "查询日期", minWidth: 120 },
   {
     field: "status",
     headerName: "任务状态",
@@ -97,6 +105,7 @@ export function MasterDataPage() {
   const [skipImport, setSkipImport] = useState(false);
   const [queryTimeoutSeconds, setQueryTimeoutSeconds] = useState("60");
   const [downloadTimeoutMinutes, setDownloadTimeoutMinutes] = useState("15");
+  const [queryDate, setQueryDate] = useState(() => formatLocalDate(new Date()));
   const [scheme, setScheme] = useState("在职花名册基础版");
   const [employmentType, setEmploymentType] = useState("全职任职");
   const [runSubmitting, setRunSubmitting] = useState(false);
@@ -116,7 +125,7 @@ export function MasterDataPage() {
       return true;
     }
     return (
-      `${item.taskId} ${item.taskType} ${item.status} ${item.message} ${item.importBatchNo} ${item.sourceFileName}`
+      `${item.taskId} ${item.taskType} ${item.status} ${item.queryDate} ${item.message} ${item.importBatchNo} ${item.sourceFileName}`
         .toLowerCase()
         .includes(normalizedRunQueryText)
     );
@@ -178,6 +187,7 @@ export function MasterDataPage() {
         skipImport: roleCatalogTask ? false : skipImport,
         queryTimeoutSeconds: Number.parseInt(queryTimeoutSeconds, 10) || 0,
         downloadTimeoutMinutes: Number.parseInt(downloadTimeoutMinutes, 10) || 0,
+        queryDate: rosterTask ? queryDate.trim() : "",
         scheme: rosterTask ? scheme.trim() : "",
         employmentType: rosterTask ? employmentType.trim() : "",
         forceRefresh: true,
@@ -313,6 +323,16 @@ export function MasterDataPage() {
               onChange={(event) => setQueryTimeoutSeconds(event.target.value)}
               sx={{ width: { xs: "100%", xl: 160 } }}
               disabled={roleCatalogTask}
+            />
+            <TextField
+              label="查询日期"
+              type="date"
+              size="small"
+              value={queryDate}
+              onChange={(event) => setQueryDate(event.target.value)}
+              sx={{ width: { xs: "100%", xl: 180 } }}
+              disabled={!rosterTask}
+              InputLabelProps={{ shrink: true }}
             />
             <TextField
               label="下载超时分钟"

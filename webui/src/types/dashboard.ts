@@ -50,6 +50,7 @@ export interface MasterDataRunRequest {
   skipImport: boolean;
   queryTimeoutSeconds: number;
   downloadTimeoutMinutes: number;
+  queryDate: string;
   scheme: string;
   employmentType: string;
   forceRefresh: boolean;
@@ -75,6 +76,7 @@ export interface MasterDataRunSummary {
   skipImport: boolean;
   queryTimeoutSeconds: number;
   downloadTimeoutMinutes: number;
+  queryDate: string;
   scheme: string;
   employmentType: string;
   forceRefresh: boolean;

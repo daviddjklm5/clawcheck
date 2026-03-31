@@ -33,6 +33,7 @@ PERMISSION_APPLY_DETAIL_TABLE = '"申请单权限列表"'
 APPROVAL_RECORD_TABLE = '"申请单审批记录"'
 APPLY_FORM_ORG_SCOPE_TABLE = '"申请表组织范围"'
 PERSON_ATTRIBUTES_TABLE = '"人员属性查询"'
+PERSON_ATTRIBUTES_HISTORY_TABLE = '"人员属性查询历史"'
 RISK_TRUST_ASSESSMENT_TABLE = '"申请单风险信任评估"'
 RISK_TRUST_ASSESSMENT_DETAIL_TABLE = '"申请单风险信任评估明细"'
 RISK_TRUST_LOW_SCORE_ENRICHED_VIEW = '"申请单低分明细富化视图"'
@@ -152,6 +153,11 @@ PERSON_ATTRIBUTES_COLUMNS = {
     "hr_judgement_reason": "HR判定原因",
     "created_at": "记录创建时间",
     "updated_at": "记录更新时间",
+}
+
+PERSON_ATTRIBUTES_HISTORY_COLUMNS = {
+    "effective_date": "生效日期",
+    **PERSON_ATTRIBUTES_COLUMNS,
 }
 
 ORG_ATTRIBUTE_COLUMNS = {
@@ -2569,6 +2575,57 @@ class PostgresPersonAttributesStore(_PostgresStoreBase):
                 return self._refresh_from_roster(cursor)
 
 
+class PostgresPersonAttributesHistoryStore(_PostgresStoreBase):
+    table_name = PERSON_ATTRIBUTES_HISTORY_TABLE
+    schema_sql = Path(__file__).resolve().parents[1] / "sql" / "034_person_attributes_history.sql"
+
+    def _ensure_schema(self, cursor) -> None:
+        cursor.execute(self.schema_sql.read_text(encoding="utf-8"))
+
+    def ensure_table(self) -> None:
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                self._ensure_schema(cursor)
+
+    def _replace_snapshot_from_current(self, cursor, *, effective_date: date) -> int:
+        self._ensure_schema(cursor)
+        cursor.execute(
+            f"""
+            DELETE FROM {self.table_name}
+            WHERE {self._quote_identifier(PERSON_ATTRIBUTES_HISTORY_COLUMNS["effective_date"])} = %s
+            """,
+            (effective_date,),
+        )
+
+        if (
+            not self._table_exists(cursor, "人员属性查询")
+            or not self._column_exists(cursor, "人员属性查询", "工号")
+        ):
+            return 0
+
+        current_columns = list(PERSON_ATTRIBUTES_COLUMNS.values())
+        history_columns = [PERSON_ATTRIBUTES_HISTORY_COLUMNS["effective_date"], *current_columns]
+        select_columns = self._quoted_columns(current_columns)
+        cursor.execute(
+            f"""
+            INSERT INTO {self.table_name} (
+                {self._quoted_columns(history_columns)}
+            )
+            SELECT
+                %s,
+                {select_columns}
+            FROM {PERSON_ATTRIBUTES_TABLE}
+            """,
+            (effective_date,),
+        )
+        return int(getattr(cursor, "rowcount", 0) or 0)
+
+    def replace_snapshot_from_current(self, *, effective_date: date) -> int:
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                return self._replace_snapshot_from_current(cursor, effective_date=effective_date)
+
+
 class PostgresRiskTrustStore(_PostgresStoreBase):
     _ensure_table_lock = threading.Lock()
     _ensured_schema_keys: set[tuple[str, int, str, str]] = set()
@@ -4812,6 +4869,8 @@ class PostgresActiveRosterStore(_PostgresStoreBase):
                 cursor.executemany(insert_sql, payloads)
                 person_attributes_store = PostgresPersonAttributesStore(self.settings)
                 person_attributes_store._refresh_from_roster(cursor)
+                person_attributes_history_store = PostgresPersonAttributesHistoryStore(self.settings)
+                person_attributes_history_store._replace_snapshot_from_current(cursor, effective_date=query_date)
         return len(normalized_rows)
 
     @classmethod

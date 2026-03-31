@@ -106,6 +106,7 @@ def _task_to_payload(task: dict[str, Any]) -> dict[str, Any]:
         "skipImport": bool(task.get("skipImport")),
         "queryTimeoutSeconds": int(task.get("queryTimeoutSeconds") or 0),
         "downloadTimeoutMinutes": int(task.get("downloadTimeoutMinutes") or 0),
+        "queryDate": str(task.get("queryDate") or ""),
         "scheme": str(task.get("scheme") or ""),
         "employmentType": str(task.get("employmentType") or ""),
         "forceRefresh": bool(task.get("forceRefresh")),
@@ -279,6 +280,8 @@ def _run_master_data_task(task_id: str) -> None:
         command.extend(["--query-timeout-seconds", str(task["queryTimeoutSeconds"])])
     if task.get("downloadTimeoutMinutes"):
         command.extend(["--download-timeout-minutes", str(task["downloadTimeoutMinutes"])])
+    if task["taskType"] == "roster" and task.get("queryDate"):
+        command.extend(["--query-date", str(task["queryDate"])])
     if task["taskType"] == "roster" and task.get("scheme"):
         command.extend(["--scheme", str(task["scheme"])])
     if task["taskType"] == "roster" and task.get("employmentType"):
@@ -368,6 +371,7 @@ def _load_recent_runs(logs_dir: Path, limit: int = 10) -> list[dict[str, Any]]:
         if not isinstance(payload, dict):
             continue
         payload.setdefault("id", payload.get("taskId") or path.stem)
+        payload.setdefault("queryDate", "")
         payload.setdefault("summaryFile", _to_repo_relative(path))
         runs.append(payload)
     return runs
@@ -414,6 +418,7 @@ def start_master_data_task(
     skip_import: bool = False,
     query_timeout_seconds: int = 0,
     download_timeout_minutes: int = 0,
+    query_date: str = "",
     scheme: str = "",
     employment_type: str = "",
     force_refresh: bool = True,
@@ -446,6 +451,7 @@ def start_master_data_task(
         "skipImport": bool(skip_import),
         "queryTimeoutSeconds": max(int(query_timeout_seconds or 0), 0),
         "downloadTimeoutMinutes": max(int(download_timeout_minutes or 0), 0),
+        "queryDate": (query_date or "").strip(),
         "scheme": (scheme or "").strip(),
         "employmentType": (employment_type or "").strip(),
         "forceRefresh": bool(force_refresh),
