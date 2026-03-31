@@ -7,6 +7,7 @@ import { ProcessAnalysisPage } from "./pages/ProcessAnalysisPage";
 import { ProcessDocumentsPage } from "./pages/ProcessDocumentsPage";
 import { ReportCenterPage } from "./pages/ReportCenterPage";
 import { RuntimeSettingsPage } from "./pages/RuntimeSettingsPage";
+import { PersonAttributesHistoryReportPage } from "./pages/PersonAttributesHistoryReportPage";
 import { ServiceStationFlowReportPage } from "./pages/ServiceStationFlowReportPage";
 
 export const router = createBrowserRouter([
@@ -49,6 +50,10 @@ export const router = createBrowserRouter([
       {
         path: "report-center/service-station-flow",
         element: <ServiceStationFlowReportPage />,
+      },
+      {
+        path: "report-center/person-attributes-history",
+        element: <PersonAttributesHistoryReportPage />,
       },
     ],
   },

@@ -44,31 +44,33 @@ export function ReportCenterPage() {
   return (
     <Stack spacing={3}>
       <Typography variant="body1">
-        报表中心统一承接专题分析型报表。当前已上线 `服务站分析` 模块，第一张正式报表为 `服务站人员流动表`。
+        报表中心统一承接专题分析型报表。可在下方模块中按顺序选择报表入口。
       </Typography>
 
       {error ? <Alert severity="error">{error}</Alert> : null}
 
-      {(catalog?.modules ?? []).map((module) => (
-        <SectionCard
-          key={module.id}
-          title={module.label}
-          subtitle={module.description}
-          action={
-            <Button
-              variant="outlined"
-              size="small"
-              onClick={() => navigate("/report-center/service-station-flow")}
-            >
-              打开首个报表
-            </Button>
-          }
-        >
-          <Stack spacing={1.5}>
-            {module.reports
-              .slice()
-              .sort((left, right) => left.order - right.order)
-              .map((report) => (
+      {(catalog?.modules ?? []).map((module) => {
+        const orderedReports = module.reports.slice().sort((left, right) => left.order - right.order);
+        const firstReportPath = orderedReports[0]?.path || "";
+
+        return (
+          <SectionCard
+            key={module.id}
+            title={module.label}
+            subtitle={module.description}
+            action={
+              <Button
+                variant="outlined"
+                size="small"
+                onClick={() => firstReportPath && navigate(firstReportPath)}
+                disabled={!firstReportPath}
+              >
+                打开首个报表
+              </Button>
+            }
+          >
+            <Stack spacing={1.5}>
+              {orderedReports.map((report) => (
                 <Paper
                   key={report.id}
                   elevation={0}
@@ -103,14 +105,15 @@ export function ReportCenterPage() {
                 </Paper>
               ))}
 
-            {!loading && (module.reports?.length ?? 0) === 0 ? (
-              <Typography variant="body2" color="text.secondary">
-                当前模块尚未配置报表。
-              </Typography>
-            ) : null}
-          </Stack>
-        </SectionCard>
-      ))}
+              {!loading && orderedReports.length === 0 ? (
+                <Typography variant="body2" color="text.secondary">
+                  当前模块尚未配置报表。
+                </Typography>
+              ) : null}
+            </Stack>
+          </SectionCard>
+        );
+      })}
     </Stack>
   );
 }

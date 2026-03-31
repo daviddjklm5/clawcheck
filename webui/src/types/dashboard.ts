@@ -558,6 +558,14 @@ export interface ServiceStationFlowOptions {
   hint: string;
 }
 
+export interface PersonAttributesHistoryOptions {
+  availableSnapshotDates: string[];
+  defaultEffectiveDate: string;
+  defaultExportDirectory: string;
+  canRun: boolean;
+  hint: string;
+}
+
 export interface ServiceStationFlowCategoryRow {
   id: string;
   category: string;
@@ -647,5 +655,23 @@ export interface ServiceStationFlowReportResult {
   otherHrOutRows: ServiceStationFlowDetailRow[];
   targetFlowRows: ServiceStationFlowDetailRow[];
   otherHrInRows: ServiceStationFlowDetailRow[];
+  exportInfo: ServiceStationFlowExportInfo | null;
+}
+
+export interface PersonAttributesHistoryReportRequest {
+  effectiveDate: string;
+  saveAsPath: string;
+}
+
+export interface PersonAttributesHistoryPreviewRow {
+  id: string;
+  [key: string]: string | number | boolean | null;
+}
+
+export interface PersonAttributesHistoryReportResult {
+  effectiveDate: string;
+  rowCount: number;
+  columns: string[];
+  previewRows: PersonAttributesHistoryPreviewRow[];
   exportInfo: ServiceStationFlowExportInfo | null;
 }

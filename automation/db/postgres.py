@@ -271,7 +271,8 @@ APPLICANT_HR_SUBDOMAIN_HRBP_KEYWORD_PATTERN = re.compile(r"HRBP", re.IGNORECASE)
 APPLICANT_HR_SUBDOMAIN_EMPLOYEE_EXPERIENCE_ADMIN_KEYWORD = "员工体验与行政"
 APPLICANT_HR_SUBDOMAIN_ADMIN_KEYWORD = "行政"
 APPLICANT_HR_SUBDOMAIN_PERSONNEL_KEYWORD = "人事"
-APPLICANT_HR_SUBDOMAIN_OPERATIONS_KEYWORD_PATTERN = re.compile(r"(薪酬|绩效|运营|数据分析)")
+APPLICANT_HR_SUBDOMAIN_COMP_PERF_POSITION_KEYWORD_PATTERN = re.compile(r"(薪酬|绩效)")
+APPLICANT_HR_SUBDOMAIN_OPERATIONS_KEYWORD_PATTERN = re.compile(r"(运营|数据分析)")
 APPLICANT_HR_SUBDOMAIN_PROJECT_KEYWORD = "项目"
 APPLICANT_HR_SUBDOMAIN_RESPONSIBLE_KEYWORD = "负责人"
 APPLICANT_HR_SUBDOMAIN_PROFESSIONAL_DIRECTOR_KEYWORD = "专业总监"
@@ -744,6 +745,14 @@ class PostgresPermissionStore(_PostgresStoreBase):
             and APPLICANT_HR_SUBDOMAIN_RESPONSIBLE_KEYWORD in position_name
         ):
             return "人力资源岗"
+        if (
+            position_name is not None
+            and "组织" in position_name
+            and APPLICANT_HR_SUBDOMAIN_COMP_PERF_POSITION_KEYWORD_PATTERN.search(position_name)
+        ):
+            if level2_function_name == "薪酬绩效":
+                return APPLICANT_HR_SUBDOMAIN_COMP_PERF_POST
+            return APPLICANT_HR_SUBDOMAIN_ORG_DEVELOPMENT_POST
 
         if (
             position_name is not None
@@ -755,6 +764,11 @@ class PostgresPermissionStore(_PostgresStoreBase):
             standard_position_name is not None and "负责人" in standard_position_name
         ):
             return "人行负责人(管理岗)"
+        if any(
+            field is not None and APPLICANT_HR_SUBDOMAIN_COMP_PERF_POSITION_KEYWORD_PATTERN.search(field)
+            for field in (position_name, standard_position_name)
+        ):
+            return APPLICANT_HR_SUBDOMAIN_COMP_PERF_POST
         if level2_function_name == "人力资源":
             if any(field is not None and "行政" in field for field in (position_name, standard_position_name)):
                 return APPLICANT_HR_SUBDOMAIN_PERSONNEL_ADMIN_POST
@@ -767,7 +781,9 @@ class PostgresPermissionStore(_PostgresStoreBase):
             return APPLICANT_HR_SUBDOMAIN_ORG_DEVELOPMENT_POST
         if level2_function_name == "人力业务支持":
             return APPLICANT_HR_SUBDOMAIN_HRBP_SUPPORT
-        if level2_function_name in {"人事运营", "薪酬绩效"}:
+        if level2_function_name == "薪酬绩效":
+            return APPLICANT_HR_SUBDOMAIN_COMP_PERF_POST
+        if level2_function_name == "人事运营":
             return "人事运营"
         if level1_function_name in {"管理", "职能综合管理"}:
             return "人行负责人(管理岗)"

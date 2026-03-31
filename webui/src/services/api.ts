@@ -18,6 +18,9 @@ import type {
   ProcessDetail,
   ProcessTodoSyncRequest,
   ProcessTodoSyncResponse,
+  PersonAttributesHistoryOptions,
+  PersonAttributesHistoryReportRequest,
+  PersonAttributesHistoryReportResult,
   ProcessWorkbench,
   RuntimeSettingsSummary,
   ServiceStationFlowOptions,
@@ -183,14 +186,33 @@ export const dashboardApi = {
   getServiceStationFlowOptions(): Promise<ServiceStationFlowOptions> {
     return request<ServiceStationFlowOptions>("/reports/service-station-flow/options");
   },
+  getPersonAttributesHistoryOptions(): Promise<PersonAttributesHistoryOptions> {
+    return request<PersonAttributesHistoryOptions>("/reports/person-attributes-history/options");
+  },
   queryServiceStationFlowReport(payload: ServiceStationFlowReportRequest): Promise<ServiceStationFlowReportResult> {
     return request<ServiceStationFlowReportResult>("/reports/service-station-flow/query", {
       method: "POST",
       body: JSON.stringify(payload),
     });
   },
+  queryPersonAttributesHistoryReport(
+    payload: PersonAttributesHistoryReportRequest,
+  ): Promise<PersonAttributesHistoryReportResult> {
+    return request<PersonAttributesHistoryReportResult>("/reports/person-attributes-history/query", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
   exportServiceStationFlowReport(payload: ServiceStationFlowReportRequest): Promise<ServiceStationFlowReportResult> {
     return request<ServiceStationFlowReportResult>("/reports/service-station-flow/export", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+  exportPersonAttributesHistoryReport(
+    payload: PersonAttributesHistoryReportRequest,
+  ): Promise<PersonAttributesHistoryReportResult> {
+    return request<PersonAttributesHistoryReportResult>("/reports/person-attributes-history/export", {
       method: "POST",
       body: JSON.stringify(payload),
     });

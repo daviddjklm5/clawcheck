@@ -61,7 +61,7 @@ class PersonAttributesStoreApplicantHrTest(unittest.TestCase):
         self.assertEqual(tags["hr_type"], "H1")
         self.assertEqual(tags["hr_subdomain"], "薪酬绩效岗")
 
-    def test_hr_business_support_is_merged_into_ren_shi_yun_ying_subdomain(self) -> None:
+    def test_hr_business_support_maps_to_hrbp_support_subdomain(self) -> None:
         tags = self.store._build_applicant_hr_tags(
             {
                 "employee_no": "05026859",
@@ -73,7 +73,36 @@ class PersonAttributesStoreApplicantHrTest(unittest.TestCase):
         )
 
         self.assertEqual(tags["hr_type"], "H1")
-        self.assertEqual(tags["hr_subdomain"], "人事运营")
+        self.assertEqual(tags["hr_subdomain"], "HRBP/业务支持")
+
+    def test_position_contains_comp_perf_keyword_maps_to_comp_perf_post(self) -> None:
+        tags = self.store._build_applicant_hr_tags(
+            {
+                "employee_no": "05026859",
+                "employee_name": "张三",
+                "level1_function_name": "人力资源",
+                "level2_function_name": "人力资源",
+                "position_name": "绩效管理经理",
+            }
+        )
+
+        self.assertEqual(tags["hr_type"], "H1")
+        self.assertEqual(tags["hr_subdomain"], "薪酬绩效岗")
+
+    def test_standard_position_contains_comp_perf_keyword_maps_to_comp_perf_post(self) -> None:
+        tags = self.store._build_applicant_hr_tags(
+            {
+                "employee_no": "05026859",
+                "employee_name": "张三",
+                "level1_function_name": "人力资源",
+                "level2_function_name": "人力资源",
+                "position_name": "人力资源经理",
+                "standard_position_name": "薪酬管理岗",
+            }
+        )
+
+        self.assertEqual(tags["hr_type"], "H1")
+        self.assertEqual(tags["hr_subdomain"], "薪酬绩效岗")
 
     def test_employee_relations_maps_to_chinese_subdomain(self) -> None:
         tags = self.store._build_applicant_hr_tags(
@@ -97,6 +126,34 @@ class PersonAttributesStoreApplicantHrTest(unittest.TestCase):
                 "level1_function_name": "人力资源",
                 "level2_function_name": "组织发展",
                 "position_name": "组织发展经理",
+            }
+        )
+
+        self.assertEqual(tags["hr_type"], "H1")
+        self.assertEqual(tags["hr_subdomain"], "组织发展岗")
+
+    def test_org_and_perf_position_maps_to_comp_perf_when_level2_is_comp_perf(self) -> None:
+        tags = self.store._build_applicant_hr_tags(
+            {
+                "employee_no": "05026859",
+                "employee_name": "张三",
+                "level1_function_name": "人力资源",
+                "level2_function_name": "薪酬绩效",
+                "position_name": "组织与绩效管理经理",
+            }
+        )
+
+        self.assertEqual(tags["hr_type"], "H1")
+        self.assertEqual(tags["hr_subdomain"], "薪酬绩效岗")
+
+    def test_org_and_comp_position_maps_to_org_development_when_level2_is_not_comp_perf(self) -> None:
+        tags = self.store._build_applicant_hr_tags(
+            {
+                "employee_no": "05026859",
+                "employee_name": "张三",
+                "level1_function_name": "人力资源",
+                "level2_function_name": "组织发展",
+                "position_name": "组织与薪酬管理经理",
             }
         )
 
