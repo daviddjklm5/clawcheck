@@ -380,7 +380,7 @@ class RiskTrustEvaluator:
         def _is_warzone_hr(row: dict[str, Any]) -> bool:
             approver_org = self._as_dict(row.get("approver_org_attributes"))
             process_level_category = self._normalized_text(approver_org.get("process_level_category"))
-            return process_level_category == "战区人行部门"
+            return process_level_category in {"战区人行部门", "属地服务站"}
 
         details: list[dict[str, Any]] = []
         for detail_row in self._as_dict_list(bundle.get("permission_details")):

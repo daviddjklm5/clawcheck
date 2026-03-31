@@ -293,6 +293,10 @@ APPLICANT_HR_BG_PLATFORM_OPERATIONS_GROUP_KEYWORD = "平台与运营组"
 APPLICANT_HR_BG_TALENT_LEADERSHIP_GROUP_KEYWORD = "人才与领导力组"
 APPLICANT_HR_BG_ORG_EFFECTIVENESS_GROUP_KEYWORD = "组织与效能组"
 APPLICANT_HR_BG_EMPLOYEE_EXPERIENCE_GROUP_KEYWORD = "员工体验与行政组"
+APPLICANT_HR_SUBDOMAIN_EMPLOYEE_OVERRIDES = {
+    "00042502": APPLICANT_HR_SUBDOMAIN_TRAINING_CERT_TALENT,
+    "00775084": APPLICANT_HR_SUBDOMAIN_HRBP_SUPPORT,
+}
 
 
 class _PostgresStoreBase:
@@ -711,7 +715,7 @@ class PostgresPermissionStore(_PostgresStoreBase):
         if level2_function_name == "组织发展":
             return APPLICANT_HR_SUBDOMAIN_ORG_DEVELOPMENT_POST
         if level2_function_name == "人力业务支持":
-            return "人事运营"
+            return APPLICANT_HR_SUBDOMAIN_HRBP_SUPPORT
         if level2_function_name in {"人事运营", "薪酬绩效"}:
             return "人事运营"
         if level1_function_name in {"管理", "职能综合管理"}:
@@ -863,6 +867,7 @@ class PostgresPermissionStore(_PostgresStoreBase):
             standard_position_name=standard_position_name,
             org_path_name=org_path_name,
         )
+        hr_subdomain = APPLICANT_HR_SUBDOMAIN_EMPLOYEE_OVERRIDES.get(employee_no, hr_subdomain)
 
         result.update(
             {

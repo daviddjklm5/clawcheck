@@ -431,7 +431,7 @@ H1 显式关键词口径采用保守规则，优先识别以下显式文本：
 - `招聘` / `招聘外包服务` -> `招聘`
 - `员工关系` -> `员工关系`
 - `组织发展` -> `组织发展`
-- `人力业务支持` -> `人事运营`
+- `人力业务支持` -> `HRBP/业务支持`
 - `人事运营` / `薪酬绩效` -> `人事运营`（fallback 靠后）
 - `一级职能名称 in ('管理', '职能综合管理')` -> `人行负责人(管理岗)`
 - `职位名称` / `标准岗位名称` 包含 `员工体验与行政` -> `人力行政岗`（兜底）
@@ -444,6 +444,9 @@ H1 显式关键词口径采用保守规则，优先识别以下显式文本：
 结合 `规则整理.docx` 与全量样本回归，`HR子域` 规则补充如下（按优先级执行）：
 
 - 仅在 `hr_type in ('H1', 'H2')` 时计算 `HR子域`，其余保持 `NULL`
+- 个体工号定向覆盖（最高优先级）：
+  - `00042502` -> `人才发展（含培训认证）`
+  - `00775084` -> `HRBP/业务支持`
 - `组织路径名称` 以 `万物云_万物云本部_人力资源与行政服务中心_BG人力资源行政服务中心` 开头时，优先按分组映射：
   - 包含 `本部人力行政支持组` -> `HRBP/业务支持`
   - 包含 `平台与运营组` -> `人事运营`
@@ -837,7 +840,7 @@ joined AS (
             WHEN COALESCE(c.level2_function_name, '') IN ('招聘', '招聘外包服务') THEN '招聘'
             WHEN COALESCE(c.level2_function_name, '') = '员工关系' THEN '员工关系'
             WHEN COALESCE(c.level2_function_name, '') = '组织发展' THEN '组织发展'
-            WHEN COALESCE(c.level2_function_name, '') = '人力业务支持' THEN '人事运营'
+            WHEN COALESCE(c.level2_function_name, '') = '人力业务支持' THEN 'HRBP/业务支持'
             WHEN COALESCE(c.level2_function_name, '') IN ('人事运营', '薪酬绩效') THEN '人事运营'
             WHEN COALESCE(c.level1_function_name, '') IN ('管理', '职能综合管理') THEN '人行负责人(管理岗)'
             WHEN COALESCE(c.position_name, '') LIKE '%员工体验与行政%'

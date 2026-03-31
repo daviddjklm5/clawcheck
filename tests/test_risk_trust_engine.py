@@ -279,6 +279,47 @@ class RiskTrustEvaluatorTest(unittest.TestCase):
         self.assertEqual(approval_detail["score"], 0.0)
         self.assertEqual(summary_rows[0]["final_score"], 0.0)
 
+    def test_local_service_station_approver_counts_as_warzone_for_approval_chain(self) -> None:
+        bundle = {
+            "basic_info": {"document_no": "RA-4A", "employee_no": "001"},
+            "applicant_person_attributes": {"hr_type": "H1"},
+            "applicant_org_attributes": {"process_level_category": "属地组织", "org_unit_name": "组织A"},
+            "approval_records": [
+                {
+                    "node_name": "权限申请提交",
+                    "approver_employee_no": "001",
+                    "approval_action": "提交",
+                    "approval_time": "2026-03-15 10:00:00",
+                    "approver_org_attributes": {"process_level_category": "属地组织"},
+                },
+                {
+                    "node_name": "属地人力资源部负责人",
+                    "approver_employee_no": "008",
+                    "approval_action": "同意",
+                    "approval_time": "2026-03-15 11:00:00",
+                    "approver_org_attributes": {"process_level_category": "属地服务站"},
+                },
+            ],
+            "permission_details": [
+                {
+                    "document_no": "RA-4A",
+                    "role_code": "C001",
+                    "role_name": "常规权限",
+                    "catalog_matched": True,
+                    "permission_level": "C类-常规",
+                    "skip_org_scope_check": True,
+                    "targets": [{"org_code": None, "org_auth_level": None, "org_unit_name": None}],
+                }
+            ],
+        }
+
+        summary_rows, detail_rows = self.evaluator.evaluate_documents([bundle], assessment_batch_no="audit_batch_4a")
+
+        approval_detail = next(row for row in detail_rows if row["dimension_name"] == "审批人判断")
+        self.assertEqual(approval_detail["rule_id"], "APPROVAL_CHAIN_DEFAULT")
+        self.assertEqual(approval_detail["score"], 2.5)
+        self.assertEqual(summary_rows[0]["final_score"], 2.5)
+
     def test_b_and_below_permission_is_skipped_in_permission_dimension(self) -> None:
         bundle = {
             "basic_info": {"document_no": "RA-5", "employee_no": "001"},
