@@ -1,6 +1,7 @@
 param(
     [string]$VenvDir = ".venv-win",
     [string]$NodeDir = "",
+    [switch]$SkipEncodingCheck,
     [switch]$SkipRuff,
     [switch]$SkipCompileAll,
     [switch]$SkipPytest,
@@ -20,6 +21,13 @@ if (-not (Test-Path $PythonExe)) {
 
 Push-Location $RepoRoot
 try {
+    if (-not $SkipEncodingCheck) {
+        & $PythonExe automation/scripts/check_text_encoding.py
+        if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+        }
+    }
+
     if (-not $SkipRuff) {
         & $PythonExe -m ruff check automation tests
         if ($LASTEXITCODE -ne 0) {

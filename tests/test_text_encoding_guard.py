@@ -30,6 +30,30 @@ class TextEncodingGuardTest(unittest.TestCase):
         self.assertEqual(findings[0].reason, "possible GBK/GB18030 mojibake")
         self.assertEqual(findings[0].recovered, 'headers = ["申请类型"]')
 
+    def test_scan_file_reports_ui_mojibake_phrase(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            path = root / "sample.tsx"
+            original = "定时采集配置"
+            mojibake = original.encode("utf-8").decode("gb18030")
+            path.write_text(f'label = "{mojibake}"\n', encoding="utf-8")
+
+            findings = scan_file(path, root)
+
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].reason, "possible GBK/GB18030 mojibake")
+        self.assertIn(original, findings[0].recovered or "")
+
+    def test_scan_file_does_not_report_normal_chinese_line(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            path = root / "sample.tsx"
+            path.write_text('label = "职位"\n', encoding="utf-8")
+
+            findings = scan_file(path, root)
+
+        self.assertEqual(findings, [])
+
     def test_scan_file_reports_non_utf8_text(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

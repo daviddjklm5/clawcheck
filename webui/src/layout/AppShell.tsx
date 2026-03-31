@@ -64,13 +64,13 @@ const navItems: NavEntry[] = [
     kind: "group",
     id: "ehrApproval",
     label: EHR_APPROVAL_LABEL,
-    description: "閲囬泦銆佸鐞嗕笌璇勪及鍒嗘瀽鑳藉姏鍒嗙粍",
+    description: "采集、处理与评估分析能力分组",
     icon: <AccountTreeOutlinedIcon />,
     children: [
       {
         kind: "item",
         path: "/collect-documents",
-        label: "閲囬泦鍗曟嵁",
+        label: "采集单据",
         description: "采集四张申请单表的字段与状态",
         icon: <DescriptionOutlinedIcon />,
         parentLabel: EHR_APPROVAL_LABEL,
@@ -78,7 +78,7 @@ const navItems: NavEntry[] = [
       {
         kind: "item",
         path: "/process-documents",
-        label: "澶勭悊鍗曟嵁",
+        label: "处理单据",
         description: "待处理列表与抽屉化单据详情",
         icon: <FactCheckOutlinedIcon />,
         parentLabel: EHR_APPROVAL_LABEL,
@@ -86,8 +86,8 @@ const navItems: NavEntry[] = [
       {
         kind: "item",
         path: "/process-analysis",
-        label: "璇勪及鍒嗘瀽",
-        description: "鎵规鍒嗗竷銆佽鍒欑儹鐐逛笌鎵ц鏃ュ織",
+        label: "评估分析",
+        description: "批次分布、规则热点与执行日志",
         icon: <InsightsOutlinedIcon />,
         parentLabel: EHR_APPROVAL_LABEL,
       },
@@ -96,7 +96,7 @@ const navItems: NavEntry[] = [
   {
     kind: "item",
     path: "/runtime-settings",
-    label: "甯歌閰嶇疆",
+    label: "常规配置",
     description: "浏览器运行参数、路径与数据库摘要",
     icon: <SettingsSuggestOutlinedIcon />,
   },
@@ -111,15 +111,15 @@ const navItems: NavEntry[] = [
         kind: "item",
         path: "/report-center/service-station-analysis",
         label: "服务站分析",
-        description: "鏌ョ湅妯″潡璇存槑鍜屽凡涓婄嚎鎶ヨ〃鐩綍",
+        description: "查看模块说明和已上线报表目录",
         icon: <AssessmentOutlinedIcon />,
         parentLabel: REPORT_CENTER_LABEL,
       },
       {
         kind: "item",
         path: "/report-center/service-station-flow",
-        label: "鏈嶅姟绔欎汉鍛樻祦鍔ㄨ〃",
-        description: "鎸変袱鏈熷巻鍙插揩鐓у垎鏋愭湇鍔＄珯宀椾綅浜哄憳娴佸姩",
+        label: "服务站人员流动表",
+        description: "按两期历史快照分析服务站岗位人员流动",
         icon: <AssessmentOutlinedIcon />,
         parentLabel: REPORT_CENTER_LABEL,
       },
@@ -333,9 +333,10 @@ export function AppShell() {
             color: "inherit",
           }}
         >
-          <Typography variant="subtitle2">褰撳墠鑼冨洿</Typography>
+          <Typography variant="subtitle2">当前范围</Typography>
           <Typography variant="body2" sx={{ mt: 1, color: "rgba(226, 232, 240, 0.74)" }}>
-            褰撳墠宸叉媶鍒嗗鐞嗗伐浣滃彴涓庤瘎浼板垎鏋愰〉锛屽苟淇濈暀鍗曟嵁绾у鎵硅繛閫氳兘鍔涖€?          </Typography>
+            当前已拆分处理工作台与评估分析页，并保留单据级审批连通能力。
+          </Typography>
         </Paper>
       </Box>
     </Box>
@@ -425,7 +426,7 @@ export function AppShell() {
           >
             <Box>
               <Typography variant="body2" color="text.secondary">
-                褰撳墠妯″潡
+                当前模块
               </Typography>
               <Typography variant="h4" sx={{ mt: 0.5 }}>
                 {currentItemLabel}
@@ -443,9 +444,9 @@ export function AppShell() {
                 }}
               >
                 <Typography variant="body2" color="text.secondary">
-                  褰撳墠闃舵
+                  当前阶段
                 </Typography>
-                <Typography variant="subtitle2">UI 楠ㄦ灦鑱旇皟</Typography>
+                <Typography variant="subtitle2">UI 骨架联调</Typography>
               </Paper>
               <Paper
                 elevation={0}
@@ -458,7 +459,7 @@ export function AppShell() {
                 }}
               >
                 <Typography variant="body2" color="text.secondary">
-                  璁捐鍘熷垯
+                  设计原则
                 </Typography>
                 <Typography variant="subtitle2">左侧菜单 + 详情联动 + 顶部卡片式页签</Typography>
               </Paper>

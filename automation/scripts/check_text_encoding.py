@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -35,7 +36,8 @@ TEXT_SUFFIXES = {
 }
 
 SPECIAL_TEXT_FILES = {"AGENTS.md", ".editorconfig", ".gitattributes"}
-SUSPICIOUS_MOJIBAKE_CHARS = set("鐢鏂鍚鍙缁璇瑙鏌ョ湅绫诲瀷壊缂栫爜鎻忚堪斂粐璇︽儏")
+CJK_RE = re.compile(r"[㐀-鿿]")
+REPLACEMENT_CHAR = chr(0xFFFD)
 RECOVERED_KEYWORDS = (
     "申请",
     "角色",
@@ -54,6 +56,34 @@ RECOVERED_KEYWORDS = (
     "类型",
     "人员",
     "花名册",
+    "采集",
+    "处理",
+    "评估",
+    "分析",
+    "配置",
+    "运行",
+    "当前",
+    "路径",
+    "模块",
+    "报表",
+    "中心",
+    "阶段",
+    "服务站",
+    "浏览器",
+    "数据库",
+    "摘要",
+    "安全",
+    "说明",
+    "自动",
+    "批量",
+    "保存",
+    "刷新",
+    "范围",
+    "计划",
+    "工作台",
+    "流程",
+    "入口",
+    "导出",
 )
 
 
@@ -64,6 +94,14 @@ class Finding:
     reason: str
     content: str
     recovered: str | None = None
+
+
+def safe_print(message: str) -> None:
+    try:
+        print(message)
+    except UnicodeEncodeError:
+        encoding = sys.stdout.encoding or "utf-8"
+        sys.stdout.buffer.write((message + "\n").encode(encoding, errors="backslashreplace"))
 
 
 def is_text_file(path: Path) -> bool:
@@ -91,15 +129,25 @@ def iter_tracked_text_files(repo_root: Path) -> Iterable[Path]:
 
 
 def detect_mojibake(line: str) -> str | None:
-    if not any(ch in SUSPICIOUS_MOJIBAKE_CHARS for ch in line):
-        return None
-
     try:
         recovered = line.encode("gb18030").decode("utf-8")
     except UnicodeError:
         return None
 
     if recovered == line:
+        return None
+
+    # Normal Chinese can occasionally "decode" into non-Chinese symbols.
+    # Skip those cases to avoid false positives.
+    if not CJK_RE.search(recovered):
+        return None
+
+    # Require strict reversibility to reduce random collisions.
+    try:
+        round_trip = recovered.encode("utf-8").decode("gb18030")
+    except UnicodeError:
+        return None
+    if round_trip != line:
         return None
 
     if not any(keyword in recovered for keyword in RECOVERED_KEYWORDS):
@@ -127,7 +175,7 @@ def scan_file(path: Path, repo_root: Path) -> list[Finding]:
         return findings
 
     for line_no, line in enumerate(text.splitlines(), 1):
-        if "\ufffd" in line:
+        if REPLACEMENT_CHAR in line:
             findings.append(Finding(rel_path, line_no, "replacement character found", line.strip()))
 
         recovered = detect_mojibake(line)
@@ -163,14 +211,14 @@ def main() -> int:
         print(f"OK: no encoding issues found under {repo_root}")
         return 0
 
-    print("Encoding issues detected:")
+    safe_print("Encoding issues detected:")
     for finding in findings:
         location = f"{finding.path}:{finding.line}" if finding.line else finding.path
-        print(f"- {location}: {finding.reason}")
+        safe_print(f"- {location}: {finding.reason}")
         if finding.content:
-            print(f"  content: {finding.content}")
+            safe_print(f"  content: {finding.content}")
         if finding.recovered:
-            print(f"  recovered: {finding.recovered}")
+            safe_print(f"  recovered: {finding.recovered}")
     return 1
 
 
