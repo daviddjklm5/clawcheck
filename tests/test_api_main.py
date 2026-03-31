@@ -21,15 +21,23 @@ def test_create_app_without_webui_dist_returns_json_root(tmp_path: Path) -> None
 def test_create_app_with_webui_dist_serves_spa_index(tmp_path: Path) -> None:
     dist_dir = tmp_path / "dist"
     dist_dir.mkdir()
+    (dist_dir / "assets").mkdir()
     (dist_dir / "index.html").write_text("<html><body>clawcheck webui</body></html>", encoding="utf-8")
+    (dist_dir / "assets" / "app.js").write_text("console.log('ok')", encoding="utf-8")
 
     app = create_app(webui_dist_dir=dist_dir)
     client = TestClient(app)
 
     root_response = client.get("/")
+    route_response = client.get("/report-center/service-station-flow")
+    asset_response = client.get("/assets/app.js")
     health_response = client.get("/api/health")
 
     assert root_response.status_code == 200
     assert "clawcheck webui" in root_response.text
+    assert route_response.status_code == 200
+    assert "clawcheck webui" in route_response.text
+    assert asset_response.status_code == 200
+    assert "console.log('ok')" in asset_response.text
     assert health_response.status_code == 200
     assert health_response.json()["status"] == "ok"

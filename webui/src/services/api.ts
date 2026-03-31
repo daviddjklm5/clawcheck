@@ -12,6 +12,7 @@ import type {
   ProcessAuditRunSummary,
   ProcessApprovalRequest,
   ProcessApprovalResponse,
+  ReportCenterCatalog,
   ProcessBatchApprovalRequest,
   ProcessBatchApprovalResponse,
   ProcessDetail,
@@ -19,6 +20,9 @@ import type {
   ProcessTodoSyncResponse,
   ProcessWorkbench,
   RuntimeSettingsSummary,
+  ServiceStationFlowOptions,
+  ServiceStationFlowReportRequest,
+  ServiceStationFlowReportResult,
 } from "../types/dashboard";
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? "/api").replace(/\/$/, "");
@@ -171,6 +175,30 @@ export const dashboardApi = {
     return request<RuntimeSettingsSummary>("/settings/runtime/collect-schedule", {
       method: "PUT",
       body: JSON.stringify(payload),
+    });
+  },
+  getReportCenterCatalog(): Promise<ReportCenterCatalog> {
+    return request<ReportCenterCatalog>("/reports/catalog");
+  },
+  getServiceStationFlowOptions(): Promise<ServiceStationFlowOptions> {
+    return request<ServiceStationFlowOptions>("/reports/service-station-flow/options");
+  },
+  queryServiceStationFlowReport(payload: ServiceStationFlowReportRequest): Promise<ServiceStationFlowReportResult> {
+    return request<ServiceStationFlowReportResult>("/reports/service-station-flow/query", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+  exportServiceStationFlowReport(payload: ServiceStationFlowReportRequest): Promise<ServiceStationFlowReportResult> {
+    return request<ServiceStationFlowReportResult>("/reports/service-station-flow/export", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+  openReportFolder(path: string): Promise<{ directory: string }> {
+    return request<{ directory: string }>("/reports/open-folder", {
+      method: "POST",
+      body: JSON.stringify({ path }),
     });
   },
 };

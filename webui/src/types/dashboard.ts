@@ -529,3 +529,123 @@ export interface RuntimeSettingsSummary {
   securityNotes: string[];
   collectSchedule: CollectScheduleSummary;
 }
+
+export interface ReportCenterEntry {
+  id: string;
+  label: string;
+  path: string;
+  description: string;
+  order: number;
+}
+
+export interface ReportCenterModule {
+  id: string;
+  label: string;
+  description: string;
+  reports: ReportCenterEntry[];
+}
+
+export interface ReportCenterCatalog {
+  modules: ReportCenterModule[];
+}
+
+export interface ServiceStationFlowOptions {
+  availableSnapshotDates: string[];
+  defaultStartDate: string;
+  defaultEndDate: string;
+  defaultExportDirectory: string;
+  canRun: boolean;
+  hint: string;
+}
+
+export interface ServiceStationFlowCategoryRow {
+  id: string;
+  category: string;
+  count: number;
+}
+
+export interface ServiceStationFlowZoneRow {
+  id: string;
+  warZone: string;
+  startOperationsCount: number;
+  endOperationsCount: number;
+  operationsDelta: number;
+  startRecruitCount: number;
+  endRecruitCount: number;
+  recruitDelta: number;
+  startTotalCount: number;
+  endTotalCount: number;
+  totalDelta: number;
+  leftCount: number;
+  otherHrOutCount: number;
+  otherHrInCount: number;
+  opsToRecruitCount: number;
+  recruitToOpsCount: number;
+}
+
+export interface ServiceStationFlowDetailRow {
+  id: string;
+  employeeNo: string;
+  employeeName: string;
+  startSubdomain: string;
+  startWarZone: string;
+  startOrgUnitName: string;
+  startDepartmentId: string;
+  startPositionName: string;
+  startStandardPositionName: string;
+  startHrType: string;
+  startOrgPathName: string;
+  movementType: string;
+  endSubdomain: string;
+  endWarZone: string;
+  endOrgUnitName: string;
+  endDepartmentId: string;
+  endPositionName: string;
+  endStandardPositionName: string;
+  endHrType: string;
+  endOrgPathName: string;
+}
+
+export interface ServiceStationFlowSummary {
+  startTargetCount: number;
+  endTargetCount: number;
+  leftCount: number;
+  otherHrOutCount: number;
+  nonHrOutCount: number;
+  targetSwitchCount: number;
+  sameSubdomainSameWarZoneCount: number;
+  sameSubdomainCrossWarZoneCount: number;
+  otherHrInCount: number;
+  nonHrInCount: number;
+  newInCount: number;
+}
+
+export interface ServiceStationFlowExportInfo {
+  fileName: string;
+  filePath: string;
+  fileSize: number;
+  exportedAt: string;
+}
+
+export interface ServiceStationFlowReportRequest {
+  startDate: string;
+  endDate: string;
+  saveAsPath: string;
+}
+
+export interface ServiceStationFlowReportResult {
+  startDate: string;
+  endDate: string;
+  summary: ServiceStationFlowSummary;
+  summaryRows: Array<{ id: string; metric: string; value: number }>;
+  outflowCategoryRows: ServiceStationFlowCategoryRow[];
+  inflowCategoryRows: ServiceStationFlowCategoryRow[];
+  otherHrOutDestinationRows: ServiceStationFlowCategoryRow[];
+  otherHrInSourceRows: ServiceStationFlowCategoryRow[];
+  zoneSummaryRows: ServiceStationFlowZoneRow[];
+  leftRows: ServiceStationFlowDetailRow[];
+  otherHrOutRows: ServiceStationFlowDetailRow[];
+  targetFlowRows: ServiceStationFlowDetailRow[];
+  otherHrInRows: ServiceStationFlowDetailRow[];
+  exportInfo: ServiceStationFlowExportInfo | null;
+}

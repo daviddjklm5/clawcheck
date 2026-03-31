@@ -8,10 +8,12 @@ __all__ = [
     "build_person_attributes_enhanced_headers",
     "build_person_attributes_enhanced_query",
     "build_rule_stats",
+    "build_service_station_flow_report",
     "export_audit_distribution_workbook",
     "load_audit_distribution_workbook_data",
     "render_person_attributes_enhanced_workbook",
     "render_audit_distribution_workbook",
+    "render_service_station_flow_workbook",
 ]
 
 
@@ -32,6 +34,11 @@ def __getattr__(name: str):
         "render_audit_distribution_workbook",
     }:
         from . import audit_distribution as module
+    elif name in {
+        "build_service_station_flow_report",
+        "render_service_station_flow_workbook",
+    }:
+        from . import service_station_flow as module
     else:
         from . import person_attributes_enhanced as module
 

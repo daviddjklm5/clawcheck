@@ -22,6 +22,7 @@ import FactCheckOutlinedIcon from "@mui/icons-material/FactCheckOutlined";
 import InsightsOutlinedIcon from "@mui/icons-material/InsightsOutlined";
 import GridViewOutlinedIcon from "@mui/icons-material/GridViewOutlined";
 import AccountTreeOutlinedIcon from "@mui/icons-material/AccountTreeOutlined";
+import AssessmentOutlinedIcon from "@mui/icons-material/AssessmentOutlined";
 import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
@@ -49,6 +50,7 @@ type NavGroupItem = {
 type NavEntry = NavLeafItem | NavGroupItem;
 
 const EHR_APPROVAL_LABEL = "EHR权限审批";
+const REPORT_CENTER_LABEL = "报表中心";
 
 const navItems: NavEntry[] = [
   {
@@ -98,6 +100,31 @@ const navItems: NavEntry[] = [
     description: "浏览器运行参数、路径与数据库摘要",
     icon: <SettingsSuggestOutlinedIcon />,
   },
+  {
+    kind: "group",
+    id: "reportCenter",
+    label: REPORT_CENTER_LABEL,
+    description: "专题报表模块与导出入口",
+    icon: <AssessmentOutlinedIcon />,
+    children: [
+      {
+        kind: "item",
+        path: "/report-center/service-station-analysis",
+        label: "服务站分析",
+        description: "查看模块说明和已上线报表目录",
+        icon: <AssessmentOutlinedIcon />,
+        parentLabel: REPORT_CENTER_LABEL,
+      },
+      {
+        kind: "item",
+        path: "/report-center/service-station-flow",
+        label: "服务站人员流动表",
+        description: "按两期历史快照分析服务站岗位人员流动",
+        icon: <AssessmentOutlinedIcon />,
+        parentLabel: REPORT_CENTER_LABEL,
+      },
+    ],
+  },
 ];
 
 function isNavGroup(item: NavEntry): item is NavGroupItem {
@@ -110,6 +137,7 @@ export function AppShell() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({
     ehrApproval: false,
+    reportCenter: false,
   });
   const location = useLocation();
   const navigate = useNavigate();

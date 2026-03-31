@@ -21,6 +21,12 @@ from automation.reporting.low_score_feedback import (
     display_summary_conclusion,
 )
 from automation.rules.role_facts import build_detail_role_facts
+from automation.utils.war_zone import (
+    HR_SERVICE_CENTER_PATH_MARKER,
+    HR_SERVICE_DEPARTMENT_PATH_MARKER,
+    HR_SERVICE_PATH_PREFIX_TO_WAR_ZONE,
+    resolve_person_war_zone,
+)
 
 try:
     import psycopg
@@ -130,6 +136,7 @@ PERSON_ATTRIBUTES_COLUMNS = {
     "employee_name": "姓名",
     "department_id": "部门ID",
     "org_unit_name": "组织单位",
+    "war_zone": "所属战区",
     "employee_group": "员工组",
     "employee_subgroup": "员工子组",
     "level1_function_name": "一级职能名称",
@@ -432,6 +439,50 @@ class _PostgresStoreBase:
         )
         row = cursor.fetchone()
         return bool(row[0]) if row else False
+
+    @classmethod
+    def _backfill_person_attribute_war_zone_from_org_path(
+        cls,
+        cursor,
+        table_name: str,
+    ) -> None:
+        if not cls._table_exists(cursor, table_name):
+            return
+        if not cls._column_exists(cursor, table_name, PERSON_ATTRIBUTES_COLUMNS["war_zone"]):
+            return
+        if not cls._column_exists(cursor, table_name, PERSON_ATTRIBUTES_COLUMNS["org_path_name"]):
+            return
+
+        war_zone_column = cls._quote_identifier(PERSON_ATTRIBUTES_COLUMNS["war_zone"])
+        org_path_column = cls._quote_identifier(PERSON_ATTRIBUTES_COLUMNS["org_path_name"])
+
+        case_clauses: list[str] = []
+        case_params: list[str] = []
+        where_clauses: list[str] = []
+        where_params: list[str] = []
+        for prefix, war_zone in HR_SERVICE_PATH_PREFIX_TO_WAR_ZONE.items():
+            pattern = f"%{HR_SERVICE_CENTER_PATH_MARKER}{prefix}{HR_SERVICE_DEPARTMENT_PATH_MARKER}%"
+            case_clauses.append(f"WHEN {org_path_column} LIKE %s THEN %s")
+            case_params.extend([pattern, war_zone])
+            where_clauses.append(f"{org_path_column} LIKE %s")
+            where_params.append(pattern)
+
+        if not case_clauses:
+            return
+
+        cursor.execute(
+            f"""
+            UPDATE {cls._quote_identifier(table_name)}
+            SET {war_zone_column} = CASE
+                {' '.join(case_clauses)}
+                ELSE {war_zone_column}
+            END
+            WHERE ({war_zone_column} IS NULL OR BTRIM({war_zone_column}) = '')
+              AND NULLIF(BTRIM({org_path_column}), '') IS NOT NULL
+              AND ({' OR '.join(where_clauses)})
+            """,
+            [*case_params, *where_params],
+        )
 
     @classmethod
     def _build_org_scope_summary_rows(
@@ -912,6 +963,7 @@ class PostgresPermissionStore(_PostgresStoreBase):
                 "org_path_name": None,
                 "department_id": None,
                 "org_unit_name": None,
+                "war_zone": None,
                 "wanyu_city_sales_department": None,
                 "responsible_hr_employee_no": None,
                 "responsible_hr_import_batch_no": None,
@@ -991,17 +1043,20 @@ class PostgresPermissionStore(_PostgresStoreBase):
         ):
             has_wanyu_city_sales_department = self._column_exists(cursor, "组织属性查询", "万御城市营业部")
             has_org_unit_name = self._column_exists(cursor, "组织属性查询", "组织单位")
-            if has_wanyu_city_sales_department or has_org_unit_name:
+            has_war_zone = self._column_exists(cursor, "组织属性查询", "所属战区")
+            if has_wanyu_city_sales_department or has_org_unit_name or has_war_zone:
                 wanyu_city_sales_department_select = (
                     '"万御城市营业部"' if has_wanyu_city_sales_department else 'NULL::TEXT AS "万御城市营业部"'
                 )
                 org_unit_name_select = '"组织单位"' if has_org_unit_name else 'NULL::TEXT AS "组织单位"'
+                war_zone_select = '"所属战区"' if has_war_zone else 'NULL::TEXT AS "所属战区"'
                 cursor.execute(
                     f"""
                     SELECT
                         BTRIM("行政组织编码") AS org_code,
                         {wanyu_city_sales_department_select},
-                        {org_unit_name_select}
+                        {org_unit_name_select},
+                        {war_zone_select}
                     FROM "组织属性查询"
                     WHERE BTRIM("行政组织编码") = ANY(%s)
                     """,
@@ -1011,6 +1066,7 @@ class PostgresPermissionStore(_PostgresStoreBase):
                     org_code: {
                         "wanyu_city_sales_department": self._strip_text(row[1]),
                         "org_unit_name": self._strip_text(row[2]),
+                        "war_zone": self._strip_text(row[3]),
                     }
                     for row in cursor.fetchall()
                     if (org_code := self._strip_text(row[0])) is not None
@@ -1055,6 +1111,7 @@ class PostgresPermissionStore(_PostgresStoreBase):
             org_attr = org_attr_by_code.get(department_id, {})
             profile["wanyu_city_sales_department"] = org_attr.get("wanyu_city_sales_department")
             profile["org_unit_name"] = org_attr.get("org_unit_name")
+            profile["war_zone"] = resolve_person_war_zone(org_attr.get("war_zone"), profile.get("org_path_name"))
             profile["is_responsible_hr"] = employee_no in responsible_hr_employee_nos
             profile["responsible_hr_employee_no"] = employee_no if profile["is_responsible_hr"] else None
             profile["responsible_hr_import_batch_no"] = responsible_hr_import_batch_no if profile["is_responsible_hr"] else None
@@ -2434,6 +2491,7 @@ class PostgresPersonAttributesStore(_PostgresStoreBase):
         if self._column_exists(cursor, "人员属性查询", "employee_no"):
             raise RuntimeError('Detected legacy English schema for "人员属性查询". Run automation/sql/012_rename_columns_to_cn_fixed_schema.sql first.')
         cursor.execute(self.schema_sql.read_text(encoding="utf-8"))
+        self._backfill_person_attribute_war_zone_from_org_path(cursor, "人员属性查询")
 
     def ensure_table(self) -> None:
         with self.connect() as connection:
@@ -2468,6 +2526,7 @@ class PostgresPersonAttributesStore(_PostgresStoreBase):
             "employee_name": self._null_if_blank(profile.get("employee_name")),
             "department_id": self._null_if_blank(profile.get("department_id")),
             "org_unit_name": self._null_if_blank(profile.get("org_unit_name")),
+            "war_zone": resolve_person_war_zone(profile.get("war_zone"), profile.get("org_path_name")),
             "employee_group": self._null_if_blank(profile.get("employee_group")),
             "employee_subgroup": self._null_if_blank(profile.get("employee_subgroup")),
             "level1_function_name": self._null_if_blank(profile.get("level1_function_name")),
@@ -2512,6 +2571,7 @@ class PostgresPersonAttributesStore(_PostgresStoreBase):
             PERSON_ATTRIBUTES_COLUMNS["employee_name"],
             PERSON_ATTRIBUTES_COLUMNS["department_id"],
             PERSON_ATTRIBUTES_COLUMNS["org_unit_name"],
+            PERSON_ATTRIBUTES_COLUMNS["war_zone"],
             PERSON_ATTRIBUTES_COLUMNS["employee_group"],
             PERSON_ATTRIBUTES_COLUMNS["employee_subgroup"],
             PERSON_ATTRIBUTES_COLUMNS["level1_function_name"],
@@ -2545,6 +2605,7 @@ class PostgresPersonAttributesStore(_PostgresStoreBase):
                 %(employee_name)s,
                 %(department_id)s,
                 %(org_unit_name)s,
+                %(war_zone)s,
                 %(employee_group)s,
                 %(employee_subgroup)s,
                 %(level1_function_name)s,
@@ -2586,6 +2647,7 @@ class PostgresPersonAttributesHistoryStore(_PostgresStoreBase):
 
     def _ensure_schema(self, cursor) -> None:
         cursor.execute(self.schema_sql.read_text(encoding="utf-8"))
+        self._backfill_person_attribute_war_zone_from_org_path(cursor, "人员属性查询历史")
 
     def ensure_table(self) -> None:
         with self.connect() as connection:
