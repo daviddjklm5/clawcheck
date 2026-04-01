@@ -12,6 +12,7 @@ $ErrorActionPreference = "Stop"
 
 $RepoRoot = Get-RepoRoot -ScriptRoot $PSScriptRoot
 $WebuiDir = Join-Path $RepoRoot "webui"
+$SupplyChainCheckScript = Join-Path $RepoRoot "automation\scripts\check_webui_supply_chain_ioc.js"
 $Files = Get-ServiceFiles -RepoRoot $RepoRoot -ServiceName "webui_dev"
 $Existing = Read-ServiceMetadata -MetadataPath $Files.MetadataPath
 if ($null -ne $Existing -and (Test-ProcessAlive -ProcessId ([int]$Existing.pid))) {
@@ -33,6 +34,16 @@ $NodeEnvState = Push-NodeEnvironment -NodeResolution $NodeResolution
 Push-Location $WebuiDir
 try {
     Invoke-WebuiNodePreflight -NodeResolution $NodeResolution
+
+    if (Test-Path $NodeResolution.NodeExe) {
+        & $NodeResolution.NodeExe $SupplyChainCheckScript --webui-dir $WebuiDir
+    }
+    else {
+        & node $SupplyChainCheckScript --webui-dir $WebuiDir
+    }
+    if ($LASTEXITCODE -ne 0) {
+        throw "WebUI supply-chain IOC check failed."
+    }
 
     if ($Install -or -not (Test-Path (Join-Path $WebuiDir "node_modules"))) {
         & $NodeResolution.NpmCommand ci

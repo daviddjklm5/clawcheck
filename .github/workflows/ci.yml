@@ -36,6 +36,11 @@ jobs:
           .\.venv-win\Scripts\python.exe -m pip install -r automation\requirements-dev.txt
         shell: powershell
 
+      - name: Check webui npm supply chain IOC
+        run: node ..\automation\scripts\check_webui_supply_chain_ioc.js --webui-dir .
+        shell: powershell
+        working-directory: webui
+
       - name: Install webui deps
         run: npm ci
         shell: powershell

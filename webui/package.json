@@ -4,9 +4,11 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "preinstall": "node ../automation/scripts/check_webui_supply_chain_ioc.js --webui-dir .",
     "preflight": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ..\\automation\\scripts\\preflight_webui_node.ps1",
+    "security:check-supply-chain": "node ../automation/scripts/check_webui_supply_chain_ioc.js --webui-dir .",
     "dev": "vite",
-    "build": "npm run preflight && tsc --noEmit && vite build",
+    "build": "npm run preflight && npm run security:check-supply-chain && tsc --noEmit && vite build",
     "preview": "vite preview"
   },
   "dependencies": {

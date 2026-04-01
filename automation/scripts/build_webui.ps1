@@ -9,7 +9,9 @@ $ErrorActionPreference = "Stop"
 $HelperPath = Join-Path $PSScriptRoot "dev_runtime_helpers.ps1"
 . $HelperPath
 
+$RepoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\.."))
 $WebuiDir = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\..\webui"))
+$SupplyChainCheckScript = Join-Path $RepoRoot "automation\scripts\check_webui_supply_chain_ioc.js"
 
 Push-Location $WebuiDir
 try {
@@ -18,6 +20,16 @@ try {
     Write-Host "NodeDir=$($NodeResolution.NodeDir)"
     $NodeEnvState = Push-NodeEnvironment -NodeResolution $NodeResolution
     Invoke-WebuiNodePreflight -NodeResolution $NodeResolution
+
+    if (Test-Path $NodeResolution.NodeExe) {
+        & $NodeResolution.NodeExe $SupplyChainCheckScript --webui-dir $WebuiDir
+    }
+    else {
+        & node $SupplyChainCheckScript --webui-dir $WebuiDir
+    }
+    if ($LASTEXITCODE -ne 0) {
+        throw "WebUI supply-chain IOC check failed."
+    }
 
     if ($Install -or -not (Test-Path (Join-Path $WebuiDir "node_modules"))) {
         & $NodeResolution.NpmCommand ci
