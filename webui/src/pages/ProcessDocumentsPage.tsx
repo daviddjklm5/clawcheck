@@ -361,7 +361,7 @@ export function ProcessDocumentsPage() {
   const [batchRejectConfirmOpen, setBatchRejectConfirmOpen] = useState(false);
   const [batchApprovalResult, setBatchApprovalResult] = useState<ProcessBatchApprovalResponse | null>(null);
   const [batchApprovalError, setBatchApprovalError] = useState<string | null>(null);
-  const [runHeaded, setRunHeaded] = useState(true);
+  const [runHeaded, setRunHeaded] = useState(false);
   const [todoSyncing, setTodoSyncing] = useState(false);
   const [todoSyncResult, setTodoSyncResult] = useState<ProcessTodoSyncResponse | null>(null);
   const [todoSyncError, setTodoSyncError] = useState<string | null>(null);

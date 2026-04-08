@@ -98,7 +98,7 @@ export function MasterDataPage() {
   const [refreshVersion, setRefreshVersion] = useState(0);
 
   const [taskType, setTaskType] = useState<"roster" | "orglist" | "rolecatalog">("roster");
-  const [headed, setHeaded] = useState(true);
+  const [headed, setHeaded] = useState(false);
   const [dryRun, setDryRun] = useState(false);
   const [inputFile, setInputFile] = useState("");
   const [skipExport, setSkipExport] = useState(false);

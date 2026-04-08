@@ -217,7 +217,7 @@ export function CollectDocumentsPage() {
   const [refreshVersion, setRefreshVersion] = useState(0);
   const [runDocumentNo, setRunDocumentNo] = useState("");
   const [runLimit, setRunLimit] = useState("100");
-  const [runHeaded, setRunHeaded] = useState(true);
+  const [runHeaded, setRunHeaded] = useState(false);
   const [runDryRun, setRunDryRun] = useState(false);
   const [runAutoAudit, setRunAutoAudit] = useState(true);
   const [runForceRecollect, setRunForceRecollect] = useState(false);
