@@ -34,6 +34,7 @@ PROD_DEFAULT_ACTIONS = {
     "login",
     "run",
     "collect",
+    "profile-change-audit",
     "roster",
     "orglist",
     "rolecatalog",
@@ -48,7 +49,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="iERP automation runner")
     parser.add_argument(
         "action",
-        choices=["check", "login", "run", "collect", "roster", "orglist", "rolecatalog", "dbinit", "audit", "sync-todo-status"],
+        choices=["check", "login", "run", "collect", "profile-change-audit", "roster", "orglist", "rolecatalog", "dbinit", "audit", "sync-todo-status"],
         help="Action to execute",
     )
     parser.add_argument("--config", default=DEFAULT_CONFIG_PATH, help="Settings YAML path")
@@ -69,7 +70,13 @@ def parse_args() -> argparse.Namespace:
         help="Comma-separated permission document numbers for audit action",
     )
     parser.add_argument("--limit", type=int, default=100, help="Maximum number of permission documents to collect")
+    parser.add_argument("--page-size", type=int, default=100, help="Target list pagination size")
     parser.add_argument("--dry-run", action="store_true", help="Collect data without writing PostgreSQL")
+    parser.add_argument(
+        "--download-attachments",
+        action="store_true",
+        help="Attempt attachment download when the action supports it",
+    )
     parser.add_argument(
         "--auto-audit",
         action="store_true",
@@ -629,6 +636,7 @@ def main() -> int:
             PostgresActiveRosterStore,
             PostgresOrganizationListStore,
             PostgresPersonAttributesStore,
+            PostgresPersonnelProfileChangeAuditStore,
             PostgresPermissionCatalogStore,
             PostgresPermissionStore,
             PostgresRiskTrustStore,
@@ -643,6 +651,7 @@ def main() -> int:
                 roster_store = PostgresActiveRosterStore(settings.db)
                 org_store = PostgresOrganizationListStore(settings.db)
                 person_attributes_store = PostgresPersonAttributesStore(settings.db)
+                personnel_profile_change_audit_store = PostgresPersonnelProfileChangeAuditStore(settings.db)
                 catalog_store = PostgresPermissionCatalogStore(settings.db)
                 risk_trust_store = PostgresRiskTrustStore(settings.db)
 
@@ -650,6 +659,7 @@ def main() -> int:
                 roster_store.ensure_table()
                 org_store.ensure_table()
                 person_attributes_store.ensure_table()
+                personnel_profile_change_audit_store.ensure_table()
                 risk_trust_store.ensure_table()
                 permission_catalog = catalog_store.seed_catalog()
                 summary = {
@@ -664,6 +674,9 @@ def main() -> int:
                         "城市所属战区",
                         "组织属性查询",
                         "权限列表",
+                        "人员档案修改审核单基本信息",
+                        "人员档案修改审核单区段字段",
+                        "人员档案修改审核单附件",
                         "申请单风险信任评估",
                         "申请单风险信任评估明细",
                     ],
@@ -749,6 +762,7 @@ def main() -> int:
     from automation.db.postgres import (
         PostgresActiveRosterStore,
         PostgresOrganizationListStore,
+        PostgresPersonnelProfileChangeAuditStore,
         PostgresPermissionCatalogStore,
         PostgresPermissionStore,
         PostgresRiskTrustStore,
@@ -756,6 +770,7 @@ def main() -> int:
     from automation.flows.active_roster_flow import ActiveRosterFlow
     from automation.flows.organization_quick_maintain_flow import OrganizationQuickMaintainFlow
     from automation.flows.ierp_flow import IerpFlow
+    from automation.flows.personnel_profile_change_audit_flow import PersonnelProfileChangeAuditFlow
     from automation.flows.permission_collect_flow import PermissionCollectFlow, TODO_HEADERS
     from automation.pages.home_page import HomePage
     from automation.pages.login_page import LoginPage
@@ -1318,6 +1333,96 @@ def main() -> int:
 
                     result_shot = save_screenshot(page, shots_dir, "collect_result")
                     logger.info("Collect completed. Screenshot: %s", result_shot)
+
+                elif args.action == "profile-change-audit":
+                    home_page.open()
+                    if not login_page.is_logged_in():
+                        logger.info("Stored session is not valid, relogin required")
+                        page = ensure_login(
+                            login_page,
+                            settings,
+                            settings.runtime.retries,
+                            settings.runtime.retry_wait_sec,
+                            retry_call,
+                            bound_pages=[login_page, home_page],
+                        )
+                        context.storage_state(path=str(state_file))
+                        logger.info("Auth state refreshed: %s", state_file)
+
+                    audit_flow = PersonnelProfileChangeAuditFlow(
+                        page=page,
+                        logger=logger,
+                        timeout_ms=settings.browser.timeout_ms,
+                        home_url=settings.app.home_url,
+                    )
+                    profile_downloads_dir = downloads_dir
+
+                    def _collect_profile_change_audit() -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+                        return audit_flow.collect_documents(
+                            limit=max(args.limit, 1),
+                            page_size=max(args.page_size, 1),
+                            screenshots_dir=shots_dir,
+                            downloads_dir=profile_downloads_dir,
+                            download_attachments=bool(args.download_attachments),
+                        )
+
+                    started_at = datetime.now()
+                    documents, failed_documents = retry_call(
+                        _collect_profile_change_audit,
+                        retries=settings.runtime.retries,
+                        wait_sec=settings.runtime.retry_wait_sec,
+                    )
+
+                    persisted_documents = documents
+                    write_failed_documents: list[dict[str, str]] = []
+                    if args.dry_run:
+                        logger.info("Dry-run enabled; skipping PostgreSQL write for profile-change-audit")
+                    elif documents:
+                        store = PostgresPersonnelProfileChangeAuditStore(settings.db)
+                        persisted_documents, write_failed_documents = store.write_documents(documents)
+                        logger.info(
+                            "Persisted %s personnel profile change audit document(s) to PostgreSQL",
+                            len(persisted_documents),
+                        )
+                    else:
+                        logger.info("No personnel profile change audit documents were collected successfully")
+
+                    if write_failed_documents:
+                        failed_documents.extend(write_failed_documents)
+
+                    finished_at = datetime.now()
+                    payload = {
+                        "status": "succeeded" if persisted_documents or args.dry_run else ("failed" if failed_documents else "empty"),
+                        "action": "profile-change-audit",
+                        "started_at": started_at.strftime("%Y-%m-%d %H:%M:%S"),
+                        "finished_at": finished_at.strftime("%Y-%m-%d %H:%M:%S"),
+                        "dry_run": bool(args.dry_run),
+                        "limit": max(args.limit, 1),
+                        "page_size": max(args.page_size, 1),
+                        "download_attachments": bool(args.download_attachments),
+                        "document_count": len(persisted_documents),
+                        "failed_document_count": len(failed_documents),
+                        "documents": persisted_documents,
+                        "failed_documents": failed_documents,
+                    }
+                    dump_path = (
+                        resolve_path(args.dump_json)
+                        if args.dump_json
+                        else logs_dir / f"profile_change_audit_{timestamp_slug()}.json"
+                    )
+                    dump_path.parent.mkdir(parents=True, exist_ok=True)
+                    dump_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+                    logger.info(
+                        "Profile change audit completed. Success=%s failed=%s JSON=%s",
+                        len(persisted_documents),
+                        len(failed_documents),
+                        dump_path,
+                    )
+                    if failed_documents and not persisted_documents:
+                        raise RuntimeError("No personnel profile change audit documents were persisted successfully")
+
+                    result_shot = save_screenshot(page, shots_dir, "profile_change_audit_result")
+                    logger.info("Profile change audit screenshot: %s", result_shot)
 
                 elif args.action == "sync-todo-status":
                     sync_started_at = datetime.now()

@@ -109,7 +109,7 @@ Get-Content .\.venv-win\pyvenv.cfg
 
 默认口径：
 
-- `check/login/run/collect/roster/orglist/rolecatalog/dbinit/audit/sync-todo-status`
+- `check/login/run/collect/profile-change-audit/roster/orglist/rolecatalog/dbinit/audit/sync-todo-status`
 - 若未显式传入 `--config` / `--credentials`，优先使用 `settings.prod.yaml` 与 `credentials.prod.local.yaml`
 
 ### 4.1 GitHub 本地配置
@@ -156,6 +156,12 @@ git push origin main
 .\.venv-win\Scripts\python.exe .\automation\scripts\run.py collect --limit 20 --headless
 ```
 
+人员档案修改审核采集：
+
+```powershell
+.\.venv-win\Scripts\python.exe .\automation\scripts\run.py profile-change-audit --limit 20 --page-size 100 --headless
+```
+
 在职花名册同步：
 
 ```powershell
@@ -200,6 +206,12 @@ git push origin main
 
 ```powershell
 powershell.exe -ExecutionPolicy Bypass -File .\automation\scripts\run_collect_task.ps1 -Headless
+```
+
+人员档案修改审核：
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\automation\scripts\run_profile_change_audit_task.ps1 -Headless
 ```
 
 花名册：

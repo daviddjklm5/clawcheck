@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("check", "login", "run", "collect", "roster", "orglist", "rolecatalog", "dbinit", "audit", "sync-todo-status")]
+    [ValidateSet("check", "login", "run", "collect", "profile-change-audit", "roster", "orglist", "rolecatalog", "dbinit", "audit", "sync-todo-status")]
     [string]$Action,
     [string]$VenvDir = ".venv-win",
     [string]$Config = "",
@@ -9,6 +9,7 @@ param(
     [string]$DumpJson = "",
     [string]$LogDir = "automation\logs\windows_tasks",
     [int]$Limit = 100,
+    [int]$PageSize = 100,
     [string]$DocumentNo = "",
     [string]$DocumentNos = "",
     [string]$DownloadsDir = "",
@@ -23,6 +24,7 @@ param(
     [switch]$Headed,
     [switch]$Headless,
     [switch]$DryRun,
+    [switch]$DownloadAttachments,
     [switch]$ForceRecollect,
     [switch]$AutoAudit,
     [switch]$AutoBatchApprove,
@@ -53,6 +55,12 @@ switch ($Action) {
         if ($ForceRecollect) { $RunnerExtraArgs += "--force-recollect" }
         if ($AutoAudit) { $RunnerExtraArgs += "--auto-audit" }
         if ($AutoBatchApprove) { $RunnerExtraArgs += "--auto-batch-approve" }
+    }
+    "profile-change-audit" {
+        $RunnerExtraArgs += @("--limit", [string]$Limit)
+        $RunnerExtraArgs += @("--page-size", [string]$PageSize)
+        if ($DownloadsDir) { $RunnerExtraArgs += @("--downloads-dir", $DownloadsDir) }
+        if ($DownloadAttachments) { $RunnerExtraArgs += "--download-attachments" }
     }
     "audit" {
         $RunnerExtraArgs += @("--limit", [string]$Limit)
