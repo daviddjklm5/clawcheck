@@ -3,6 +3,7 @@ import { Navigate, createBrowserRouter } from "react-router-dom";
 import { AppShell } from "./layout/AppShell";
 import { CollectDocumentsPage } from "./pages/CollectDocumentsPage";
 import { MasterDataPage } from "./pages/MasterDataPage";
+import { ProfileChangeAuditPage } from "./pages/ProfileChangeAuditPage";
 import { ProcessAnalysisPage } from "./pages/ProcessAnalysisPage";
 import { ProcessDocumentsPage } from "./pages/ProcessDocumentsPage";
 import { ReportCenterPage } from "./pages/ReportCenterPage";
@@ -26,6 +27,10 @@ export const router = createBrowserRouter([
       {
         path: "collect-documents",
         element: <CollectDocumentsPage />,
+      },
+      {
+        path: "profile-change-audit",
+        element: <ProfileChangeAuditPage />,
       },
       {
         path: "process-documents",

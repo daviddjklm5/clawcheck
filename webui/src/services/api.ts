@@ -12,6 +12,10 @@ import type {
   ProcessAuditRunSummary,
   ProcessApprovalRequest,
   ProcessApprovalResponse,
+  ProfileChangeAuditDetail,
+  ProfileChangeAuditRunRequest,
+  ProfileChangeAuditRunSummary,
+  ProfileChangeAuditWorkbench,
   ReportCenterCatalog,
   ProcessBatchApprovalRequest,
   ProcessBatchApprovalResponse,
@@ -121,6 +125,20 @@ export const dashboardApi = {
   },
   startCollectTask(payload: CollectRunRequest): Promise<CollectRunSummary> {
     return request<CollectRunSummary>("/documents/collect-workbench/run", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+  getProfileChangeAuditWorkbench(): Promise<ProfileChangeAuditWorkbench> {
+    return request<ProfileChangeAuditWorkbench>("/documents/profile-change-audit-workbench");
+  },
+  getProfileChangeAuditDocumentDetail(documentNo: string): Promise<ProfileChangeAuditDetail> {
+    return request<ProfileChangeAuditDetail>(
+      `/documents/profile-change-audit-workbench/${encodeURIComponent(documentNo)}`,
+    );
+  },
+  startProfileChangeAuditTask(payload: ProfileChangeAuditRunRequest): Promise<ProfileChangeAuditRunSummary> {
+    return request<ProfileChangeAuditRunSummary>("/documents/profile-change-audit-workbench/run", {
       method: "POST",
       body: JSON.stringify(payload),
     });
