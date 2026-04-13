@@ -8,7 +8,12 @@ import subprocess
 from typing import Any
 
 from automation.api.config_summary import REPO_ROOT, _load_runtime_settings
-from automation.db.postgres import PERSON_ATTRIBUTES_HISTORY_COLUMNS, PostgresPersonAttributesHistoryStore
+from automation.db.postgres import (
+    APPLICANT_HR_SUBDOMAIN_STATION_HR_OPS,
+    APPLICANT_HR_SUBDOMAIN_STATION_RECRUITING,
+    PERSON_ATTRIBUTES_HISTORY_COLUMNS,
+    PostgresPersonAttributesHistoryStore,
+)
 from automation.reporting import (
     build_service_station_flow_report,
     render_person_attributes_enhanced_workbook,
@@ -19,7 +24,10 @@ SERVICE_STATION_FLOW_REPORT_ID = "service-station-flow"
 PERSON_ATTRIBUTES_HISTORY_REPORT_ID = "person-attributes-history"
 DEFAULT_REPORT_EXPORT_DIRNAME = "report_exports"
 
-_TARGET_HR_SUBDOMAINS: tuple[str, str] = ("服务站人事运营", "服务站招聘")
+_TARGET_HR_SUBDOMAINS: tuple[str, str] = (
+    APPLICANT_HR_SUBDOMAIN_STATION_HR_OPS,
+    APPLICANT_HR_SUBDOMAIN_STATION_RECRUITING,
+)
 _PERSON_ATTRIBUTES_HISTORY_EXCLUDE_KEYS: frozenset[str] = frozenset({"created_at", "updated_at"})
 
 _SNAPSHOT_QUERY_COLUMNS: tuple[tuple[str, str], ...] = (
