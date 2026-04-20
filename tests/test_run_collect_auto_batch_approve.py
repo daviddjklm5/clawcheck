@@ -7,12 +7,28 @@ import unittest
 from unittest.mock import Mock, patch
 
 from automation.scripts.run import (
+    _resolve_collect_auto_batch_approve_source_document_nos,
     _resolve_collect_auto_batch_approve_candidates,
     _run_collect_auto_batch_approve,
 )
 
 
 class RunCollectAutoBatchApproveTest(unittest.TestCase):
+    def test_resolve_collect_auto_batch_approve_source_document_nos_includes_skipped_documents(self) -> None:
+        result = _resolve_collect_auto_batch_approve_source_document_nos(
+            documents=[
+                {"basic_info": {"document_no": "RA-001"}},
+                {"basic_info": {"document_no": "RA-002"}},
+            ],
+            skipped_documents=[
+                {"document_no": "RA-002"},
+                {"document_no": "RA-003"},
+                {"document_no": ""},
+            ],
+        )
+
+        self.assertEqual(result, ["RA-001", "RA-002", "RA-003"])
+
     def test_resolve_collect_auto_batch_approve_candidates_filters_by_status_and_score(self) -> None:
         fake_store = Mock()
         fake_store.fetch_process_workbench.return_value = {

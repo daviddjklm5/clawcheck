@@ -568,8 +568,10 @@ def _execute_document_approval_in_active_session(
             response_payload["status"] = "failed"
             response_payload["finishedAt"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             response_payload["durationMs"] = round((time.perf_counter() - started_perf) * 1000, 1)
+            suffix = "；已驳回状态不会重新写回待处理。" if todo_process_status == "已驳回" else ""
             response_payload["message"] = (
                 f"该单据最近一次待办同步结果为“{todo_process_status}”，当前账号待办列表中未找到。"
+                f"{suffix}"
                 "如怀疑单据已驳回后重新提交，请先点击“同步待办状态”后再重试。"
             )
             raise ValueError(response_payload["message"])

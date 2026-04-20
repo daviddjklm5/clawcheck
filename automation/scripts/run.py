@@ -137,6 +137,22 @@ def normalize_document_nos(document_no: str, document_nos_arg: str) -> list[str]
     return ordered
 
 
+def build_todo_process_status_by_document_no(
+    *,
+    project_document_nos: list[str],
+    ehr_permission_document_no_set: set[str],
+    existing_sync_states: dict[str, dict[str, object]],
+) -> dict[str, str]:
+    status_by_document_no: dict[str, str] = {}
+    for document_no in project_document_nos:
+        existing_status = str(existing_sync_states.get(document_no, {}).get("todo_process_status") or "").strip()
+        if existing_status == "已驳回":
+            status_by_document_no[document_no] = "已驳回"
+            continue
+        status_by_document_no[document_no] = "待处理" if document_no in ehr_permission_document_no_set else "已处理"
+    return status_by_document_no
+
+
 def parse_iso_date(value: str, *, field_name: str) -> date:
     normalized = str(value or "").strip()
     if not normalized:
@@ -406,6 +422,34 @@ def _parse_score_value(raw_value: object) -> float | None:
         return round(float(raw_value), 1)
     except (TypeError, ValueError):
         return None
+
+
+def _resolve_collect_auto_batch_approve_source_document_nos(
+    *,
+    documents: list[dict[str, object]],
+    skipped_documents: list[dict[str, str]],
+) -> list[str]:
+    normalized_document_nos: list[str] = []
+    seen_document_nos: set[str] = set()
+
+    for document in documents:
+        basic_info = document.get("basic_info")
+        if not isinstance(basic_info, dict):
+            continue
+        document_no = str(basic_info.get("document_no") or "").strip()
+        if not document_no or document_no in seen_document_nos:
+            continue
+        seen_document_nos.add(document_no)
+        normalized_document_nos.append(document_no)
+
+    for skipped_document in skipped_documents:
+        document_no = str(skipped_document.get("document_no") or "").strip()
+        if not document_no or document_no in seen_document_nos:
+            continue
+        seen_document_nos.add(document_no)
+        normalized_document_nos.append(document_no)
+
+    return normalized_document_nos
 
 
 def _resolve_collect_auto_batch_approve_candidates(
@@ -1242,11 +1286,14 @@ def main() -> int:
                         dry_run=bool(args.dry_run),
                         no_pending=not target_document_nos,
                     )
-                    collected_document_nos = [
-                        str(document.get("basic_info", {}).get("document_no") or "").strip()
-                        for document in documents
-                        if isinstance(document.get("basic_info"), dict)
-                    ]
+                    collected_document_nos = _resolve_collect_auto_batch_approve_source_document_nos(
+                        documents=documents,
+                        skipped_documents=[],
+                    )
+                    auto_batch_approve_document_nos = _resolve_collect_auto_batch_approve_source_document_nos(
+                        documents=documents,
+                        skipped_documents=skipped_documents,
+                    )
                     auto_audit_status = ""
                     if args.auto_audit and not args.dry_run and documents:
                         audit_result = _run_incremental_collect_audit(
@@ -1260,8 +1307,8 @@ def main() -> int:
                         if auto_audit_status != "succeeded":
                             result_code = 1
 
-                    if args.auto_batch_approve and not args.dry_run and documents:
-                        if args.auto_audit and auto_audit_status != "succeeded":
+                    if args.auto_batch_approve and not args.dry_run and auto_batch_approve_document_nos:
+                        if args.auto_audit and documents and auto_audit_status != "succeeded":
                             auto_batch_approve_result = {
                                 "status": "skipped",
                                 "message": "自动批量批准已跳过：本轮自动评估未成功。",
@@ -1269,7 +1316,7 @@ def main() -> int:
                         else:
                             auto_batch_approve_result = _run_collect_auto_batch_approve(
                                 settings=settings,
-                                document_nos=collected_document_nos,
+                                document_nos=auto_batch_approve_document_nos,
                                 logger=logger,
                             )
                         collect_state_message = f"{collect_state_message}；{auto_batch_approve_result['message']}"
@@ -1373,12 +1420,13 @@ def main() -> int:
                         )
 
                     ehr_permission_document_no_set = set(ehr_permission_document_nos)
-                    status_by_document_no = {
-                        document_no: ("待处理" if document_no in ehr_permission_document_no_set else "已处理")
-                        for document_no in project_document_nos
-                    }
+                    status_by_document_no = build_todo_process_status_by_document_no(
+                        project_document_nos=project_document_nos,
+                        ehr_permission_document_no_set=ehr_permission_document_no_set,
+                        existing_sync_states=existing_sync_states,
+                    )
                     pending_count = sum(1 for status in status_by_document_no.values() if status == "待处理")
-                    processed_count = sum(1 for status in status_by_document_no.values() if status == "已处理")
+                    processed_count = sum(1 for status in status_by_document_no.values() if status in {"已处理", "已驳回"})
                     changed_count = sum(
                         1
                         for document_no, status in status_by_document_no.items()

@@ -1890,6 +1890,24 @@ class PostgresPermissionStore(_PostgresStoreBase):
         todo_process_status = self._strip_text(basic.get("todo_process_status")) or "待处理"
         todo_status_updated_at = self._null_if_blank(basic.get("todo_status_updated_at")) or datetime.now()
 
+        if write_mode != "recollect":
+            cursor.execute(
+                f"""
+                SELECT
+                    {self._quote_identifier(BASIC_INFO_COLUMNS["todo_process_status"])},
+                    {self._quote_identifier(BASIC_INFO_COLUMNS["todo_status_updated_at"])}
+                FROM {BASIC_INFO_TABLE}
+                WHERE {self._quote_identifier(BASIC_INFO_COLUMNS["document_no"])} = %s
+                """,
+                (document_no,),
+            )
+            existing_row = cursor.fetchone()
+            if existing_row:
+                existing_todo_process_status = self._strip_text(existing_row[0])
+                if existing_todo_process_status == "已驳回":
+                    todo_process_status = "已驳回"
+                    todo_status_updated_at = existing_row[1] or todo_status_updated_at
+
         if write_mode == "recollect":
             cursor.execute(
                 f'DELETE FROM {BASIC_INFO_TABLE} WHERE {self._quote_identifier(BASIC_INFO_COLUMNS["document_no"])} = %s',
