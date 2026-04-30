@@ -1208,10 +1208,23 @@ class PermissionCollectFlow:
     def _ensure_todo_page_size(self, page_size: int, timeout_ms: int | None = None) -> None:
         target_text = f"{page_size}条/页"
         effective_timeout_ms = max(int(timeout_ms or self.timeout_ms), 1)
-        trigger = self.page.locator(
-            "#gridview .kd-pagination-selector button.kd-dropdown-trigger.kd-pagination-selector-size.kd-pagination-options-dropdown"
-        ).first
-        trigger.wait_for(state="visible", timeout=effective_timeout_ms)
+        trigger_selectors = (
+            "#gridview .kd-pagination-selector button.kd-dropdown-trigger.kd-pagination-selector-size.kd-pagination-options-dropdown",
+            "#gridview .kd-pagination-selector .kd-dropdown-trigger",
+            "#gridview button[class*='kd-pagination-selector-size']",
+            "#gridview .kd-pagination-options-dropdown",
+        )
+        trigger = None
+        for selector in trigger_selectors:
+            locator = self.page.locator(selector).first
+            try:
+                if locator.count() > 0 and locator.is_visible():
+                    trigger = locator
+                    break
+            except Exception:
+                continue
+        if trigger is None:
+            raise PlaywrightTimeoutError("Todo page size selector is not visible on current page")
 
         deadline = time.monotonic() + (effective_timeout_ms / 1000)
         last_text = ""
@@ -1221,10 +1234,22 @@ class PermissionCollectFlow:
                 return
 
             trigger.click(force=True)
-            option = self.page.locator(
-                f'.kd-dropdown.kd-cq-pagination-dropdown li.kd-dropdown-menu-item[title="{target_text}"]'
-            ).first
-            option.wait_for(state="visible", timeout=3000)
+            option = None
+            option_selectors = (
+                f'.kd-dropdown.kd-cq-pagination-dropdown li.kd-dropdown-menu-item[title="{target_text}"]',
+                f'.kd-dropdown li.kd-dropdown-menu-item[title="{target_text}"]',
+                f'[role="option"][title="{target_text}"]',
+            )
+            for selector in option_selectors:
+                locator = self.page.locator(selector).first
+                try:
+                    if locator.count() > 0 and locator.is_visible():
+                        option = locator
+                        break
+                except Exception:
+                    continue
+            if option is None:
+                raise PlaywrightTimeoutError(f"Todo page size option not visible: {target_text}")
             option.click(force=True)
             self.page.wait_for_timeout(500)
 

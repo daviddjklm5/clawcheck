@@ -348,6 +348,12 @@ class _PostgresStoreBase:
         finally:
             connection.close()
 
+    def _acquire_schema_advisory_lock(self, cursor, lock_name: str) -> None:
+        cursor.execute(
+            "SELECT pg_advisory_xact_lock(hashtext(%s))",
+            (f"{self.settings.dbname}:{self.settings.schema}:{lock_name}",),
+        )
+
     @staticmethod
     def _null_if_blank(value: Any) -> Any:
         if isinstance(value, str) and not value.strip():
@@ -1151,6 +1157,7 @@ class PostgresPermissionStore(_PostgresStoreBase):
 
             with self.connect() as connection:
                 with connection.cursor() as cursor:
+                    self._acquire_schema_advisory_lock(cursor, "apply_collect_schema")
                     if self._column_exists(cursor, "申请单基本信息", "document_no"):
                         raise RuntimeError('Detected legacy English schema for "申请单基本信息". Run automation/sql/012_rename_columns_to_cn_fixed_schema.sql first.')
                     needs_bootstrap = not self._column_exists(cursor, "申请单基本信息", BASIC_INFO_COLUMNS["document_no"])
@@ -2753,6 +2760,7 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
 
             with self.connect() as connection:
                 with connection.cursor() as cursor:
+                    self._acquire_schema_advisory_lock(cursor, "apply_collect_schema")
                     cursor.execute(ddl)
                     for migration_sql_file in self.schema_upgrade_sql_files:
                         cursor.execute(migration_sql_file.read_text(encoding="utf-8"))
