@@ -101,6 +101,19 @@ INFLOW_DETAIL_EXPORT_COLUMNS: tuple[tuple[str, str], ...] = (
     ("endOrgPathName", "期末组织路径名称"),
 )
 
+END_SNAPSHOT_EXPORT_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("employeeNo", "工号"),
+    ("employeeName", "姓名"),
+    ("endSubdomain", "期末子域"),
+    ("endWarZone", "期末战区"),
+    ("endOrgUnitName", "期末组织单位"),
+    ("endDepartmentId", "期末部门ID"),
+    ("endPositionName", "期末职位名称"),
+    ("endStandardPositionName", "期末标准岗位名称"),
+    ("endHrType", "期末HR类型"),
+    ("endOrgPathName", "期末组织路径名称"),
+)
+
 
 @dataclass(frozen=True)
 class ServiceStationFlowWorkbookData:
@@ -110,6 +123,7 @@ class ServiceStationFlowWorkbookData:
     other_hr_out_rows: list[dict[str, Any]]
     target_flow_rows: list[dict[str, Any]]
     other_hr_in_rows: list[dict[str, Any]]
+    all_end_rows: list[dict[str, Any]]
 
 
 def _strip_text(value: Any) -> str | None:
@@ -195,6 +209,23 @@ def _build_detail_row(
         "endStandardPositionName": _text_or_dash(end_snapshot.get("standard_position_name")),
         "endHrType": _text_or_dash(end_snapshot.get("hr_type")),
         "endOrgPathName": _text_or_dash(end_snapshot.get("org_path_name")),
+    }
+
+
+def _build_end_snapshot_row(end_row: dict[str, Any]) -> dict[str, Any]:
+    employee_no = _strip_text(end_row.get("employee_no")) or "-"
+    return {
+        "id": employee_no,
+        "employeeNo": employee_no,
+        "employeeName": _text_or_dash(end_row.get("employee_name")),
+        "endSubdomain": _text_or_dash(end_row.get("hr_subdomain")),
+        "endWarZone": _text_or_dash(end_row.get("war_zone")),
+        "endOrgUnitName": _text_or_dash(end_row.get("org_unit_name")),
+        "endDepartmentId": _text_or_dash(end_row.get("department_id")),
+        "endPositionName": _text_or_dash(end_row.get("position_name")),
+        "endStandardPositionName": _text_or_dash(end_row.get("standard_position_name")),
+        "endHrType": _text_or_dash(end_row.get("hr_type")),
+        "endOrgPathName": _text_or_dash(end_row.get("org_path_name")),
     }
 
 
@@ -332,6 +363,8 @@ def build_service_station_flow_report(
     left_rows.sort(key=lambda row: _sort_employee_no(row["employeeNo"]))
     other_hr_out_rows.sort(key=lambda row: _sort_employee_no(row["employeeNo"]))
     other_hr_in_rows.sort(key=lambda row: _sort_employee_no(row["employeeNo"]))
+    all_end_rows = [_build_end_snapshot_row(row) for row in end_target_rows]
+    all_end_rows.sort(key=lambda row: _sort_employee_no(row["employeeNo"]))
 
     zone_summary_rows: list[dict[str, Any]] = []
     zone_labels = sorted(set(_zone_labels(start_target_rows)) | set(_zone_labels(end_target_rows)))
@@ -469,6 +502,7 @@ def build_service_station_flow_report(
         "otherHrOutRows": other_hr_out_rows,
         "targetFlowRows": target_flow_rows,
         "otherHrInRows": other_hr_in_rows,
+        "allEndRows": all_end_rows,
     }
 
 
@@ -593,6 +627,12 @@ def render_service_station_flow_workbook(
         columns=INFLOW_DETAIL_EXPORT_COLUMNS,
         rows=report["otherHrInRows"],
     )
+    _write_sheet(
+        workbook,
+        title="全部期末清单",
+        columns=END_SNAPSHOT_EXPORT_COLUMNS,
+        rows=report["allEndRows"],
+    )
 
     workbook.save(output_path)
     return ServiceStationFlowWorkbookData(
@@ -602,4 +642,5 @@ def render_service_station_flow_workbook(
         other_hr_out_rows=list(report["otherHrOutRows"]),
         target_flow_rows=list(report["targetFlowRows"]),
         other_hr_in_rows=list(report["otherHrInRows"]),
+        all_end_rows=list(report["allEndRows"]),
     )
