@@ -14,13 +14,13 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from automation.flows.personnel_profile_change_audit_flow import PersonnelProfileChangeAuditFlow
-from automation.pages.home_page import HomePage
-from automation.pages.login_page import LoginPage
-from automation.utils.config_loader import load_local_auth, load_selectors, load_settings
-from automation.utils.logger import setup_logger
-from automation.utils.login_resilience import ensure_login_with_retry
-from automation.utils.playwright_helpers import timestamp_slug
+from automation.flows.personnel_profile_change_audit_flow import PersonnelProfileChangeAuditFlow  # noqa: E402
+from automation.pages.home_page import HomePage  # noqa: E402
+from automation.pages.login_page import LoginPage  # noqa: E402
+from automation.utils.config_loader import load_local_auth, load_selectors, load_settings  # noqa: E402
+from automation.utils.logger import setup_logger  # noqa: E402
+from automation.utils.login_resilience import ensure_login_with_retry  # noqa: E402
+from automation.utils.playwright_helpers import timestamp_slug  # noqa: E402
 
 
 DEFAULT_CONFIG_PATH = "automation/config/settings.prod.yaml"

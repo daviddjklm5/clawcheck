@@ -10,7 +10,7 @@ import sys
 import time
 from datetime import date, datetime
 from pathlib import Path
-from typing import Mapping
+from typing import Any, Mapping
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
