@@ -28,6 +28,7 @@ _TARGET_HR_SUBDOMAINS: tuple[str, str] = (
     APPLICANT_HR_SUBDOMAIN_STATION_HR_OPS,
     APPLICANT_HR_SUBDOMAIN_STATION_RECRUITING,
 )
+_EXCLUDED_SERVICE_STATION_DEPARTMENT_IDS: tuple[str, ...] = ("55005710",)
 _PERSON_ATTRIBUTES_HISTORY_EXCLUDE_KEYS: frozenset[str] = frozenset({"created_at", "updated_at"})
 
 _SNAPSHOT_QUERY_COLUMNS: tuple[tuple[str, str], ...] = (
@@ -305,6 +306,7 @@ def _fetch_snapshot_rows(
     effective_date: date,
     employee_nos: list[str] | None = None,
     target_only: bool = False,
+    excluded_department_ids: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     quoted_columns = ", ".join(
         f'{store._quote_identifier(column_name)} AS "{field_name}"'
@@ -316,6 +318,15 @@ def _fetch_snapshot_rows(
     if target_only:
         filters.append(f'{store._quote_identifier(PERSON_ATTRIBUTES_HISTORY_COLUMNS["hr_subdomain"])} = ANY(%s)')
         params.append(list(_TARGET_HR_SUBDOMAINS))
+
+    if excluded_department_ids:
+        filters.append(
+            "COALESCE("
+            f'{store._quote_identifier(PERSON_ATTRIBUTES_HISTORY_COLUMNS["department_id"])}, '
+            "''"
+            ") <> ALL(%s)"
+        )
+        params.append(excluded_department_ids)
 
     if employee_nos is not None:
         if not employee_nos:
@@ -348,8 +359,19 @@ def build_service_station_flow_report_result(
     snapshot_dates = _fetch_available_snapshot_dates(store)
     _validate_snapshot_dates(snapshot_dates, start_date=start_date, end_date=end_date)
 
-    start_target_rows = _fetch_snapshot_rows(store, effective_date=start_date, target_only=True)
-    end_target_rows = _fetch_snapshot_rows(store, effective_date=end_date, target_only=True)
+    excluded_department_ids = list(_EXCLUDED_SERVICE_STATION_DEPARTMENT_IDS)
+    start_target_rows = _fetch_snapshot_rows(
+        store,
+        effective_date=start_date,
+        target_only=True,
+        excluded_department_ids=excluded_department_ids,
+    )
+    end_target_rows = _fetch_snapshot_rows(
+        store,
+        effective_date=end_date,
+        target_only=True,
+        excluded_department_ids=excluded_department_ids,
+    )
     employee_nos = sorted(
         {
             row["employee_no"]
@@ -358,8 +380,18 @@ def build_service_station_flow_report_result(
         }
     )
 
-    start_rows = _fetch_snapshot_rows(store, effective_date=start_date, employee_nos=employee_nos)
-    end_rows = _fetch_snapshot_rows(store, effective_date=end_date, employee_nos=employee_nos)
+    start_rows = _fetch_snapshot_rows(
+        store,
+        effective_date=start_date,
+        employee_nos=employee_nos,
+        excluded_department_ids=excluded_department_ids,
+    )
+    end_rows = _fetch_snapshot_rows(
+        store,
+        effective_date=end_date,
+        employee_nos=employee_nos,
+        excluded_department_ids=excluded_department_ids,
+    )
     return build_service_station_flow_report(
         start_date=start_date,
         end_date=end_date,

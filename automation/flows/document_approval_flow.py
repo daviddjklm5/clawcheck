@@ -379,6 +379,89 @@ class DocumentApprovalFlow:
     def read_decision_value(self) -> str:
         return self._read_field_display_value("审批决策")
 
+    def read_reject_target_value(self) -> str:
+        try:
+            return self._read_field_display_value("驳回至")
+        except Exception:  # noqa: BLE001
+            fallback_value = self.page.evaluate(
+                r"""(label) => {
+                    const normalize = (value) => (value || '').replace(/\s+/g, ' ').trim();
+                    const visible = (el) => {
+                        if (!el) return false;
+                        const style = window.getComputedStyle(el);
+                        const rect = el.getBoundingClientRect();
+                        return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+                    };
+                    const scoreText = (text) => {
+                        const normalized = normalize(text);
+                        if (!normalized || normalized === label) return 0;
+                        if (normalized.length < 2) return 0;
+                        return normalized.length;
+                    };
+
+                    const labelNodes = [...document.querySelectorAll('body *')].filter((el) => {
+                        if (!visible(el)) return false;
+                        return normalize(el.innerText || el.textContent || '') === label;
+                    });
+
+                    const candidates = [];
+                    const collectFromRoot = (root) => {
+                        if (!root || !visible(root)) return;
+                        for (const element of root.querySelectorAll('*')) {
+                            if (!visible(element)) continue;
+                            const text = normalize(element.innerText || element.textContent || '');
+                            const score = scoreText(text);
+                            if (score <= 0) continue;
+                            candidates.push({ text, score });
+                        }
+                    };
+
+                    for (const labelNode of labelNodes) {
+                        const sibling = labelNode.nextElementSibling;
+                        if (sibling) {
+                            const text = normalize(sibling.innerText || sibling.textContent || '');
+                            const score = scoreText(text);
+                            if (score > 0) candidates.push({ text, score: score + 1000 });
+                            collectFromRoot(sibling);
+                        }
+
+                        const parent = labelNode.parentElement;
+                        if (parent) {
+                            for (const child of parent.children) {
+                                if (child === labelNode || !visible(child)) continue;
+                                const text = normalize(child.innerText || child.textContent || '');
+                                const score = scoreText(text);
+                                if (score > 0) candidates.push({ text, score: score + 500 });
+                                collectFromRoot(child);
+                            }
+                            const grandParent = parent.parentElement;
+                            if (grandParent) {
+                                for (const child of grandParent.children) {
+                                    if (child === parent || !visible(child)) continue;
+                                    const text = normalize(child.innerText || child.textContent || '');
+                                    const score = scoreText(text);
+                                    if (score > 0) candidates.push({ text, score: score + 100 });
+                                    collectFromRoot(child);
+                                }
+                            }
+                        }
+                    }
+
+                    const filtered = candidates.filter((item) => !item.text.includes('审批意见') && !item.text.includes('提交'));
+                    if (filtered.length === 0) return '';
+                    filtered.sort((left, right) => right.score - left.score);
+                    return filtered[0].text;
+                }""",
+                "驳回至",
+            )
+            return self._normalize_text(fallback_value)
+
+    def ensure_reject_target_ready(self) -> str:
+        target_value = self.read_reject_target_value()
+        if target_value:
+            return target_value
+        raise RuntimeError("当前页面未识别到“驳回至”节点，无法确认驳回回退目标")
+
     def set_decision_value(self, target_value: str) -> str:
         current_value = self.read_decision_value()
         if current_value == target_value:
@@ -1300,6 +1383,8 @@ class DocumentApprovalFlow:
         decision_probe_started_at = time.monotonic()
         decision_before = self.read_decision_value()
         decision_options = self.list_decision_options()
+        reject_target_before = ""
+        reject_target_after = ""
         self._emit_event(
             "approval_decision_state_loaded",
             documentNo=document_no,
@@ -1316,12 +1401,17 @@ class DocumentApprovalFlow:
             raise RuntimeError(
                 f"当前审批决策不支持“{decision_target}”，可用选项={decision_options}"
             ) from exc
+        if action_config["action"] == "reject":
+            reject_target_before = self.read_reject_target_value()
+            reject_target_after = self.ensure_reject_target_ready()
         opinion_after = self.write_approval_opinion(approval_opinion)
         self._emit_event(
             "approval_form_filled",
             documentNo=document_no,
             action=action_config["action"],
             decisionAfter=decision_after,
+            rejectTargetBefore=reject_target_before,
+            rejectTargetAfter=reject_target_after,
             approvalOpinionBefore=opinion_before,
             approvalOpinionAfter=opinion_after,
             durationMs=round((time.monotonic() - opinion_probe_started_at) * 1000, 1),
@@ -1341,6 +1431,8 @@ class DocumentApprovalFlow:
             "decisionBefore": decision_before,
             "decisionAfter": decision_after,
             "decisionOptions": decision_options,
+            "rejectTargetBefore": reject_target_before,
+            "rejectTargetAfter": reject_target_after,
             "approvalOpinionBefore": opinion_before,
             "approvalOpinionAfter": opinion_after,
             "submitLabel": submit_label,

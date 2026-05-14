@@ -348,3 +348,67 @@ class CollectWorkbenchVisibilityTest(unittest.TestCase):
         self.assertEqual(result["stats"][0]["label"], "已进入处理单据")
         self.assertEqual(result["stats"][0]["value"], "1")
         self.assertEqual([row["documentNo"] for row in result["documents"]], ["RA-TEST-001"])
+
+    def test_write_document_keeps_rejected_todo_status_when_recollecting(self) -> None:
+        executed_sql: list[tuple[str, tuple[object, ...] | dict[str, object] | None]] = []
+
+        class _RecordingCursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return None
+
+            def execute(self, sql, params=None):
+                executed_sql.append((sql, params))
+
+            def fetchone(self):
+                return ("已驳回", "2026-04-20 12:00:00")
+
+        class _RecordingConnection:
+            def cursor(self):
+                return _RecordingCursor()
+
+        def _fake_connect():
+            class _Ctx:
+                def __enter__(_self):
+                    return _RecordingConnection()
+
+                def __exit__(_self, exc_type, exc, tb):
+                    return None
+
+            return _Ctx()
+
+        document = {
+            "basic_info": {
+                "document_no": "RA-TEST-REJECTED",
+                "employee_no": "0001",
+                "permission_target": "张三",
+                "apply_reason": "测试",
+                "document_status": "已提交",
+                "hr_org": "万物云",
+                "company_name": "万物云本部",
+                "department_name": "人事部",
+                "position_name": "人事经理",
+                "apply_time": None,
+                "latest_approval_time": None,
+                "collection_count": 1,
+                "todo_process_status": "待处理",
+                "todo_status_updated_at": None,
+            },
+            "permission_details": [],
+            "approval_records": [],
+            "org_scopes": [],
+            "_write_mode": "",
+        }
+
+        with (
+            patch.object(self.store, "ensure_table"),
+            patch.object(self.store, "connect", _fake_connect),
+        ):
+            with self.store.connect() as connection:
+                with connection.cursor() as cursor:
+                    self.store._write_document(cursor, document)
+
+        insert_params = next(params for sql, params in executed_sql if isinstance(sql, str) and "INSERT INTO" in sql)
+        self.assertEqual(insert_params["todo_process_status"], "已驳回")

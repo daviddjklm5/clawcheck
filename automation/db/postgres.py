@@ -410,6 +410,12 @@ class _PostgresStoreBase:
         finally:
             connection.close()
 
+    def _acquire_schema_advisory_lock(self, cursor, lock_name: str) -> None:
+        cursor.execute(
+            "SELECT pg_advisory_xact_lock(hashtext(%s))",
+            (f"{self.settings.dbname}:{self.settings.schema}:{lock_name}",),
+        )
+
     @staticmethod
     def _null_if_blank(value: Any) -> Any:
         if isinstance(value, str) and not value.strip():
@@ -1213,6 +1219,7 @@ class PostgresPermissionStore(_PostgresStoreBase):
 
             with self.connect() as connection:
                 with connection.cursor() as cursor:
+                    self._acquire_schema_advisory_lock(cursor, "apply_collect_schema")
                     if self._column_exists(cursor, "申请单基本信息", "document_no"):
                         raise RuntimeError('Detected legacy English schema for "申请单基本信息". Run automation/sql/012_rename_columns_to_cn_fixed_schema.sql first.')
                     needs_bootstrap = not self._column_exists(cursor, "申请单基本信息", BASIC_INFO_COLUMNS["document_no"])
@@ -1951,6 +1958,24 @@ class PostgresPermissionStore(_PostgresStoreBase):
         write_mode = str(document.get("_write_mode") or "").strip()
         todo_process_status = self._strip_text(basic.get("todo_process_status")) or "待处理"
         todo_status_updated_at = self._null_if_blank(basic.get("todo_status_updated_at")) or datetime.now()
+
+        if write_mode != "recollect":
+            cursor.execute(
+                f"""
+                SELECT
+                    {self._quote_identifier(BASIC_INFO_COLUMNS["todo_process_status"])},
+                    {self._quote_identifier(BASIC_INFO_COLUMNS["todo_status_updated_at"])}
+                FROM {BASIC_INFO_TABLE}
+                WHERE {self._quote_identifier(BASIC_INFO_COLUMNS["document_no"])} = %s
+                """,
+                (document_no,),
+            )
+            existing_row = cursor.fetchone()
+            if existing_row:
+                existing_todo_process_status = self._strip_text(existing_row[0])
+                if existing_todo_process_status == "已驳回":
+                    todo_process_status = "已驳回"
+                    todo_status_updated_at = existing_row[1] or todo_status_updated_at
 
         if write_mode == "recollect":
             cursor.execute(
@@ -2797,6 +2822,7 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
 
             with self.connect() as connection:
                 with connection.cursor() as cursor:
+                    self._acquire_schema_advisory_lock(cursor, "apply_collect_schema")
                     cursor.execute(ddl)
                     for migration_sql_file in self.schema_upgrade_sql_files:
                         cursor.execute(migration_sql_file.read_text(encoding="utf-8"))

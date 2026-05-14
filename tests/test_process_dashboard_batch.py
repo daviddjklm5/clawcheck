@@ -10,6 +10,12 @@ from automation.api import process_dashboard
 
 
 class ProcessDashboardBatchApprovalTest(unittest.TestCase):
+    def test_reject_action_config_uses_selected_node_decision(self) -> None:
+        self.assertEqual(
+            process_dashboard._APPROVAL_ACTION_CONFIG["reject"]["ehrDecision"],
+            "驳回至已选节点",
+        )
+
     def test_resolve_batch_approval_opinion_reuses_generated_reject_lines(self) -> None:
         store = MagicMock()
         store.fetch_process_document_detail.return_value = {

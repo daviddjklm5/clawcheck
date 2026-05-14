@@ -363,6 +363,12 @@ class DocumentApprovalFlowTest(unittest.TestCase):
             dry_run=True,
         )
 
+    def test_reject_action_config_uses_selected_node_decision(self) -> None:
+        config = self.flow._resolve_action_config("reject")
+
+        self.assertEqual(config["decisionValue"], "驳回至已选节点")
+        self.assertEqual(config["submitActionLabel"], "驳回")
+
 
 if __name__ == "__main__":
     unittest.main()

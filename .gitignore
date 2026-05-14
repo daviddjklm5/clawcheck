@@ -27,6 +27,11 @@ webui/dev.err.log
 webui/dev.pid
 *.tsbuildinfo
 
+# Office/editor temporary files
+~$*
+~WRL*.tmp
+*.tmp
+
 # Keep folder structure
 automation/logs/.gitkeep
 automation/backups/.gitkeep

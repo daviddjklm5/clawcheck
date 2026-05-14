@@ -1523,7 +1523,7 @@ export function ProcessDocumentsPage() {
                   ) : null}
                   <Alert severity="warning">
                     本操作会真实写回 EHR。系统会自动打开目标单据的 `任务处理`，将 `审批意见` 写入 EHR，并按动作选择审批决策：
-                    `批准对应同意`，`驳回对应驳回至已选节点`，最后点击 `提交`。
+                    `批准对应同意`，`驳回对应驳回`；若页面存在 `驳回至` 节点，后端会先校验其已就绪，再点击 `提交`。
                   </Alert>
 
                   <KeyValueList
@@ -1558,7 +1558,7 @@ export function ProcessDocumentsPage() {
                       },
                       {
                         label: "EHR 审批决策",
-                        value: "批准=同意；驳回=驳回至已选节点",
+                        value: "批准=同意；驳回=驳回",
                         hint: "后端会按前端动作自动选择对应决策值。",
                       },
                       { label: "EHR 执行按钮", value: "提交", hint: "EHR 实页执行按钮文案。" },
@@ -1795,7 +1795,7 @@ export function ProcessDocumentsPage() {
             <DialogContent>
               <DialogContentText>
                 即将对单据 {selectedDocumentNo || "-"} 执行驳回，系统会把当前审批意见写入 EHR，
-                并选择“驳回至已选节点”后点击提交。是否继续？
+                并选择“驳回”后点击提交；如页面存在“驳回至”节点，系统会先校验该节点已就绪。是否继续？
               </DialogContentText>
             </DialogContent>
             <DialogActions>

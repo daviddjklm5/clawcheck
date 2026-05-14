@@ -277,6 +277,9 @@ class ServiceStationFlowReportTest(unittest.TestCase):
         self.assertEqual(len(result["otherHrOutRows"]), 1)
         self.assertEqual(len(result["targetFlowRows"]), 7)
         self.assertEqual(len(result["otherHrInRows"]), 1)
+        self.assertEqual(len(result["allEndRows"]), 7)
+        self.assertEqual(result["allEndRows"][0]["employeeNo"], "1002")
+        self.assertEqual(result["allEndRows"][0]["endSubdomain"], "服务站-人事运营")
 
     def test_render_service_station_flow_workbook(self) -> None:
         report = build_service_station_flow_report(
@@ -306,9 +309,10 @@ class ServiceStationFlowReportTest(unittest.TestCase):
 
         self.assertEqual(
             workbook.sheetnames,
-            ["汇总", "战区汇总", "离职明细", "转其他HR明细", "目标岗位去向明细", "其他HR转入明细"],
+            ["汇总", "战区汇总", "离职明细", "转其他HR明细", "目标岗位去向明细", "其他HR转入明细", "全部期末清单"],
         )
         self.assertEqual(workbook["离职明细"].max_row, 2)
+        self.assertEqual(workbook["全部期末清单"].max_row, 1)
 
 
 if __name__ == "__main__":
