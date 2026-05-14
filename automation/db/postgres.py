@@ -44,6 +44,9 @@ RISK_TRUST_ASSESSMENT_TABLE = '"申请单风险信任评估"'
 RISK_TRUST_ASSESSMENT_DETAIL_TABLE = '"申请单风险信任评估明细"'
 RISK_TRUST_LOW_SCORE_ENRICHED_VIEW = '"申请单低分明细富化视图"'
 RISK_TRUST_LOW_SCORE_FEEDBACK_GROUP_VIEW = '"申请单低分反馈预聚合视图"'
+PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_TABLE = '"人员档案修改审核单基本信息"'
+PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_TABLE = '"人员档案修改审核单区段字段"'
+PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_TABLE = '"人员档案修改审核单附件"'
 PROCESS_ROLE_PERMISSION_ORDER_FALLBACK = len(PERMISSION_PRIORITY) + 1
 
 
@@ -221,6 +224,65 @@ RISK_TRUST_ASSESSMENT_DETAIL_COLUMNS = {
     "evidence_snapshot": "证据快照",
     "assessed_at": "评估时间",
     "created_at": "记录创建时间",
+}
+
+PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS = {
+    "document_no": "单据编号",
+    "document_name": "单据名称",
+    "document_status": "单据状态",
+    "submit_time": "提交时间",
+    "creator_name": "创建人姓名",
+    "creator_employee_no": "创建人工号",
+    "change_person": "变更人",
+    "change_submit_time": "提交变更时间",
+    "applicant_summary_line": "申请人摘要信息",
+    "section_count": "区段数量",
+    "attachment_count": "附件数量",
+    "raw_payload": "原始快照",
+    "created_at": "记录创建时间",
+    "updated_at": "记录更新时间",
+}
+
+PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS = {
+    "id": "区段字段ID",
+    "document_no": "单据编号",
+    "section_seq": "区段序号",
+    "section_name": "区段名称",
+    "subsection_seq": "子区段序号",
+    "subsection_name": "子区段名称",
+    "header_snapshot": "表头快照",
+    "row_seq": "行序号",
+    "field_seq": "字段序号",
+    "field_name": "字段名称",
+    "field_value": "字段值",
+    "field_type": "字段类型",
+    "raw_payload": "原始快照",
+    "created_at": "记录创建时间",
+    "updated_at": "记录更新时间",
+}
+
+PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS = {
+    "id": "附件ID",
+    "document_no": "单据编号",
+    "section_seq": "区段序号",
+    "section_name": "区段名称",
+    "subsection_seq": "子区段序号",
+    "subsection_name": "子区段名称",
+    "row_seq": "行序号",
+    "change_item": "变更项",
+    "attachment_seq": "附件序号",
+    "attachment_name": "附件名称",
+    "attachment_old_value": "附件原值",
+    "attachment_new_value": "附件新值",
+    "relative_path": "相对路径",
+    "download_status": "下载状态",
+    "download_time": "下载时间",
+    "file_size": "文件大小",
+    "file_hash": "文件哈希",
+    "datarefid": "数据引用ID",
+    "raw_payload": "原始快照",
+    "created_at": "记录创建时间",
+    "updated_at": "记录更新时间",
 }
 
 APPLICANT_HR_PATH_KEYWORDS = ("人力", "人事", "组织发展中心", "组织人才中心")
@@ -4887,6 +4949,999 @@ class PostgresRiskTrustStore(_PostgresStoreBase):
             """,
             rows,
         )
+
+
+class PostgresPersonnelProfileChangeAuditStore(_PostgresStoreBase):
+    _ensure_table_lock = threading.Lock()
+    schema_sql = Path(__file__).resolve().parents[1] / "sql" / "035_personnel_profile_change_audit.sql"
+
+    def ensure_table(self) -> None:
+        ddl = self.schema_sql.read_text(encoding="utf-8")
+        with self._ensure_table_lock:
+            with self.connect() as connection:
+                with connection.cursor() as cursor:
+                    cursor.execute(ddl)
+
+    def write_documents(
+        self,
+        documents: Iterable[dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+        normalized_documents = list(documents)
+        if not normalized_documents:
+            return [], []
+
+        self.ensure_table()
+        persisted_documents: list[dict[str, Any]] = []
+        failed_documents: list[dict[str, str]] = []
+        for document in normalized_documents:
+            basic_info = dict(document.get("basic_info", {}))
+            document_no = str(basic_info.get("document_no") or "").strip()
+            try:
+                with self.connect() as connection:
+                    with connection.cursor() as cursor:
+                        self._write_document(cursor, document)
+                persisted_documents.append(document)
+            except Exception as exc:  # noqa: BLE001
+                failed_documents.append(
+                    {
+                        "document_no": document_no,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                )
+        return persisted_documents, failed_documents
+
+    def _write_document(self, cursor, document: dict[str, Any]) -> None:
+        basic_info = dict(document.get("basic_info", {}))
+        document_no = self._strip_text(basic_info.get("document_no"))
+        if document_no is None:
+            raise ValueError("Missing 单据编号")
+
+        raw_payload = {
+            "outline": document.get("outline", {}),
+            "raw_snapshot": document.get("raw_snapshot", {}),
+            "header_fields": basic_info.get("header_fields", {}),
+        }
+        basic_payload = {
+            "document_no": document_no,
+            "document_name": self._null_if_blank(basic_info.get("document_name")),
+            "document_status": self._null_if_blank(basic_info.get("document_status")),
+            "submit_time": self._null_if_blank(basic_info.get("submit_time")),
+            "creator_name": self._null_if_blank(basic_info.get("creator_name")),
+            "creator_employee_no": self._null_if_blank(basic_info.get("creator_employee_no")),
+            "change_person": self._null_if_blank(basic_info.get("change_person")),
+            "change_submit_time": self._null_if_blank(basic_info.get("change_submit_time")),
+            "applicant_summary_line": self._null_if_blank(basic_info.get("applicant_summary_line")),
+            "section_count": self._to_int_or_none(basic_info.get("section_count")),
+            "attachment_count": self._to_int_or_none(basic_info.get("attachment_count")),
+            "raw_payload": json.dumps(raw_payload, ensure_ascii=False),
+        }
+
+        cursor.execute(
+            f"""
+            INSERT INTO {PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_TABLE} (
+                {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["document_no"])},
+                {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["document_name"])},
+                {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["document_status"])},
+                {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["submit_time"])},
+                {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["creator_name"])},
+                {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["creator_employee_no"])},
+                {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["change_person"])},
+                {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["change_submit_time"])},
+                {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["applicant_summary_line"])},
+                {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["section_count"])},
+                {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["attachment_count"])},
+                {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["raw_payload"])},
+                {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["created_at"])},
+                {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["updated_at"])}
+            ) VALUES (
+                %(document_no)s,
+                %(document_name)s,
+                %(document_status)s,
+                %(submit_time)s,
+                %(creator_name)s,
+                %(creator_employee_no)s,
+                %(change_person)s,
+                %(change_submit_time)s,
+                %(applicant_summary_line)s,
+                %(section_count)s,
+                %(attachment_count)s,
+                %(raw_payload)s::jsonb,
+                NOW(),
+                NOW()
+            )
+            ON CONFLICT ({self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["document_no"])}) DO UPDATE SET
+                {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["document_name"])} = EXCLUDED.{self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["document_name"])},
+                {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["document_status"])} = EXCLUDED.{self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["document_status"])},
+                {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["submit_time"])} = EXCLUDED.{self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["submit_time"])},
+                {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["creator_name"])} = EXCLUDED.{self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["creator_name"])},
+                {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["creator_employee_no"])} = EXCLUDED.{self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["creator_employee_no"])},
+                {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["change_person"])} = EXCLUDED.{self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["change_person"])},
+                {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["change_submit_time"])} = EXCLUDED.{self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["change_submit_time"])},
+                {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["applicant_summary_line"])} = EXCLUDED.{self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["applicant_summary_line"])},
+                {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["section_count"])} = EXCLUDED.{self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["section_count"])},
+                {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["attachment_count"])} = EXCLUDED.{self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["attachment_count"])},
+                {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["raw_payload"])} = EXCLUDED.{self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["raw_payload"])},
+                {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["updated_at"])} = NOW()
+            """,
+            basic_payload,
+        )
+
+        cursor.execute(
+            f'DELETE FROM {PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_TABLE} WHERE {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["document_no"])} = %s',
+            (document_no,),
+        )
+        cursor.execute(
+            f'DELETE FROM {PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_TABLE} WHERE {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["document_no"])} = %s',
+            (document_no,),
+        )
+
+        section_rows = self._build_section_field_rows(document_no=document_no, sections=document.get("sections", []))
+        if section_rows:
+            cursor.executemany(
+                f"""
+                INSERT INTO {PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_TABLE} (
+                    {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["document_no"])},
+                    {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["section_seq"])},
+                    {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["section_name"])},
+                    {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["subsection_seq"])},
+                    {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["subsection_name"])},
+                    {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["header_snapshot"])},
+                    {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["row_seq"])},
+                    {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["field_seq"])},
+                    {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["field_name"])},
+                    {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["field_value"])},
+                    {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["field_type"])},
+                    {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["raw_payload"])},
+                    {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["created_at"])},
+                    {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["updated_at"])}
+                ) VALUES (
+                    %(document_no)s,
+                    %(section_seq)s,
+                    %(section_name)s,
+                    %(subsection_seq)s,
+                    %(subsection_name)s,
+                    %(header_snapshot)s::jsonb,
+                    %(row_seq)s,
+                    %(field_seq)s,
+                    %(field_name)s,
+                    %(field_value)s,
+                    %(field_type)s,
+                    %(raw_payload)s::jsonb,
+                    NOW(),
+                    NOW()
+                )
+                """,
+                section_rows,
+            )
+
+        attachment_rows = self._build_attachment_rows(document.get("attachments", []))
+        if attachment_rows:
+            cursor.executemany(
+                f"""
+                INSERT INTO {PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_TABLE} (
+                    {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["document_no"])},
+                    {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["section_seq"])},
+                    {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["section_name"])},
+                    {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["subsection_seq"])},
+                    {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["subsection_name"])},
+                    {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["row_seq"])},
+                    {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["change_item"])},
+                    {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["attachment_seq"])},
+                    {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["attachment_name"])},
+                    {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["attachment_old_value"])},
+                    {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["attachment_new_value"])},
+                    {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["relative_path"])},
+                    {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["download_status"])},
+                    {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["download_time"])},
+                    {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["file_size"])},
+                    {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["file_hash"])},
+                    {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["datarefid"])},
+                    {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["raw_payload"])},
+                    {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["created_at"])},
+                    {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["updated_at"])}
+                ) VALUES (
+                    %(document_no)s,
+                    %(section_seq)s,
+                    %(section_name)s,
+                    %(subsection_seq)s,
+                    %(subsection_name)s,
+                    %(row_seq)s,
+                    %(change_item)s,
+                    %(attachment_seq)s,
+                    %(attachment_name)s,
+                    %(attachment_old_value)s,
+                    %(attachment_new_value)s,
+                    %(relative_path)s,
+                    %(download_status)s,
+                    %(download_time)s,
+                    %(file_size)s,
+                    %(file_hash)s,
+                    %(datarefid)s,
+                    %(raw_payload)s::jsonb,
+                    NOW(),
+                    NOW()
+                )
+                """,
+                attachment_rows,
+            )
+
+    def _build_section_field_rows(self, *, document_no: str, sections: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for section in sections:
+            section_seq = self._to_int_or_none(section.get("section_seq"))
+            subsection_seq = self._to_int_or_none(section.get("subsection_seq"))
+            section_name = self._null_if_blank(section.get("section_name"))
+            subsection_name = self._null_if_blank(section.get("subsection_name"))
+            header_snapshot = json.dumps(section.get("headers", []), ensure_ascii=False)
+            section_raw_payload = section.get("raw_payload", {})
+            for row in section.get("rows", []):
+                row_seq = self._to_int_or_none(row.get("row_seq"))
+                for field in row.get("fields", []):
+                    rows.append(
+                        {
+                            "document_no": document_no,
+                            "section_seq": section_seq,
+                            "section_name": section_name,
+                            "subsection_seq": subsection_seq,
+                            "subsection_name": subsection_name,
+                            "header_snapshot": header_snapshot,
+                            "row_seq": row_seq,
+                            "field_seq": self._to_int_or_none(field.get("field_seq")),
+                            "field_name": self._null_if_blank(field.get("field_name")),
+                            "field_value": self._null_if_blank(field.get("field_value")),
+                            "field_type": self._null_if_blank(field.get("field_type")),
+                            "raw_payload": json.dumps(section_raw_payload, ensure_ascii=False),
+                        }
+                    )
+        return rows
+
+    def _build_attachment_rows(self, attachments: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for attachment in attachments:
+            rows.append(
+                {
+                    "document_no": self._null_if_blank(attachment.get("document_no")),
+                    "section_seq": self._to_int_or_none(attachment.get("section_seq")),
+                    "section_name": self._null_if_blank(attachment.get("section_name")),
+                    "subsection_seq": self._to_int_or_none(attachment.get("subsection_seq")),
+                    "subsection_name": self._null_if_blank(attachment.get("subsection_name")),
+                    "row_seq": self._to_int_or_none(attachment.get("row_seq")),
+                    "change_item": self._null_if_blank(attachment.get("change_item")),
+                    "attachment_seq": self._to_int_or_none(attachment.get("attachment_seq")),
+                    "attachment_name": self._null_if_blank(attachment.get("attachment_name")),
+                    "attachment_old_value": self._null_if_blank(attachment.get("attachment_old_value")),
+                    "attachment_new_value": self._null_if_blank(attachment.get("attachment_new_value")),
+                    "relative_path": self._null_if_blank(attachment.get("relative_path")),
+                    "download_status": self._null_if_blank(attachment.get("download_status")),
+                    "download_time": self._parse_optional_timestamp(attachment.get("download_time")),
+                    "file_size": self._to_int_or_none(attachment.get("file_size")),
+                    "file_hash": self._null_if_blank(attachment.get("file_hash")),
+                    "datarefid": self._null_if_blank(attachment.get("datarefid")),
+                    "raw_payload": json.dumps(attachment.get("raw_payload", {}), ensure_ascii=False),
+                }
+            )
+        return rows
+
+    @staticmethod
+    def _format_datetime_value(value: Any) -> str:
+        if value is None:
+            return "-"
+        if isinstance(value, datetime):
+            return value.strftime("%Y-%m-%d %H:%M:%S")
+        if isinstance(value, date):
+            return value.strftime("%Y-%m-%d")
+        return str(value).strip() or "-"
+
+    @staticmethod
+    def _normalize_detail_value(value: Any) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, datetime):
+            return value.strftime("%Y-%m-%d %H:%M:%S")
+        if isinstance(value, date):
+            return value.strftime("%Y-%m-%d")
+        return str(value).strip()
+
+    @staticmethod
+    def _parse_json_like(value: Any, default: Any) -> Any:
+        if value is None:
+            return default
+        if isinstance(value, (dict, list)):
+            return value
+        text = str(value).strip()
+        if not text:
+            return default
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            return default
+        return parsed if isinstance(parsed, type(default)) else default
+
+    @classmethod
+    def _pick_latest_timestamp(cls, *values: Any) -> Any:
+        normalized_values = [value for value in values if value is not None]
+        if not normalized_values:
+            return None
+        return max(normalized_values)
+
+    @staticmethod
+    def _build_section_group_key(
+        *,
+        section_seq: Any,
+        section_name: Any,
+        subsection_seq: Any,
+        subsection_name: Any,
+    ) -> tuple[str, str, str, str]:
+        return (
+            str(section_seq if section_seq is not None else ""),
+            str(section_name or ""),
+            str(subsection_seq if subsection_seq is not None else ""),
+            str(subsection_name or ""),
+        )
+
+    @staticmethod
+    def _fetchall_dicts(cursor) -> list[dict[str, Any]]:
+        description = cursor.description or []
+        column_names = [getattr(column, "name", column[0]) for column in description]
+        rows = cursor.fetchall()
+        return [dict(zip(column_names, row, strict=False)) for row in rows]
+
+    def _empty_workbench(self) -> dict[str, Any]:
+        return {
+            "stats": [
+                {
+                    "label": "已采集单据",
+                    "value": "0",
+                    "hint": "当前还没有可在 310 工作台展示的人员档案修改审核单据。",
+                    "tone": "info",
+                },
+                {
+                    "label": "含附件单据",
+                    "value": "0",
+                    "hint": "识别到附件元数据的单据数。",
+                    "tone": "default",
+                },
+                {
+                    "label": "区段字段记录",
+                    "value": "0",
+                    "hint": "来自 `人员档案修改审核单区段字段` 的累计记录数。",
+                    "tone": "default",
+                },
+                {
+                    "label": "最近落库时间",
+                    "value": "-",
+                    "hint": "执行 profile-change-audit 后会显示最新落库时间。",
+                    "tone": "default",
+                },
+            ],
+            "documents": [],
+        }
+
+    def _fetch_section_metrics(
+        self,
+        cursor,
+        document_nos: Iterable[str],
+    ) -> dict[str, dict[str, Any]]:
+        normalized_document_nos = [document_no for document_no in document_nos if document_no]
+        if not normalized_document_nos:
+            return {}
+
+        cursor.execute(
+            f"""
+            SELECT
+                {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["document_no"])},
+                COUNT(*) AS field_count,
+                COUNT(DISTINCT CONCAT(
+                    COALESCE({self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["section_seq"])}::text, ''),
+                    '|',
+                    COALESCE({self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["section_name"])}, ''),
+                    '|',
+                    COALESCE({self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["subsection_seq"])}::text, ''),
+                    '|',
+                    COALESCE({self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["subsection_name"])}, '')
+                )) AS section_group_count,
+                COUNT(DISTINCT {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["row_seq"])}) AS row_count,
+                MAX({self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["updated_at"])}) AS updated_at
+            FROM {PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_TABLE}
+            WHERE {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["document_no"])} = ANY(%s)
+            GROUP BY {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["document_no"])}
+            """,
+            (normalized_document_nos,),
+        )
+        rows = self._fetchall_dicts(cursor)
+        return {
+            row[PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["document_no"]]: {
+                "field_count": int(row["field_count"] or 0),
+                "section_group_count": int(row["section_group_count"] or 0),
+                "row_count": int(row["row_count"] or 0),
+                "updated_at": row["updated_at"],
+            }
+            for row in rows
+        }
+
+    def _fetch_attachment_metrics(
+        self,
+        cursor,
+        document_nos: Iterable[str],
+    ) -> dict[str, dict[str, Any]]:
+        normalized_document_nos = [document_no for document_no in document_nos if document_no]
+        if not normalized_document_nos:
+            return {}
+
+        cursor.execute(
+            f"""
+            SELECT
+                {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["document_no"])},
+                COUNT(*) AS attachment_count,
+                COUNT(*) FILTER (
+                    WHERE NULLIF(BTRIM({self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["download_status"])}), '') = 'downloaded'
+                ) AS downloaded_count,
+                MAX(
+                    COALESCE(
+                        {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["download_time"])},
+                        {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["updated_at"])}
+                    )
+                ) AS updated_at
+            FROM {PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_TABLE}
+            WHERE {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["document_no"])} = ANY(%s)
+            GROUP BY {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["document_no"])}
+            """,
+            (normalized_document_nos,),
+        )
+        rows = self._fetchall_dicts(cursor)
+        return {
+            row[PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["document_no"]]: {
+                "attachment_count": int(row["attachment_count"] or 0),
+                "downloaded_count": int(row["downloaded_count"] or 0),
+                "updated_at": row["updated_at"],
+            }
+            for row in rows
+        }
+
+    def fetch_workbench(self, limit: int = 200) -> dict[str, Any]:
+        query_limit = max(limit, 0)
+        self.ensure_table()
+
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    f"""
+                    SELECT
+                        {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["document_no"])},
+                        {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["document_name"])},
+                        {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["document_status"])},
+                        {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["submit_time"])},
+                        {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["creator_name"])},
+                        {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["creator_employee_no"])},
+                        {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["change_person"])},
+                        {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["change_submit_time"])},
+                        {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["section_count"])},
+                        {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["attachment_count"])},
+                        {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["updated_at"])}
+                    FROM {PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_TABLE}
+                    ORDER BY {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["updated_at"])} DESC NULLS LAST,
+                             {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["submit_time"])} DESC NULLS LAST,
+                             {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["document_no"])} DESC
+                    LIMIT %s
+                    """,
+                    (query_limit,),
+                )
+                basic_rows = self._fetchall_dicts(cursor)
+                if not basic_rows:
+                    return self._empty_workbench()
+
+                document_nos = [
+                    row[PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["document_no"]]
+                    for row in basic_rows
+                    if self._strip_text(row[PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["document_no"]]) is not None
+                ]
+                section_metrics = self._fetch_section_metrics(cursor, document_nos)
+                attachment_metrics = self._fetch_attachment_metrics(cursor, document_nos)
+
+        documents: list[dict[str, Any]] = []
+        attachment_document_count = 0
+        total_field_count = 0
+        latest_collected_at: Any = None
+
+        for row in basic_rows:
+            document_no = self._strip_text(row[PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["document_no"]]) or ""
+            if not document_no:
+                continue
+
+            section_metric = section_metrics.get(document_no, {})
+            attachment_metric = attachment_metrics.get(document_no, {})
+            section_count = int(
+                row[PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["section_count"]]
+                or section_metric.get("section_group_count")
+                or 0
+            )
+            field_count = int(section_metric.get("field_count") or 0)
+            attachment_count = int(
+                attachment_metric.get("attachment_count")
+                or row[PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["attachment_count"]]
+                or 0
+            )
+            downloaded_attachment_count = int(attachment_metric.get("downloaded_count") or 0)
+            collected_at = self._pick_latest_timestamp(
+                row[PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["updated_at"]],
+                section_metric.get("updated_at"),
+                attachment_metric.get("updated_at"),
+            )
+
+            if attachment_count > 0:
+                attachment_document_count += 1
+            total_field_count += field_count
+            latest_collected_at = self._pick_latest_timestamp(latest_collected_at, collected_at)
+
+            documents.append(
+                {
+                    "id": document_no,
+                    "documentNo": document_no,
+                    "documentName": self._strip_text(row[PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["document_name"]]) or "-",
+                    "documentStatus": self._strip_text(row[PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["document_status"]]) or "-",
+                    "submitTime": self._format_datetime_value(row[PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["submit_time"]]),
+                    "creatorName": self._strip_text(row[PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["creator_name"]]) or "-",
+                    "creatorEmployeeNo": self._strip_text(row[PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["creator_employee_no"]]) or "-",
+                    "changePerson": self._strip_text(row[PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["change_person"]]) or "-",
+                    "changeSubmitTime": self._format_datetime_value(
+                        row[PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["change_submit_time"]]
+                    ),
+                    "sectionCount": section_count,
+                    "fieldCount": field_count,
+                    "attachmentCount": attachment_count,
+                    "downloadedAttachmentCount": downloaded_attachment_count,
+                    "collectedAt": self._format_datetime_value(collected_at),
+                }
+            )
+
+        return {
+            "stats": [
+                {
+                    "label": "已采集单据",
+                    "value": str(len(documents)),
+                    "hint": "当前已写入 PostgreSQL 的人员档案修改审核单据数。",
+                    "tone": "info" if documents else "default",
+                },
+                {
+                    "label": "含附件单据",
+                    "value": str(attachment_document_count),
+                    "hint": "依据附件元数据表和主表附件数量汇总。",
+                    "tone": "warning" if attachment_document_count else "success",
+                },
+                {
+                    "label": "区段字段记录",
+                    "value": str(total_field_count),
+                    "hint": "当前列表内单据对应的区段字段累计记录数。",
+                    "tone": "default",
+                },
+                {
+                    "label": "最近落库时间",
+                    "value": self._format_datetime_value(latest_collected_at),
+                    "hint": "取主表、区段字段表、附件表中的最新更新时间。",
+                    "tone": "default",
+                },
+            ],
+            "documents": documents,
+        }
+
+    def fetch_document_detail(self, document_no: str) -> dict[str, Any] | None:
+        normalized_document_no = self._strip_text(document_no)
+        if normalized_document_no is None:
+            return None
+
+        self.ensure_table()
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    f"""
+                    SELECT
+                        {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["document_no"])},
+                        {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["document_name"])},
+                        {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["document_status"])},
+                        {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["submit_time"])},
+                        {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["creator_name"])},
+                        {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["creator_employee_no"])},
+                        {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["change_person"])},
+                        {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["change_submit_time"])},
+                        {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["applicant_summary_line"])},
+                        {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["section_count"])},
+                        {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["attachment_count"])},
+                        {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["raw_payload"])},
+                        {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["updated_at"])}
+                    FROM {PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_TABLE}
+                    WHERE {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["document_no"])} = %s
+                    LIMIT 1
+                    """,
+                    (normalized_document_no,),
+                )
+                basic_rows = self._fetchall_dicts(cursor)
+                if not basic_rows:
+                    return None
+                basic_row = basic_rows[0]
+
+                cursor.execute(
+                    f"""
+                    SELECT
+                        {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["id"])},
+                        {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["section_seq"])},
+                        {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["section_name"])},
+                        {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["subsection_seq"])},
+                        {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["subsection_name"])},
+                        {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["header_snapshot"])},
+                        {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["row_seq"])},
+                        {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["field_seq"])},
+                        {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["field_name"])},
+                        {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["field_value"])},
+                        {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["field_type"])},
+                        {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["updated_at"])}
+                    FROM {PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_TABLE}
+                    WHERE {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["document_no"])} = %s
+                    ORDER BY {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["section_seq"])} NULLS LAST,
+                             {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["subsection_seq"])} NULLS LAST,
+                             {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["row_seq"])} NULLS LAST,
+                             {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["field_seq"])} NULLS LAST,
+                             {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["id"])}
+                    """,
+                    (normalized_document_no,),
+                )
+                section_rows = self._fetchall_dicts(cursor)
+
+                cursor.execute(
+                    f"""
+                    SELECT
+                        {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["id"])},
+                        {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["section_seq"])},
+                        {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["section_name"])},
+                        {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["subsection_seq"])},
+                        {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["subsection_name"])},
+                        {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["row_seq"])},
+                        {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["change_item"])},
+                        {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["attachment_seq"])},
+                        {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["attachment_name"])},
+                        {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["attachment_old_value"])},
+                        {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["attachment_new_value"])},
+                        {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["relative_path"])},
+                        {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["download_status"])},
+                        {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["download_time"])},
+                        {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["file_size"])},
+                        {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["file_hash"])},
+                        {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["updated_at"])}
+                    FROM {PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_TABLE}
+                    WHERE {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["document_no"])} = %s
+                    ORDER BY {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["section_seq"])} NULLS LAST,
+                             {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["subsection_seq"])} NULLS LAST,
+                             {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["row_seq"])} NULLS LAST,
+                             {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["attachment_seq"])} NULLS LAST,
+                             {self._quote_identifier(PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["id"])}
+                    """,
+                    (normalized_document_no,),
+                )
+                attachment_rows = self._fetchall_dicts(cursor)
+
+        basic_updated_at = basic_row[PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["updated_at"]]
+        section_updated_values = [
+            row[PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["updated_at"]]
+            for row in section_rows
+            if row[PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["updated_at"]] is not None
+        ]
+        attachment_updated_values = [
+            row[PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["download_time"]]
+            or row[PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["updated_at"]]
+            for row in attachment_rows
+            if (
+                row[PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["download_time"]] is not None
+                or row[PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["updated_at"]] is not None
+            )
+        ]
+        section_metrics = {
+            "field_count": len(section_rows),
+            "updated_at": self._pick_latest_timestamp(*section_updated_values),
+        }
+        attachment_metrics = {
+            "attachment_count": len(attachment_rows),
+            "downloaded_count": len(
+                [
+                    row
+                    for row in attachment_rows
+                    if self._strip_text(row[PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["download_status"]]) == "downloaded"
+                ]
+            ),
+            "updated_at": self._pick_latest_timestamp(*attachment_updated_values),
+        }
+        collected_at = self._pick_latest_timestamp(
+            basic_updated_at,
+            section_metrics["updated_at"],
+            attachment_metrics["updated_at"],
+        )
+
+        section_groups: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+        for row in section_rows:
+            key = self._build_section_group_key(
+                section_seq=row[PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["section_seq"]],
+                section_name=row[PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["section_name"]],
+                subsection_seq=row[PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["subsection_seq"]],
+                subsection_name=row[PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["subsection_name"]],
+            )
+            group = section_groups.setdefault(
+                key,
+                {
+                    "id": "|".join(key) or f"section-{len(section_groups) + 1}",
+                    "sectionSeq": str(row[PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["section_seq"]] or "-"),
+                    "sectionName": self._strip_text(row[PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["section_name"]]) or "-",
+                    "subsectionSeq": str(row[PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["subsection_seq"]] or "-"),
+                    "subsectionName": self._strip_text(row[PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["subsection_name"]]) or "-",
+                    "headersPreview": "-",
+                    "fieldCount": 0,
+                    "rowCount": 0,
+                    "attachmentCount": 0,
+                    "sectionType": "字段区段",
+                    "_headers": [],
+                    "_row_keys": set(),
+                    "_field_types": set(),
+                },
+            )
+            headers = self._parse_json_like(
+                row[PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["header_snapshot"]],
+                [],
+            )
+            if headers and not group["_headers"]:
+                group["_headers"] = headers
+                group["headersPreview"] = " | ".join(str(item).strip() for item in headers if str(item).strip()) or "-"
+            row_seq = row[PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["row_seq"]]
+            if row_seq is not None:
+                group["_row_keys"].add(str(row_seq))
+            field_type = self._strip_text(row[PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["field_type"]]) or ""
+            if field_type:
+                group["_field_types"].add(field_type)
+            group["fieldCount"] += 1
+
+        for row in attachment_rows:
+            key = self._build_section_group_key(
+                section_seq=row[PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["section_seq"]],
+                section_name=row[PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["section_name"]],
+                subsection_seq=row[PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["subsection_seq"]],
+                subsection_name=row[PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["subsection_name"]],
+            )
+            group = section_groups.setdefault(
+                key,
+                {
+                    "id": "|".join(key) or f"section-{len(section_groups) + 1}",
+                    "sectionSeq": str(row[PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["section_seq"]] or "-"),
+                    "sectionName": self._strip_text(row[PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["section_name"]]) or "-",
+                    "subsectionSeq": str(row[PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["subsection_seq"]] or "-"),
+                    "subsectionName": self._strip_text(row[PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["subsection_name"]]) or "-",
+                    "headersPreview": "-",
+                    "fieldCount": 0,
+                    "rowCount": 0,
+                    "attachmentCount": 0,
+                    "sectionType": "附件区段",
+                    "_headers": [],
+                    "_row_keys": set(),
+                    "_field_types": set(),
+                },
+            )
+            row_seq = row[PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["row_seq"]]
+            if row_seq is not None:
+                group["_row_keys"].add(str(row_seq))
+            group["attachmentCount"] += 1
+
+        section_summary_rows: list[dict[str, Any]] = []
+        for group in sorted(
+            section_groups.values(),
+            key=lambda item: (
+                _line_no_sort_key(item["sectionSeq"]),
+                _line_no_sort_key(item["subsectionSeq"]),
+                item["sectionName"],
+                item["subsectionName"],
+            ),
+        ):
+            field_types = {str(item) for item in group["_field_types"]}
+            if group["attachmentCount"] > 0 or "附件" in group["sectionName"] or "附件" in group["subsectionName"]:
+                group["sectionType"] = "附件区段"
+            elif any(item.startswith("summary_") for item in field_types):
+                group["sectionType"] = "摘要区段"
+            elif group["_headers"]:
+                group["sectionType"] = "表格区段"
+            group["rowCount"] = len(group["_row_keys"])
+            group.pop("_headers", None)
+            group.pop("_row_keys", None)
+            group.pop("_field_types", None)
+            section_summary_rows.append(group)
+
+        field_rows = [
+            {
+                "id": str(row[PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["id"]]),
+                "sectionSeq": str(row[PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["section_seq"]] or "-"),
+                "sectionName": self._strip_text(row[PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["section_name"]]) or "-",
+                "subsectionSeq": str(row[PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["subsection_seq"]] or "-"),
+                "subsectionName": self._strip_text(row[PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["subsection_name"]]) or "-",
+                "rowSeq": str(row[PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["row_seq"]] or "-"),
+                "fieldSeq": str(row[PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["field_seq"]] or "-"),
+                "fieldName": self._normalize_detail_value(row[PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["field_name"]]) or "-",
+                "fieldValue": self._normalize_detail_value(row[PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["field_value"]]),
+                "fieldType": self._normalize_detail_value(row[PERSONNEL_PROFILE_CHANGE_AUDIT_SECTION_FIELD_COLUMNS["field_type"]]) or "-",
+            }
+            for row in section_rows
+        ]
+
+        attachment_result_rows = [
+            {
+                "id": str(row[PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["id"]]),
+                "sectionSeq": str(row[PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["section_seq"]] or "-"),
+                "sectionName": self._strip_text(row[PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["section_name"]]) or "-",
+                "subsectionSeq": str(row[PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["subsection_seq"]] or "-"),
+                "subsectionName": self._strip_text(row[PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["subsection_name"]]) or "-",
+                "rowSeq": str(row[PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["row_seq"]] or "-"),
+                "changeItem": self._normalize_detail_value(row[PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["change_item"]]) or "-",
+                "attachmentSeq": str(row[PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["attachment_seq"]] or "-"),
+                "attachmentName": self._normalize_detail_value(row[PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["attachment_name"]]) or "-",
+                "attachmentOldValue": self._normalize_detail_value(
+                    row[PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["attachment_old_value"]]
+                ),
+                "attachmentNewValue": self._normalize_detail_value(
+                    row[PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["attachment_new_value"]]
+                ),
+                "relativePath": self._normalize_detail_value(row[PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["relative_path"]]),
+                "downloadStatus": self._normalize_detail_value(row[PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["download_status"]]) or "-",
+                "downloadTime": self._format_datetime_value(row[PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["download_time"]]),
+                "fileSize": int(row[PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["file_size"]] or 0),
+                "fileHash": self._normalize_detail_value(row[PERSONNEL_PROFILE_CHANGE_AUDIT_ATTACHMENT_COLUMNS["file_hash"]]),
+            }
+            for row in attachment_rows
+        ]
+
+        raw_payload = self._parse_json_like(basic_row[PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["raw_payload"]], {})
+        outline = raw_payload.get("outline", {}) if isinstance(raw_payload, dict) else {}
+        raw_snapshot = raw_payload.get("raw_snapshot", {}) if isinstance(raw_payload, dict) else {}
+        section_titles = outline.get("section_titles", []) if isinstance(outline, dict) else []
+
+        notes: list[str] = []
+        if attachment_result_rows:
+            if attachment_metrics["downloaded_count"] < attachment_metrics["attachment_count"]:
+                notes.append(
+                    f"当前共识别附件 {attachment_metrics['attachment_count']} 个，已成功下载 {attachment_metrics['downloaded_count']} 个。"
+                )
+            else:
+                notes.append(f"当前附件 {attachment_metrics['attachment_count']} 个均已有下载结果。")
+        else:
+            notes.append("当前单据未识别到附件元数据。")
+        if isinstance(raw_snapshot, dict) and raw_snapshot.get("detail_payload") in (None, {}):
+            notes.append("当前详情采集未命中稳定网络载荷，已按 DOM 区段结构回退采集。")
+        if section_titles:
+            notes.append(f"页面区段标题共识别 {len(section_titles)} 个：{' / '.join(str(item) for item in section_titles[:8])}")
+        if not notes:
+            notes.append("当前单据已形成主表、区段字段、附件三张表的完整查询视图。")
+
+        attachment_count = int(
+            attachment_metrics["attachment_count"]
+            or basic_row[PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["attachment_count"]]
+            or 0
+        )
+        return {
+            "documentNo": normalized_document_no,
+            "documentStatus": self._strip_text(basic_row[PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["document_status"]]) or "-",
+            "overviewFields": [
+                {"label": "单据编号", "value": normalized_document_no, "hint": "主键来自 `人员档案修改审核单基本信息`。"},
+                {
+                    "label": "单据名称",
+                    "value": self._strip_text(basic_row[PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["document_name"]]) or "-",
+                    "hint": "来自详情头部和列表页。",
+                    "columnSpan": 2,
+                },
+                {
+                    "label": "单据状态",
+                    "value": self._strip_text(basic_row[PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["document_status"]]) or "-",
+                    "hint": "业务单据自身状态。",
+                },
+                {
+                    "label": "提交时间",
+                    "value": self._format_datetime_value(basic_row[PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["submit_time"]]),
+                    "hint": "列表页字段。",
+                },
+                {
+                    "label": "创建人姓名",
+                    "value": self._strip_text(basic_row[PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["creator_name"]]) or "-",
+                    "hint": "列表页字段。",
+                },
+                {
+                    "label": "创建人工号",
+                    "value": self._strip_text(basic_row[PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["creator_employee_no"]]) or "-",
+                    "hint": "列表页字段。",
+                },
+                {
+                    "label": "变更人",
+                    "value": self._strip_text(basic_row[PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["change_person"]]) or "-",
+                    "hint": "详情头部字段。",
+                },
+                {
+                    "label": "提交变更时间",
+                    "value": self._format_datetime_value(basic_row[PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["change_submit_time"]]),
+                    "hint": "详情头部字段。",
+                },
+                {
+                    "label": "申请人摘要信息",
+                    "value": self._strip_text(basic_row[PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["applicant_summary_line"]]) or "-",
+                    "hint": "采集时提取的头部摘要行。",
+                    "columnSpan": 2,
+                },
+                {
+                    "label": "区段数量",
+                    "value": str(
+                        int(
+                            basic_row[PERSONNEL_PROFILE_CHANGE_AUDIT_BASIC_COLUMNS["section_count"]]
+                            or len(section_summary_rows)
+                            or 0
+                        )
+                    ),
+                    "hint": "优先取主表字段，缺失时按区段聚合回填。",
+                },
+                {
+                    "label": "区段字段记录",
+                    "value": str(section_metrics["field_count"]),
+                    "hint": "来自 `人员档案修改审核单区段字段`。",
+                },
+                {
+                    "label": "附件数量",
+                    "value": str(attachment_count),
+                    "hint": "优先取附件表计数，缺失时回退主表。",
+                },
+                {
+                    "label": "已下载附件",
+                    "value": str(attachment_metrics["downloaded_count"]),
+                    "hint": "下载状态为 `downloaded` 的附件数量。",
+                },
+                {
+                    "label": "最近落库时间",
+                    "value": self._format_datetime_value(collected_at),
+                    "hint": "取主表、区段字段表、附件表中的最新更新时间。",
+                },
+            ],
+            "tableStatus": [
+                {
+                    "id": "basic",
+                    "tableName": "人员档案修改审核单基本信息",
+                    "status": "已落库",
+                    "records": 1,
+                    "updatedAt": self._format_datetime_value(basic_updated_at),
+                    "remark": "主表，单据编号为业务主键。",
+                },
+                {
+                    "id": "sectionFields",
+                    "tableName": "人员档案修改审核单区段字段",
+                    "status": "已落库" if section_metrics["field_count"] > 0 else "待补采",
+                    "records": int(section_metrics["field_count"] or 0),
+                    "updatedAt": self._format_datetime_value(section_metrics["updated_at"]),
+                    "remark": "按区段、子区段、行序号、字段序号展开后的字段明细。",
+                },
+                {
+                    "id": "attachments",
+                    "tableName": "人员档案修改审核单附件",
+                    "status": "已落库" if attachment_count > 0 else "无附件",
+                    "records": attachment_count,
+                    "updatedAt": self._format_datetime_value(attachment_metrics["updated_at"]),
+                    "remark": "附件元数据与下载结果表。",
+                },
+            ],
+            "sectionRows": section_summary_rows,
+            "fieldRows": field_rows,
+            "attachmentRows": attachment_result_rows,
+            "notes": notes,
+        }
+
+    @classmethod
+    def _parse_optional_timestamp(cls, value: Any) -> datetime | None:
+        value = cls._null_if_blank(value)
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value
+        text = str(value).strip().replace("T", " ")
+        for candidate in (text[:19], text):
+            try:
+                return datetime.fromisoformat(candidate)
+            except ValueError:
+                continue
+        return None
 
 
 class PostgresActiveRosterStore(_PostgresStoreBase):

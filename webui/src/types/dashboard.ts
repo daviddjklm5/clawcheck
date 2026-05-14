@@ -209,6 +209,117 @@ export interface CollectWorkbench {
   recentRuns: CollectRunSummary[];
 }
 
+export interface ProfileChangeAuditDocumentRow {
+  id: string;
+  documentNo: string;
+  documentName: string;
+  documentStatus: string;
+  submitTime: string;
+  creatorName: string;
+  creatorEmployeeNo: string;
+  changePerson: string;
+  changeSubmitTime: string;
+  sectionCount: number;
+  fieldCount: number;
+  attachmentCount: number;
+  downloadedAttachmentCount: number;
+  collectedAt: string;
+}
+
+export interface ProfileChangeAuditSectionRow {
+  id: string;
+  sectionSeq: string;
+  sectionName: string;
+  subsectionSeq: string;
+  subsectionName: string;
+  sectionType: string;
+  headersPreview: string;
+  rowCount: number;
+  fieldCount: number;
+  attachmentCount: number;
+}
+
+export interface ProfileChangeAuditFieldRow {
+  id: string;
+  sectionSeq: string;
+  sectionName: string;
+  subsectionSeq: string;
+  subsectionName: string;
+  rowSeq: string;
+  fieldSeq: string;
+  fieldName: string;
+  fieldValue: string;
+  fieldType: string;
+}
+
+export interface ProfileChangeAuditAttachmentRow {
+  id: string;
+  sectionSeq: string;
+  sectionName: string;
+  subsectionSeq: string;
+  subsectionName: string;
+  rowSeq: string;
+  changeItem: string;
+  attachmentSeq: string;
+  attachmentName: string;
+  attachmentOldValue: string;
+  attachmentNewValue: string;
+  relativePath: string;
+  downloadStatus: string;
+  downloadTime: string;
+  fileSize: number;
+  fileHash: string;
+}
+
+export interface ProfileChangeAuditDetail {
+  documentNo: string;
+  documentStatus: string;
+  overviewFields: DetailField[];
+  tableStatus: TableStatusRow[];
+  sectionRows: ProfileChangeAuditSectionRow[];
+  fieldRows: ProfileChangeAuditFieldRow[];
+  attachmentRows: ProfileChangeAuditAttachmentRow[];
+  notes: string[];
+}
+
+export interface ProfileChangeAuditRunRequest {
+  documentNo: string;
+  limit: number;
+  pageSize: number;
+  headed?: boolean | null;
+  dryRun: boolean;
+  downloadAttachments: boolean;
+}
+
+export interface ProfileChangeAuditRunSummary {
+  id: string;
+  taskId: string;
+  status: string;
+  requestedAt: string;
+  startedAt: string;
+  finishedAt: string;
+  requestedDocumentNo: string;
+  requestedLimit: number;
+  pageSize: number;
+  headed: boolean;
+  dryRun: boolean;
+  downloadAttachments: boolean;
+  successCount: number;
+  failedCount: number;
+  message: string;
+  dumpFile: string;
+  summaryFile: string;
+  logFile: string;
+  outputTail: string;
+}
+
+export interface ProfileChangeAuditWorkbench {
+  stats: StatItem[];
+  documents: ProfileChangeAuditDocumentRow[];
+  currentTask: ProfileChangeAuditRunSummary | null;
+  recentRuns: ProfileChangeAuditRunSummary[];
+}
+
 export interface ProcessDocumentRow {
   id: string;
   documentNo: string;

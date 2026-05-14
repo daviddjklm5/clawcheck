@@ -14,9 +14,22 @@ from automation.api.report_center import (
     open_report_output_folder,
     resolve_service_station_flow_export_path,
 )
+from automation.db.postgres import (
+    APPLICANT_HR_SUBDOMAIN_STATION_HR_OPS,
+    APPLICANT_HR_SUBDOMAIN_STATION_RECRUITING,
+)
 
 
 class ReportCenterHelpersTest(unittest.TestCase):
+    def test_service_station_flow_targets_match_person_attribute_subdomain_constants(self) -> None:
+        self.assertEqual(
+            _TARGET_HR_SUBDOMAINS,
+            (
+                APPLICANT_HR_SUBDOMAIN_STATION_HR_OPS,
+                APPLICANT_HR_SUBDOMAIN_STATION_RECRUITING,
+            ),
+        )
+
     def test_resolve_service_station_flow_export_path_uses_default_report_exports_dir(self) -> None:
         with TemporaryDirectory() as tmpdir:
             runtime_settings = SimpleNamespace(

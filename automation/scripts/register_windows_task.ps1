@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("collect", "roster", "orglist", "audit", "sync-todo-status", "rolecatalog", "dbinit")]
+    [ValidateSet("collect", "profile-change-audit", "roster", "orglist", "audit", "sync-todo-status", "rolecatalog", "dbinit")]
     [string]$TaskType,
     [ValidateSet("Daily", "Hourly", "Once", "AtLogOn", "AtStartup")]
     [string]$ScheduleType = "Daily",

@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("check", "login", "run", "collect", "roster", "orglist", "rolecatalog", "dbinit", "audit", "sync-todo-status")]
+    [ValidateSet("check", "login", "run", "collect", "profile-change-audit", "roster", "orglist", "rolecatalog", "dbinit", "audit", "sync-todo-status")]
     [string]$Action,
     [string]$VenvDir = ".venv-win",
     [string]$Config = "",

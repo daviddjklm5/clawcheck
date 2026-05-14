@@ -23,6 +23,7 @@ import InsightsOutlinedIcon from "@mui/icons-material/InsightsOutlined";
 import GridViewOutlinedIcon from "@mui/icons-material/GridViewOutlined";
 import AccountTreeOutlinedIcon from "@mui/icons-material/AccountTreeOutlined";
 import AssessmentOutlinedIcon from "@mui/icons-material/AssessmentOutlined";
+import BadgeOutlinedIcon from "@mui/icons-material/BadgeOutlined";
 import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
@@ -73,6 +74,14 @@ const navItems: NavEntry[] = [
         label: "采集单据",
         description: "采集四张申请单表的字段与状态",
         icon: <DescriptionOutlinedIcon />,
+        parentLabel: EHR_APPROVAL_LABEL,
+      },
+      {
+        kind: "item",
+        path: "/profile-change-audit",
+        label: "人员档案修改审核",
+        description: "采集 310 模块单据、区段字段与附件信息",
+        icon: <BadgeOutlinedIcon />,
         parentLabel: EHR_APPROVAL_LABEL,
       },
       {

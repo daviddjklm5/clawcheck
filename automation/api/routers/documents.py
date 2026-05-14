@@ -10,6 +10,11 @@ from automation.api.collect_workbench import (
     start_collect_task,
 )
 from automation.api.audit_workbench import start_audit_task
+from automation.api.profile_change_audit_workbench import (
+    get_profile_change_audit_document_detail,
+    get_profile_change_audit_workbench,
+    start_profile_change_audit_task,
+)
 from automation.api.process_dashboard import (
     approve_process_document,
     approve_process_documents_batch,
@@ -68,6 +73,17 @@ class ProcessAuditRunRequest(BaseModel):
     dryRun: bool = False
 
 
+class ProfileChangeAuditRunRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    documentNo: str = ""
+    limit: int = Field(default=20, ge=1)
+    pageSize: int = Field(default=100, ge=1)
+    headed: bool | None = None
+    dryRun: bool = False
+    downloadAttachments: bool = False
+
+
 @router.get("/collect-dashboard")
 def get_collect_documents() -> dict[str, object]:
     return get_collect_workbench()
@@ -98,6 +114,36 @@ def post_collect_workbench_run(payload: CollectRunRequest) -> dict[str, object]:
             dry_run=payload.dryRun,
             auto_audit=payload.autoAudit,
             force_recollect=payload.forceRecollect,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/profile-change-audit-workbench")
+def get_profile_change_audit_workbench_documents() -> dict[str, object]:
+    return get_profile_change_audit_workbench()
+
+
+@router.get("/profile-change-audit-workbench/{document_no}")
+def get_profile_change_audit_workbench_document(document_no: str) -> dict[str, object]:
+    detail = get_profile_change_audit_document_detail(document_no)
+    if detail is None:
+        raise HTTPException(status_code=404, detail=f"未找到单据 {document_no} 的人员档案修改审核详情")
+    return detail
+
+
+@router.post("/profile-change-audit-workbench/run")
+def post_profile_change_audit_workbench_run(payload: ProfileChangeAuditRunRequest) -> dict[str, object]:
+    try:
+        _, settings = _load_runtime_settings()
+        resolved_headed = settings.browser.headed if payload.headed is None else bool(payload.headed)
+        return start_profile_change_audit_task(
+            document_no=payload.documentNo,
+            limit=payload.limit,
+            page_size=payload.pageSize,
+            headed=resolved_headed,
+            dry_run=payload.dryRun,
+            download_attachments=payload.downloadAttachments,
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
