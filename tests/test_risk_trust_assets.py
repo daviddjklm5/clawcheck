@@ -15,7 +15,9 @@ class _FakeCursor:
     def __init__(self) -> None:
         self.executed_sql: list[str] = []
 
-    def execute(self, sql: str) -> None:
+    def execute(self, sql: str, params=None) -> None:
+        if sql.startswith("SELECT pg_advisory_xact_lock"):
+            return
         self.executed_sql.append(sql)
 
     def __enter__(self) -> _FakeCursor:
