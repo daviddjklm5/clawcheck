@@ -53,6 +53,7 @@ class DocumentsRouterTest(unittest.TestCase):
             limit=1,
             dryRun=True,
             autoAudit=False,
+            autoBatchApprove=True,
             forceRecollect=True,
         )
 
@@ -66,6 +67,7 @@ class DocumentsRouterTest(unittest.TestCase):
             headed=ANY,
             dry_run=True,
             auto_audit=False,
+            auto_batch_approve=True,
             force_recollect=True,
         )
 

@@ -61,6 +61,7 @@ class CollectRunRequest(BaseModel):
     headed: bool | None = None
     dryRun: bool = False
     autoAudit: bool = True
+    autoBatchApprove: bool = False
     forceRecollect: bool = False
 
 
@@ -113,6 +114,7 @@ def post_collect_workbench_run(payload: CollectRunRequest) -> dict[str, object]:
             headed=resolved_headed,
             dry_run=payload.dryRun,
             auto_audit=payload.autoAudit,
+            auto_batch_approve=payload.autoBatchApprove,
             force_recollect=payload.forceRecollect,
         )
     except RuntimeError as exc:

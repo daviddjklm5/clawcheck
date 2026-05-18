@@ -31,6 +31,7 @@ class CollectWorkbenchTaskTest(unittest.TestCase):
         requested_document_no: str = "RA-TEST-001",
         dry_run: bool = False,
         auto_audit: bool = True,
+        auto_batch_approve: bool = False,
         force_recollect: bool = False,
     ) -> dict[str, object]:
         return {
@@ -43,6 +44,7 @@ class CollectWorkbenchTaskTest(unittest.TestCase):
             "requestedLimit": 1,
             "dryRun": dry_run,
             "autoAudit": auto_audit,
+            "autoBatchApprove": auto_batch_approve,
             "forceRecollect": force_recollect,
             "requestedCount": 0,
             "successCount": 0,
@@ -53,6 +55,9 @@ class CollectWorkbenchTaskTest(unittest.TestCase):
             "auditBatchNo": "",
             "auditMessage": "",
             "auditLogFile": "",
+            "batchApprovalStatus": "",
+            "batchApprovalMessage": "",
+            "batchApprovalLogFile": "",
             "dumpFile": str(Path(temp_dir) / f"{task_id}.json"),
             "skippedDumpFile": str(Path(temp_dir) / f"{task_id}_skipped.json"),
             "failedDumpFile": str(Path(temp_dir) / f"{task_id}_failed.json"),
@@ -116,6 +121,71 @@ class CollectWorkbenchTaskTest(unittest.TestCase):
             summary_payload = json.loads(Path(str(task_state["summaryFile"])).read_text(encoding="utf-8"))
             self.assertEqual(summary_payload["auditBatchNo"], "audit_20260316_121915")
             self.assertEqual(summary_payload["auditStatus"], "succeeded")
+            self.assertFalse(summary_payload["autoBatchApprove"])
+
+    def test_run_collect_task_triggers_auto_batch_approve_after_successful_audit(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            task_state = self._build_task_state(
+                temp_dir,
+                auto_audit=True,
+                auto_batch_approve=True,
+                dry_run=False,
+            )
+            collect_workbench._TASK_STATE_BY_ID["task-001"] = task_state
+            dump_file = Path(str(task_state["dumpFile"]))
+            dump_payload = [{"basic_info": {"document_no": "RA-TEST-001"}}]
+            runtime_settings = SimpleNamespace(
+                browser=SimpleNamespace(headed=False),
+                runtime=SimpleNamespace(logs_dir=temp_dir),
+            )
+
+            def _load_json_file(path: Path):
+                if path == dump_file:
+                    return dump_payload
+                if path == Path(str(task_state["summaryFile"])):
+                    return json.loads(Path(path).read_text(encoding="utf-8"))
+                return None
+
+            with (
+                patch("automation.api.collect_workbench._load_runtime_settings", return_value=(None, runtime_settings)),
+                patch(
+                    "automation.api.collect_workbench.subprocess.run",
+                    return_value=_FakeCompletedProcess(
+                        returncode=0,
+                        stdout="Log file: /tmp/run_collect.log",
+                    ),
+                ),
+                patch("automation.api.collect_workbench._load_json_file", side_effect=_load_json_file),
+                patch("automation.api.collect_workbench._count_from_sidecar", return_value=0),
+                patch(
+                    "automation.api.collect_workbench.run_audit_now",
+                    return_value={
+                        "status": "succeeded",
+                        "assessmentBatchNo": "audit_20260316_121915",
+                        "message": "评估执行完成",
+                        "logFile": "automation/logs/run_20260316_121915.log",
+                    },
+                ),
+                patch(
+                    "automation.api.collect_workbench._run_auto_batch_approve",
+                    return_value={
+                        "status": "succeeded",
+                        "message": "批量批准完成：成功 1，失败 0，共 1 条。",
+                        "logFile": "automation/logs/approval_batch.json",
+                    },
+                ) as mocked_batch_approve,
+            ):
+                collect_workbench._run_collect_task("task-001")
+
+            final_task = collect_workbench._TASK_STATE_BY_ID["task-001"]
+            self.assertEqual(final_task["status"], "succeeded")
+            self.assertEqual(final_task["batchApprovalStatus"], "succeeded")
+            self.assertIn("批量批准完成", str(final_task["message"]))
+            mocked_batch_approve.assert_called_once_with(["RA-TEST-001"], runtime_settings)
+
+            summary_payload = json.loads(Path(str(task_state["summaryFile"])).read_text(encoding="utf-8"))
+            self.assertTrue(summary_payload["autoBatchApprove"])
+            self.assertEqual(summary_payload["batchApprovalStatus"], "succeeded")
 
     def test_run_collect_task_skips_audit_when_dry_run(self) -> None:
         with TemporaryDirectory() as temp_dir:

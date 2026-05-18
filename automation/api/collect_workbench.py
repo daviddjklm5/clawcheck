@@ -12,7 +12,8 @@ from uuid import uuid4
 
 from automation.api.config_summary import REPO_ROOT, _load_runtime_settings
 from automation.api.audit_workbench import run_audit_now
-from automation.db.postgres import PostgresPermissionStore
+from automation.api.process_dashboard import approve_process_documents_batch
+from automation.db.postgres import PostgresPermissionStore, PostgresRiskTrustStore
 from automation.utils.collect_schedule import (
     COLLECT_EXECUTION_CONFLICT_EXIT_CODE,
     is_collect_execution_locked,
@@ -62,6 +63,7 @@ def _task_to_payload(task: dict[str, Any]) -> dict[str, Any]:
         "headed": bool(task.get("headed")),
         "dryRun": bool(task.get("dryRun")),
         "autoAudit": bool(task.get("autoAudit")),
+        "autoBatchApprove": bool(task.get("autoBatchApprove")),
         "forceRecollect": bool(task.get("forceRecollect")),
         "requestedCount": int(task.get("requestedCount") or 0),
         "successCount": int(task.get("successCount") or 0),
@@ -72,6 +74,9 @@ def _task_to_payload(task: dict[str, Any]) -> dict[str, Any]:
         "auditBatchNo": str(task.get("auditBatchNo") or ""),
         "auditMessage": str(task.get("auditMessage") or ""),
         "auditLogFile": str(task.get("auditLogFile") or ""),
+        "batchApprovalStatus": str(task.get("batchApprovalStatus") or ""),
+        "batchApprovalMessage": str(task.get("batchApprovalMessage") or ""),
+        "batchApprovalLogFile": str(task.get("batchApprovalLogFile") or ""),
         "dumpFile": str(task.get("dumpFile") or ""),
         "skippedDumpFile": str(task.get("skippedDumpFile") or ""),
         "failedDumpFile": str(task.get("failedDumpFile") or ""),
@@ -126,6 +131,38 @@ def _extract_collected_document_nos(payload: Any) -> list[str]:
     return ordered
 
 
+def _extract_skipped_document_nos(payload: Any) -> list[str]:
+    if not isinstance(payload, dict):
+        return []
+    skipped_documents = payload.get("skipped_documents")
+    if not isinstance(skipped_documents, list):
+        return []
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for row in skipped_documents:
+        if not isinstance(row, dict):
+            continue
+        document_no = str(row.get("document_no") or "").strip()
+        if not document_no or document_no in seen:
+            continue
+        seen.add(document_no)
+        ordered.append(document_no)
+    return ordered
+
+
+def _merge_document_nos(*document_no_groups: list[str]) -> list[str]:
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for group in document_no_groups:
+        for raw_document_no in group:
+            document_no = str(raw_document_no or "").strip()
+            if not document_no or document_no in seen:
+                continue
+            seen.add(document_no)
+            ordered.append(document_no)
+    return ordered
+
+
 def _build_task_message(
     *,
     status: str,
@@ -152,6 +189,59 @@ def _build_no_pending_message(*, dry_run: bool) -> str:
 
 def _build_lock_conflict_message() -> str:
     return "当前已有其他采集任务在执行，本次未重复启动。"
+
+
+def _parse_score_value(raw_value: object) -> float | None:
+    if raw_value is None:
+        return None
+    try:
+        return round(float(raw_value), 1)
+    except (TypeError, ValueError):
+        return None
+
+
+def _resolve_auto_batch_approve_candidates(document_nos: list[str], settings: Any) -> list[str]:
+    normalized_document_nos = _merge_document_nos(document_nos)
+    if not normalized_document_nos:
+        return []
+
+    target_document_no_set = set(normalized_document_nos)
+    target_score_set = {2.0, 2.5}
+    workbench_rows = PostgresRiskTrustStore(settings.db).fetch_process_workbench().get("documents", [])
+    row_by_document_no: dict[str, dict[str, object]] = {}
+    for row in workbench_rows:
+        if not isinstance(row, dict):
+            continue
+        document_no = str(row.get("documentNo") or "").strip()
+        if document_no and document_no in target_document_no_set and document_no not in row_by_document_no:
+            row_by_document_no[document_no] = row
+
+    candidates: list[str] = []
+    for document_no in normalized_document_nos:
+        row = row_by_document_no.get(document_no)
+        if row is None:
+            continue
+        todo_process_status = str(row.get("todoProcessStatus") or "").strip() or "待处理"
+        final_score = _parse_score_value(row.get("finalScore"))
+        if todo_process_status == "待处理" and final_score in target_score_set:
+            candidates.append(document_no)
+    return candidates
+
+
+def _run_auto_batch_approve(document_nos: list[str], settings: Any) -> dict[str, Any]:
+    candidates = _resolve_auto_batch_approve_candidates(document_nos, settings)
+    if not candidates:
+        return {
+            "status": "skipped",
+            "message": "自动批量批准已跳过：本轮未命中待处理且分值为 2.0/2.5 的单据。",
+            "logFile": "",
+        }
+    return approve_process_documents_batch(
+        document_nos=candidates,
+        action="approve",
+        dry_run=False,
+        headed=bool(getattr(settings.browser, "headed", False)),
+    )
 
 
 def _write_summary_file(path: Path, payload: dict[str, Any]) -> None:
@@ -313,6 +403,9 @@ def _run_collect_task(task_id: str) -> None:
         success_payload = _load_json_file(dump_path)
         success_count = len(success_payload) if isinstance(success_payload, list) else 0
         success_document_nos = _extract_collected_document_nos(success_payload)
+        skipped_payload = _load_json_file(skipped_dump_path)
+        skipped_document_nos = _extract_skipped_document_nos(skipped_payload)
+        auto_batch_approve_document_nos = _merge_document_nos(success_document_nos, skipped_document_nos)
         skipped_count = _count_from_sidecar(skipped_dump_path, "skipped_count")
         failed_count = _count_from_sidecar(failed_dump_path, "failed_count")
         requested_count = max(
@@ -320,6 +413,7 @@ def _run_collect_task(task_id: str) -> None:
             1 if task["requestedDocumentNo"] else int(task["requestedLimit"]),
         )
         audit_result: dict[str, Any] | None = None
+        batch_approval_result: dict[str, Any] | None = None
         no_pending_detected = "No permission application documents found in todo list" in combined_output
 
         if process.returncode == COLLECT_EXECUTION_CONFLICT_EXIT_CODE:
@@ -372,6 +466,26 @@ def _run_collect_task(task_id: str) -> None:
             else:
                 message = f"{message}；已完成增量评估，批次 {audit_result['assessmentBatchNo']}"
 
+        if (
+            process.returncode == 0
+            and bool(task.get("autoBatchApprove"))
+            and auto_batch_approve_document_nos
+            and not bool(task["dryRun"])
+        ):
+            if bool(task.get("autoAudit")) and success_document_nos and (
+                audit_result is None or audit_result.get("status") != "succeeded"
+            ):
+                batch_approval_result = {
+                    "status": "skipped",
+                    "message": "自动批量批准已跳过：本轮自动评估未成功。",
+                    "logFile": "",
+                }
+            else:
+                batch_approval_result = _run_auto_batch_approve(auto_batch_approve_document_nos, settings)
+            message = f"{message}；{batch_approval_result.get('message') or '自动批量批准已执行。'}"
+            if batch_approval_result.get("status") not in {"succeeded", "skipped"}:
+                status = "partial"
+
         with _TASK_LOCK:
             task = _TASK_STATE_BY_ID[task_id]
             task["status"] = status
@@ -387,6 +501,15 @@ def _run_collect_task(task_id: str) -> None:
             task["auditBatchNo"] = str(audit_result.get("assessmentBatchNo") or "") if audit_result is not None else ""
             task["auditMessage"] = str(audit_result.get("message") or "") if audit_result is not None else ""
             task["auditLogFile"] = str(audit_result.get("logFile") or "") if audit_result is not None else ""
+            task["batchApprovalStatus"] = (
+                str(batch_approval_result.get("status") or "") if batch_approval_result is not None else ""
+            )
+            task["batchApprovalMessage"] = (
+                str(batch_approval_result.get("message") or "") if batch_approval_result is not None else ""
+            )
+            task["batchApprovalLogFile"] = (
+                str(batch_approval_result.get("logFile") or "") if batch_approval_result is not None else ""
+            )
             _persist_task_snapshot(task_id)
     except Exception as exc:  # noqa: BLE001
         with _TASK_LOCK:
@@ -447,6 +570,7 @@ def start_collect_task(
     headed: bool | None = None,
     dry_run: bool = False,
     auto_audit: bool = True,
+    auto_batch_approve: bool = False,
     force_recollect: bool = False,
 ) -> dict[str, Any]:
     normalized_document_no = (document_no or "").strip()
@@ -472,6 +596,7 @@ def start_collect_task(
         "headed": bool(resolved_headed),
         "dryRun": bool(dry_run),
         "autoAudit": bool(auto_audit),
+        "autoBatchApprove": bool(auto_batch_approve),
         "forceRecollect": bool(force_recollect),
         "requestedCount": 0,
         "successCount": 0,
@@ -482,6 +607,9 @@ def start_collect_task(
         "auditBatchNo": "",
         "auditMessage": "",
         "auditLogFile": "",
+        "batchApprovalStatus": "",
+        "batchApprovalMessage": "",
+        "batchApprovalLogFile": "",
         "dumpFile": _to_repo_relative(dump_file_path),
         "skippedDumpFile": _to_repo_relative(
             dump_file_path.with_name(f"{dump_file_path.stem}_skipped{dump_file_path.suffix}")

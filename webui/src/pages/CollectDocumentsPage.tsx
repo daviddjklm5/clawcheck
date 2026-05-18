@@ -220,6 +220,7 @@ export function CollectDocumentsPage() {
   const [runHeaded, setRunHeaded] = useState(false);
   const [runDryRun, setRunDryRun] = useState(false);
   const [runAutoAudit, setRunAutoAudit] = useState(true);
+  const [runAutoBatchApprove, setRunAutoBatchApprove] = useState(true);
   const [runForceRecollect, setRunForceRecollect] = useState(false);
   const [runSubmitting, setRunSubmitting] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
@@ -429,6 +430,7 @@ export function CollectDocumentsPage() {
         headed: runHeaded,
         dryRun: runDryRun,
         autoAudit: runDryRun ? false : runAutoAudit,
+        autoBatchApprove: runDryRun ? false : runAutoBatchApprove,
         forceRecollect: normalizedDocumentNo ? forceRecollect : false,
       });
 
@@ -628,6 +630,17 @@ export function CollectDocumentsPage() {
             <FormControlLabel
               control={
                 <Switch
+                  checked={runAutoBatchApprove}
+                  onChange={(event) => setRunAutoBatchApprove(event.target.checked)}
+                  disabled={runDryRun}
+                />
+              }
+              label="采集后自动批准"
+              sx={{ ml: 0 }}
+            />
+            <FormControlLabel
+              control={
+                <Switch
                   checked={runForceRecollect}
                   onChange={(event) => setRunForceRecollect(event.target.checked)}
                   disabled={!runDocumentNo.trim()}
@@ -720,6 +733,11 @@ export function CollectDocumentsPage() {
                         批次 {currentTask.auditBatchNo || "-"}。
                       </Typography>
                     ) : null}
+                    {currentTask.batchApprovalStatus ? (
+                      <Typography variant="caption" color="text.secondary">
+                        自动批准 {currentTask.batchApprovalStatus === "succeeded" ? "已完成" : currentTask.batchApprovalStatus}。
+                      </Typography>
+                    ) : null}
                   </>
                 ) : (
                   <Typography variant="body2" color="text.secondary">
@@ -761,6 +779,15 @@ export function CollectDocumentsPage() {
                       <Typography variant="caption" color="text.secondary">
                         增量评估 {workbench.recentRuns[0].auditStatus === "succeeded" ? "已完成" : workbench.recentRuns[0].auditStatus}
                         ，批次 {workbench.recentRuns[0].auditBatchNo || "-"}。
+                      </Typography>
+                    ) : null}
+                    {workbench.recentRuns[0].batchApprovalStatus ? (
+                      <Typography variant="caption" color="text.secondary">
+                        自动批准{" "}
+                        {workbench.recentRuns[0].batchApprovalStatus === "succeeded"
+                          ? "已完成"
+                          : workbench.recentRuns[0].batchApprovalStatus}
+                        。
                       </Typography>
                     ) : null}
                   </>

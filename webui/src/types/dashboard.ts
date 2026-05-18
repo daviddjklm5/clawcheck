@@ -169,6 +169,7 @@ export interface CollectRunRequest {
   headed?: boolean | null;
   dryRun: boolean;
   autoAudit: boolean;
+  autoBatchApprove: boolean;
   forceRecollect: boolean;
 }
 
@@ -190,10 +191,14 @@ export interface CollectRunSummary {
   failedCount: number;
   message: string;
   autoAudit: boolean;
+  autoBatchApprove: boolean;
   auditStatus: string;
   auditBatchNo: string;
   auditMessage: string;
   auditLogFile: string;
+  batchApprovalStatus: string;
+  batchApprovalMessage: string;
+  batchApprovalLogFile: string;
   dumpFile: string;
   skippedDumpFile: string;
   failedDumpFile: string;
